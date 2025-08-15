@@ -32,9 +32,10 @@
       ttl: 300,
       ajax: '',
       badge: true,
-  hideTax: true,
-    searchBs: true,
+       hideTax: false,
+      searchBs: true,
       payChips: true,
+       addonsBs: true,
       debug: false,
       style: {}
     };
@@ -113,21 +114,23 @@
     var css = [
       '.csfx-chip{display:inline-block;margin-left:.5rem;padding:.15rem .45rem;border-radius:12px;font-size:11px;line-height:1;background:#eef1f5;color:#2f3437;white-space:nowrap;vertical-align:middle;}',
       // variante para chips bajo el precio en listas (buscador)
-        '.csfx-price-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px;line-height:1}',
+       '.csfx-price-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px;line-height:1}',
       '.csfx-chip--under{margin:0;display:block;font-size:12px;font-weight:600}',
+       '.csfx-chip--inline{margin-left:.5rem;font-size:13px;font-weight:700}',
+      '.csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px;line-height:1}',
+      '.csfx-chip--addon{font-size:12px;font-weight:600}',
       '.csfx-row{display:flex;justify-content:space-between;font-size:12px;opacity:.95;margin-top:2px;}',
       '.csfx-row .csfx-amount{font-weight:600;}',
       // fila del carrito: sólo muestra el importe en Bs, alineado a la derecha
       '.csfx-cart-row{display:block;margin-top:2px;font-size:13px;font-weight:600;text-align:right;padding-right:.4rem;}',
-      // filas de totales en Bs (Subtotal y Total)
+          // filas de totales en Bs (Subtotal)
       '.csfx-total-row{display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-top:4px;padding:0 .4rem;}',
-            '.csfx-total-row.csfx-total-subtotal .csfx-amount,.csfx-total-row.csfx-total-total .csfx-amount{color:'+ (FX.style.bsColor || '#0057b7') +';}',
-      '.csfx-total-row.csfx-total-desc-total .csfx-amount{color:'+ (FX.style.discountColor || '#28a745') +';}',
+    
       '.csfx-info{margin-top:6px;font-size:11px;opacity:.8;}',
       '.csfx-pay-header-row{display:flex;gap:.8rem;margin-top:2px;}',
       '.csfx-chip--modal{font-size:16px;font-weight:700;padding:.2rem .6rem}',
       // compactar el hueco de impuestos si se decide ocultar
-        '.csfx-hide-tax{display:none!important;line-height:0!important;height:0!important;overflow:hidden!important;margin:0!important;padding:0!important;border:0!important;}',
+       '.csfx-hide-tax{display:none!important;line-height:0!important;height:0!important;overflow:hidden!important;margin:0!important;padding:0!important;border:0!important;}',
       // badge colapsable para mostrar la tasa y hora
       '.csfx-badge{position:fixed;right:0;bottom:20px;z-index:10000;font-family:inherit;}',
       '.csfx-badge-handle{background:#2f3437;color:#fff;padding:4px 6px;border-radius:4px 4px 0 0;font-size:14px;cursor:pointer;}',
@@ -187,16 +190,13 @@
     if (!FX.rate || !FX.searchBs) return;
     var items = document.querySelectorAll('.mat-autocomplete-panel .mat-option');
     items.forEach(function (it) {
-   var prev = it.querySelector('[data-csfx="bs-option"]');
-      if (prev) prev.remove();
-      var stack = it.querySelector('.csfx-price-stack');
+       var stack = it.querySelector('[data-csfx="stack"]');
       var priceEl;
       if (stack) {
         priceEl = Array.prototype.find.call(stack.childNodes, function (n) {
-          return n.nodeType === 1 && !n.classList.contains('csfx-chip');
+      return n.nodeType === 1 && !n.dataset.csfx;
         });
-      }
-      if (!priceEl) {
+  } else {
         priceEl = it.querySelector('.product-price, .variation-price, [class*="price"]');
         if (!priceEl) {
           var textRoot = it.querySelector('.mat-option-text') || it;
@@ -206,127 +206,180 @@
         stack = document.createElement('span');
         stack.className = 'csfx-price-stack';
         stack.dataset.csfx = 'stack';
-        priceEl.after(stack);
+           priceEl.parentNode.insertBefore(stack, priceEl);
         stack.appendChild(priceEl);
       }
             var usdVal = parsePrice(priceEl.textContent);
       if (isNaN(usdVal) || usdVal <= 0) return;
 
-      var chip = document.createElement('span');
-      chip.className = 'csfx-chip csfx-chip--under';
-      chip.dataset.csfx = 'bs-option';
-        chip.textContent = fmtBs(usd2bs(usdVal));
-      stack.appendChild(chip);
+         var chip = stack.querySelector('[data-csfx="bs-option"]');
+      if (!chip) {
+        chip = document.createElement('span');
+        chip.className = 'csfx-chip csfx-chip--under';
+        chip.dataset.csfx = 'bs-option';
+        stack.appendChild(chip);
+      }
+      chip.textContent = fmtBs(usd2bs(usdVal));
     });
   }
 
   function decorateAddons() {
-    // Este decorador se ha deshabilitado para no renderizar chips en el modal de opciones.
-    // También elimina cualquier chip existente dentro de la ventana de addons.
+    if (!FX.rate || !FX.addonsBs) return;
     var modals = document.querySelectorAll('.mat-dialog-container');
     modals.forEach(function (modal) {
-      // elimina chips Bs previos
-      var chips = modal.querySelectorAll('.csfx-chip');
-      chips.forEach(function (c) { c.remove(); });
-      // oculta cualquier nodo cuyo contenido sea únicamente un precio en Bs (Bs X.XXX,XX)
-      var spans = modal.querySelectorAll('span,div');
-      spans.forEach(function (el) {
-        var tx = (el.textContent || '').trim();
-        if (/^Bs\s*[\d\.,]+$/.test(tx)) {
-          el.style.display = 'none';
+          var opts = modal.querySelectorAll('mat-radio-button, mat-checkbox, .mat-option, li');
+      opts.forEach(function (opt) {
+        var label = opt.querySelector('label') || opt;
+        var stack = label.querySelector('[data-csfx="addon-stack"]');
+        var priceEl;
+        if (stack) {
+          priceEl = Array.prototype.find.call(stack.childNodes, function (n) {
+            return n.nodeType === 1 && !n.dataset.csfx;
+          });
+        } else {
+          priceEl = label.querySelector('.price, [class*="amount"]');
+          if (!priceEl) priceEl = findPriceElement(label);
+          if (!priceEl) return;
+          stack = document.createElement('span');
+          stack.className = 'csfx-addon-stack';
+          stack.dataset.csfx = 'addon-stack';
+          priceEl.parentNode.insertBefore(stack, priceEl);
+          stack.appendChild(priceEl);
         }
+        var usdVal = parsePrice(priceEl.textContent);
+        if (isNaN(usdVal) || usdVal <= 0) return;
+        var chip = stack.querySelector('[data-csfx="addon-bs"]');
+        if (!chip) {
+          chip = Array.prototype.find.call(label.childNodes, function (n) {
+            if (n.nodeType !== 1) return false;
+            if (stack.contains(n)) return false;
+            var tx = (n.textContent || '').trim();
+            return /^Bs\s*[\d\.,]+$/.test(tx);
+          });
+          if (chip) {
+            stack.appendChild(chip);
+          } else {
+            chip = document.createElement('span');
+            stack.appendChild(chip);
+          }
+          chip.className = 'csfx-chip csfx-chip--under csfx-chip--addon';
+          chip.dataset.csfx = 'addon-bs';
+        }
+           chip.textContent = fmtBs(usd2bs(usdVal));
       });
     });
-    return;
+  
   }
 
-  function decorateCart() {
-    if (!FX.rate) return;
-    // Cada producto en el carrito se representa como .mat-list-item; busca su precio y añade fila Bs
-    var rows = document.querySelectorAll('.mat-list-item');
-    rows.forEach(function (r) {
-      // Ignora el texto de la fila Bs que haya sido insertado previamente para evitar crecimiento exponencial
-      var clone = r.cloneNode(true);
-      var extraRow = clone.querySelector('.csfx-cart-row');
-      if (extraRow) extraRow.remove();
-      var text = (clone.textContent || '').trim();
-      // obtener qty
+  function getLineUSD(row) {
+    if (!row) return NaN;
+    var candidates = [];
+    var bsVisible = NaN;
+    Array.prototype.slice.call(row.querySelectorAll('span,div,strong,b')).forEach(function (n) {
+      if (n.closest('.csfx-cart-row')) return;
+      if ((n.classList && Array.prototype.some.call(n.classList, function (c) { return c.indexOf('csfx-') === 0; })) || n.dataset && n.dataset.csfx) return;
+      var tx = (n.textContent || '').trim();
+      if (/^Bs\s*[\d\.,]+$/i.test(tx) && isNaN(bsVisible)) bsVisible = parsePrice(tx);
+    });
+    function pushCandidate(val, prio) {
+      if (isNaN(val) || val <= 0) return;
+      if (!isNaN(bsVisible)) {
+        var diff = Math.abs(usd2bs(val) - bsVisible) / bsVisible;
+        if (diff > 0.4) return;
+      }
+      candidates.push({ usd: val, prio: prio });
+    }
+    var totalEl = row.querySelector('.total-value');
+    if (totalEl) pushCandidate(parsePrice(totalEl.textContent), 1);
+    if (candidates.length === 0) {
+      var nodes = Array.prototype.filter.call(row.querySelectorAll('span,div,strong,b'), function (n) {
+        if (n.closest('.csfx-cart-row')) return false;
+        if ((n.classList && Array.prototype.some.call(n.classList, function (c) { return c.indexOf('csfx-') === 0; })) || n.dataset && n.dataset.csfx) return false;
+        if (n.querySelector('svg')) return false;
+        var t = (n.textContent || '').trim();
+        if (/bs|ves|vef/i.test(t)) return false;
+        return /-?\d+[.,]\d{1,2}$/.test(t);
+      });
+      if (nodes.length) {
+        nodes.sort(function (a, b) { return b.getBoundingClientRect().right - a.getBoundingClientRect().right; });
+        pushCandidate(parsePrice(nodes[0].textContent), 2);
+      }
+    }
+    if (candidates.length === 0) {
+      var clone = row.cloneNode(true);
+      Array.prototype.slice.call(clone.querySelectorAll('.csfx-cart-row,[class^="csfx-"],[data-csfx]')).forEach(function (x) { x.remove(); });
+      var text = clone.textContent || '';
       var qty = 1;
       var qm = text.match(/^\s*(\d+)\s*[x×]/i);
       if (qm) {
         qty = parseInt(qm[1], 10);
       } else {
-        // fallback: busca data-qty o inputs
-        var dq = r.getAttribute('data-qty');
+     var dq = row.getAttribute('data-qty');
         if (dq && !isNaN(parseInt(dq, 10))) qty = parseInt(dq, 10);
-        var inp = r.querySelector('input[type="number"]');
+      var inp = row.querySelector('input[type="number"]');
         if (inp && !isNaN(parseInt(inp.value, 10))) qty = parseInt(inp.value, 10);
       }
-      // Intenta obtener el valor total de la línea desde .total-value (ya incluye qty y addons)
-      var totalUSD = NaN;
-      var totalEl = r.querySelector('.total-value');
-      if (totalEl) {
-        totalUSD = parsePrice(totalEl.textContent);
+      var unitUSD = NaN;
+      var unitEl = row.querySelector('.variation-price, .product-price, [class*="price"]');
+      if (unitEl) {
+        var txu = (unitEl.textContent || '').trim();
+        if (!/bs|ves|vef/i.test(txu)) unitUSD = parsePrice(txu);
       }
-      if (isNaN(totalUSD)) {
-        // fallback: calcula total a partir del precio unitario y qty
-        var baseUSD = NaN;
-        var priceEl = r.querySelector('.variation-price');
-        if (priceEl) {
-          baseUSD = parsePrice(priceEl.textContent);
-        }
-        if (isNaN(baseUSD)) {
-          // último número con decimales en la línea, no precedido por Bs, como unidad (cuando no hay .variation-price)
-          var matches = [];
-          var rx2 = /(\d[\d.,]*)(\$?)/g;
-          var m;
-          while ((m = rx2.exec(text)) !== null) {
-            var idx2 = m.index;
-            var before2 = text.slice(Math.max(0, idx2 - 3), idx2).toLowerCase();
-            if (before2.includes('bs')) continue;
-            var val2 = parsePrice(m[0]);
-            if (!isNaN(val2) && val2 > 0) matches.push(val2);
-          }
-          if (matches.length) {
-            var finalLine = matches[matches.length - 1];
-            baseUSD = finalLine / qty;
-          }
-        }
-        if (!isNaN(baseUSD) && baseUSD > 0) {
-          // sumar addons de toda la línea (no multiplicar por qty)
-          var addonUSD = 0;
-          var addMatches = text.match(/\+\s*(\d+[\d.,]*)/g);
-          if (addMatches) {
-            addMatches.forEach(function (a) {
-              var num = a.replace(/[^0-9,\.]/g, '');
-              var p = parsePrice(num);
-              if (!isNaN(p)) addonUSD += p;
-            });
-          }
-          totalUSD = baseUSD * qty + addonUSD;
+    if (isNaN(unitUSD)) {
+        var rx = /-?\d+[\.,]\d{1,2}/g, m;
+        while ((m = rx.exec(text)) !== null) {
+          var seg = text.slice(Math.max(0, m.index - 4), m.index + m[0].length + 3).toLowerCase();
+          if (/bs|ves|vef/.test(seg)) continue;
+          var before = text[m.index - 1];
+          if (before === '+' || before === '-') continue;
+          unitUSD = parsePrice(m[0]);
+          if (!isNaN(unitUSD)) break;
         }
       }
-      if (isNaN(totalUSD) || totalUSD <= 0) {
-        // no hay base, borra fila
-        var ex = r.querySelector(':scope > .csfx-cart-row');
-        if (ex) ex.remove();
+         var addonUSD = 0;
+      var rxAdd = /\+\s*(\d+[\.,]\d{1,2})/g, ma;
+      while ((ma = rxAdd.exec(text)) !== null) {
+        var seg2 = text.slice(Math.max(0, ma.index - 4), ma.index + ma[0].length + 3).toLowerCase();
+        if (/bs|ves|vef/.test(seg2)) continue;
+        var v = parsePrice(ma[1]);
+        if (!isNaN(v)) addonUSD += v;
+      }
+      if (!isNaN(unitUSD)) pushCandidate(unitUSD * qty + addonUSD, 3);
+    }
+    if (!candidates.length) return NaN;
+    candidates.sort(function (a, b) { return a.prio - b.prio; });
+    var best = candidates[0];
+    if (usd2bs(best.usd) > 1e7) {
+      var alt = candidates.find(function (c) { return usd2bs(c.usd) <= 1e7; });
+      if (alt) best = alt; else return NaN;
+    }
+    return best.usd;
+  }
+
+  function decorateCart() {
+    if (!FX.rate) return;
+    var rows = document.querySelectorAll('.mat-list-item');
+    rows.forEach(function (r) {
+      var usd = getLineUSD(r);
+      var mark = r.querySelector(':scope > .csfx-cart-row[data-csfx="cart-bs"]');
+      if (isNaN(usd)) {
+        if (mark) mark.remove();
         return;
       }
-      var bs = usd2bs(totalUSD);
-      var mark = r.querySelector(':scope > .csfx-cart-row');
+     var bs = usd2bs(usd);
       if (!mark) {
         mark = document.createElement('div');
         mark.className = 'csfx-cart-row';
              mark.dataset.csfx = 'cart-bs';
         var sp = document.createElement('span');
         sp.className = 'csfx-amount';
-        sp.textContent = fmtBs(bs);
+     
         mark.appendChild(sp);
         r.appendChild(mark);
-      } else {
-        var sp2 = mark.querySelector('.csfx-amount');
-        if (sp2) sp2.textContent = fmtBs(bs);
+
       }
+         var sp2 = mark.querySelector('.csfx-amount');
+      if (sp2) sp2.textContent = fmtBs(bs);
     });
   }
 
@@ -353,193 +406,116 @@
 
   function decorateTotals() {
     if (!FX.rate) return;
-    // Alternativamente, procesar contenedores .total-paid-total si están presentes (sub y total)
-    var tp = document.querySelectorAll('.total-paid-total');
-    if (tp && tp.length) {
-      var labels = ['Subtotal', 'Total'];
-      tp.forEach(function (row, idx) {
-        var usd = parsePrice(row.textContent);
-        if (isNaN(usd)) return;
-        var bs = usd2bs(usd);
-        var lbl = labels[idx] || 'Total';
-        var cls = 'csfx-total-' + lbl.toLowerCase();
-        var next = row.nextElementSibling;
-        if (!(next && next.classList && next.classList.contains(cls))) {
-          var nrow = document.createElement('div');
-          nrow.className = 'csfx-row ' + cls;
-          var l = document.createElement('span');
-          l.textContent = lbl + ' (Bs)';
-          var v = document.createElement('span');
-          v.className = 'csfx-amount';
-          v.textContent = fmtBs(bs);
-          nrow.appendChild(l);
-          nrow.appendChild(v);
-          row.insertAdjacentElement('afterend', nrow);
-        } else {
-          var v3 = next.querySelector('.csfx-amount');
-          if (v3) v3.textContent = fmtBs(bs);
-        }
-      });
-      // barra info
-      var last = tp[tp.length - 1];
-      var infoP = last.parentElement.querySelector('.csfx-info');
-      if (!infoP) {
-        infoP = document.createElement('div');
-        infoP.className = 'csfx-info';
-        last.parentElement.appendChild(infoP);
-      }
-        infoP.innerHTML = buildInfoText();
-    }
-    // intenta usar contenedor nativo de totales de OpenPOS (app-pos-order-total)
+
     var containerApp = document.querySelector('app-pos-order-total');
     if (containerApp) {
       var items = containerApp.querySelectorAll('.mat-list-item');
-      if (items && items.length) {
-        items.forEach(function (row) {
-     var type = (row.getAttribute('data-total-type') || '').toLowerCase();
-          if (!type) {
-            var lbltxt = (row.textContent || '').toLowerCase();
-            if (/(impuesto|iva|tax)/.test(lbltxt)) type = 'tax';
+      var subRow = null, totRow = null;
+      items.forEach(function (row) {
+        var type = (row.getAttribute('data-total-type') || '').toLowerCase();
+        if (!type) {
+          var t = (row.textContent || '').toLowerCase();
+          if (/sub\s?total/.test(t)) type = 'subtotal';
+          else if (/total/.test(t)) type = 'total';
+        }
+        if (type === 'subtotal') subRow = row;
+        if (type === 'total') totRow = row;
+      });
+      if (subRow) {
+        var usdS = parsePrice(subRow.textContent);
+        if (!isNaN(usdS)) {
+          var bsS = fmtBs(usd2bs(usdS));
+          var next = subRow.nextElementSibling;
+          if (!(next && next.dataset && next.dataset.csfx === 'subtotal')) {
+            var nrow = document.createElement('div');
+            nrow.className = 'csfx-total-row';
+            nrow.dataset.csfx = 'subtotal';
+            var l = document.createElement('span'); l.textContent = 'Subtotal (Bs.)';
+            var v = document.createElement('span'); v.className = 'csfx-amount'; v.textContent = bsS;
+            nrow.appendChild(l); nrow.appendChild(v);
+            subRow.insertAdjacentElement('afterend', nrow);
+          } else {
+            var v2 = next.querySelector('.csfx-amount'); if (v2) v2.textContent = bsS;
           }
-          if (FX.hideTax && type === 'tax') {
-            hideHard(row.closest('.mat-list-item,li,tr,div') || row);
-            return;
-          }
-        if (type === 'subtotal' || type === 'total') {
-          // calcula valor USD
-          var usdEl = Array.prototype.slice.call(row.querySelectorAll('span,div,strong,b,td')).reverse().find(function (n) {
+       }
+      } else {
+        var oldS = containerApp.querySelector('[data-csfx="subtotal"]'); if (oldS) oldS.remove();
+      }
+      if (totRow) {
+        var usdT = parsePrice(totRow.textContent);
+        if (!isNaN(usdT)) {
+          var bsT = fmtBs(usd2bs(usdT));
+          var usdEl = Array.prototype.slice.call(totRow.querySelectorAll('span,div,strong,b,td')).reverse().find(function (n) {
             return /-?\d+[.,]\d{1,2}$/.test((n.textContent || '').trim());
           });
-          if (!usdEl) return;
-          var usd = parsePrice(usdEl.textContent);
-          if (isNaN(usd)) return;
-          var bs = usd2bs(usd);
-          // normaliza clave para descuento
-          var key = type;
-          if (key === 'discount' || key === 'desc') key = 'descuento';
-          var cls = 'csfx-total-' + key;
-          var existing = containerApp.querySelector('.' + cls);
-          if (!existing) {
-            var newRow = document.createElement('div');
-            newRow.className = 'csfx-row ' + cls;
-            var l = document.createElement('span');
-            // etiqueta (Subtotal (Bs), Total (Bs) o Descuento (Bs))
-            var labelEl = Array.prototype.slice.call(row.querySelectorAll('span,div,strong,b,td')).find(function (n) {
-              var t2 = (n.textContent || '').trim().toLowerCase();
-              return t2 && !/-?\d+[.,]\d{1,2}$/.test(t2);
-            });
-            var label = labelEl ? (labelEl.textContent || '').trim() : key;
-            l.textContent = label + ' (Bs)';
-            var v = document.createElement('span');
-            v.className = 'csfx-amount';
-            v.textContent = fmtBs(bs);
-            newRow.appendChild(l);
-            newRow.appendChild(v);
-            // inserta después de la fila original
-            row.insertAdjacentElement('afterend', newRow);
-          } else {
-            var v2 = existing.querySelector('.csfx-amount');
-            if (v2) v2.textContent = fmtBs(bs);
+      if (usdEl) {
+            var chip = totRow.querySelector('[data-csfx="total-inline"]');
+            if (!chip) {
+              chip = document.createElement('span');
+              chip.className = 'csfx-chip csfx-chip--inline';
+              chip.dataset.csfx = 'total-inline';
+              usdEl.insertAdjacentElement('afterend', chip);
+            }
+            chip.textContent = bsT;
           }
         }
-      });
-        // barra informativa dentro del contenedor
-        var info = containerApp.querySelector('.csfx-info');
-        if (!info) {
-          info = document.createElement('div');
-          info.className = 'csfx-info';
-          containerApp.appendChild(info);
-        }
-           info.innerHTML = buildInfoText();
-        // si no existe una fila de descuento en las nativas, elimina cualquier fila Bs de descuento
-        var nativeDisc = containerApp.querySelector(
-          '.mat-list-item[data-total-type="discount"], .mat-list-item[data-total-type="descuento"], .mat-list-item[data-total-type="desc"]'
-        );
-        if (!nativeDisc) {
-          var bd = containerApp.querySelector('.csfx-total-descuento');
-          if (bd) bd.remove();
-        }
-        // se encontraron y procesaron filas, no ejecutar fallback
-        return;
+      } else {
+        var oldChip = containerApp.querySelector('[data-csfx="total-inline"]'); if (oldChip) oldChip.remove();
       }
+           var info = containerApp.querySelector('.csfx-info');
+      if (!info) { info = document.createElement('div'); info.className = 'csfx-info'; containerApp.appendChild(info); }
+      info.innerHTML = buildInfoText();
+      return;
     }
-    // fallback genérico para otros temas
+  
     var container = findTotalsContainer();
     if (!container) return;
-    // Subtotal y total generados a partir de labels
-    var subRow = findTotalsRow(container, /^sub\s?total/i);
-    if (subRow) injectBsRow(container, subRow, 'subtotal');
-    var totRow = findTotalsRow(container, /^total/i);
-    if (totRow) injectBsRow(container, totRow, 'total');
-    var discountRow = findTotalsRow(container, /desc|descuento|discount/);
-    // no se inyecta fila de descuento (Bs); si existiera una fila previa, se elimina
-    if (discountRow) {
-      // mantener descuento oculto: eliminar fila Bs de descuento
-      var dRow2 = container.querySelector('.csfx-total-descuento');
-      if (dRow2) dRow2.remove();
-    } else {
-      var dRow = container.querySelector('.csfx-total-descuento');
-      if (dRow) dRow.remove();
-    }
-    var taxRow = findTotalsRow(container, /impuesto|iva|tax/);
-    if (FX.hideTax && taxRow) {
-      hideHard(taxRow.closest('.mat-list-item,li,tr,div') || taxRow);
-    }
-    // si existe descuento, ajusta padding-bottom para evitar superposición con el botón verde
-    if (discountRow) {
-      container.style.paddingBottom = '84px';
-      // si también hay fila de total, insertar Total (Bs) justo después de la fila de descuento
-      var totRow = findTotalsRow(container, /^total/i);
-      if (totRow) {
-        // calcula el valor USD total para convertir
-        var valElT = Array.prototype.slice.call(totRow.querySelectorAll('span,div,b,strong,td')).reverse().find(function (n) {
-          return /-?\d+[.,]\d{1,2}/.test((n.textContent || ''));
-        });
-        if (valElT) {
-          var usdT = parsePrice(valElT.textContent);
-          if (!isNaN(usdT)) {
-            var bsT = usd2bs(usdT);
-            // elimina cualquier fila Total (Bs) previa insertada por descuento
-            var oldTotBs = container.querySelector('.csfx-total-desc-total');
-            if (oldTotBs) oldTotBs.remove();
-            // crea nueva fila
-            var nrowT = document.createElement('div');
-            nrowT.className = 'csfx-total-row csfx-row csfx-total-desc-total';
-              nrowT.dataset.csfx = 'total-desc';
-            var lT = document.createElement('span');
-            lT.textContent = 'Total (Bs)';
-            var vT = document.createElement('span');
-            vT.className = 'csfx-amount';
-            vT.textContent = fmtBs(bsT);
-            nrowT.appendChild(lT);
-            nrowT.appendChild(vT);
-            discountRow.insertAdjacentElement('afterend', nrowT);
-          }
+   var subRow2 = findTotalsRow(container, /^sub\s?total/i);
+    if (subRow2) {
+      var usdS2 = parsePrice(subRow2.textContent);
+      if (!isNaN(usdS2)) {
+        var bsS2 = fmtBs(usd2bs(usdS2));
+        var next2 = subRow2.nextElementSibling;
+        if (!(next2 && next2.dataset && next2.dataset.csfx === 'subtotal')) {
+          var nrow2 = document.createElement('div');
+          nrow2.className = 'csfx-total-row';
+          nrow2.dataset.csfx = 'subtotal';
+          var l2 = document.createElement('span'); l2.textContent = 'Subtotal (Bs.)';
+          var v3 = document.createElement('span'); v3.className = 'csfx-amount'; v3.textContent = bsS2;
+          nrow2.appendChild(l2); nrow2.appendChild(v3);
+          subRow2.insertAdjacentElement('afterend', nrow2);
+        } else {
+          var v4 = next2.querySelector('.csfx-amount'); if (v4) v4.textContent = bsS2;
         }
       }
     } else {
-      container.style.paddingBottom = '';
-      // elimina cualquier fila Total (Bs) creada para descuento anterior
-      var oldTotBs2 = container.querySelector('.csfx-total-desc-total');
-      if (oldTotBs2) oldTotBs2.remove();
+     var oldSub = container.querySelector('[data-csfx="subtotal"]'); if (oldSub) oldSub.remove();
+    }
+ var totRow2 = findTotalsRow(container, /^total/i);
+    if (totRow2) {
+      var usdT2 = parsePrice(totRow2.textContent);
+      if (!isNaN(usdT2)) {
+        var bsT2 = fmtBs(usd2bs(usdT2));
+        var usdEl2 = Array.prototype.slice.call(totRow2.querySelectorAll('span,div,strong,b,td')).reverse().find(function (n) {
+          return /-?\d+[.,]\d{1,2}$/.test((n.textContent || '').trim());
+        });
+      if (usdEl2) {
+          var chip2 = totRow2.querySelector('[data-csfx="total-inline"]');
+          if (!chip2) {
+            chip2 = document.createElement('span');
+            chip2.className = 'csfx-chip csfx-chip--inline';
+            chip2.dataset.csfx = 'total-inline';
+            usdEl2.insertAdjacentElement('afterend', chip2);
+          }
+             chip2.textContent = bsT2;
+        }
+      }
+    } else {
+     var oldChip2 = container.querySelector('[data-csfx="total-inline"]'); if (oldChip2) oldChip2.remove();
     }
     var info2 = container.querySelector('.csfx-info');
-    if (!info2) {
-      info2 = document.createElement('div');
-      info2.className = 'csfx-info';
-      container.appendChild(info2);
-    }
-     info2.innerHTML = buildInfoText();
-
-    if (FX.hideTax) {
-      var allRows = container.querySelectorAll('div,li,tr');
-      allRows.forEach(function (row) {
-        var tt = (row.textContent || '').trim().toLowerCase();
-        if (/impuesto|iva|tax/.test(tt)) {
-          hideHard(row);
-        }
-      });
-    }
+    if (!info2) { info2 = document.createElement('div'); info2.className = 'csfx-info'; container.appendChild(info2); }
+    info2.innerHTML = buildInfoText();
   }
 
   function buildInfoText() {
@@ -589,43 +565,6 @@
      if (contentDiv) contentDiv.innerHTML = buildInfoText();
   }
 
-  function injectBsRow(container, nativeRow, key) {
-    // busca el valor USD en la fila nativa (toma el último número)
-    var valEl = Array.prototype.slice.call(nativeRow.querySelectorAll('span,div,b,strong,td')).reverse()
-      .find(function (n) { return /-?\d+[.,]\d{2}/.test(n.textContent || ''); });
-    if (!valEl) return;
-    var usd = parsePrice(valEl.textContent);
-    if (isNaN(usd)) return;
-
-    var bs = usd2bs(usd);
-    var cls = 'csfx-total-' + key;
-    var row = container.querySelector('.' + cls);
-    var labelMap = { subtotal: 'Subtotal (Bs)', total: 'Total (Bs)', descuento: 'Descuento (Bs)' };
-    var label = labelMap[key] || (key.charAt(0).toUpperCase() + key.slice(1) + ' (Bs)');
-    if (!row) {
-      row = document.createElement('div');
-      row.className = 'csfx-total-row csfx-row ' + cls;
-            row.dataset.csfx = 'total-' + key;
-      var l = document.createElement('span');
-      l.textContent = label;
-      var v = document.createElement('span');
-      v.className = 'csfx-amount';
-      v.textContent = fmtBs(bs);
-         if (key === 'subtotal' || key === 'total') {
-        v.style.color = (FX.style.bsColor || '#0057b7');
-      }
-      if (key === 'descuento') {
-        v.style.color = (FX.style.discountColor || '#28a745');
-      }
-      row.appendChild(l);
-      row.appendChild(v);
-      // insertamos justo DESPUÉS de la fila nativa para que la UX sea consistente
-      nativeRow.insertAdjacentElement('afterend', row);
-    } else {
-      var v2 = row.querySelector('.csfx-amount');
-      if (v2) v2.textContent = fmtBs(bs);
-    }
-  }
 
   /**
    * Decora el modal de método de pago, añadiendo chips Bs en el encabezado de pagado/total,
@@ -764,7 +703,10 @@
     if (modal) {
       if (!obsPayment || obsEls.payment !== modal) {
         if (obsPayment) obsPayment.disconnect();
-        obsPayment = new MutationObserver(function () { schedule(decoratePaymentModal); });
+        obsPayment = new MutationObserver(function () {
+          schedule(decoratePaymentModal);
+          schedule(decorateAddons);
+        });
         obsPayment.observe(modal, { childList: true, subtree: true });
         obsEls.payment = modal;
       }

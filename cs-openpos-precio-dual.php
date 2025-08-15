@@ -19,9 +19,10 @@ if ( ! defined('CS_FX_DECIMALS') )        define('CS_FX_DECIMALS', 2);
 if ( ! defined('CS_FX_TTL') )             define('CS_FX_TTL', 300);
 if ( ! defined('CS_FX_DEBUG') )           define('CS_FX_DEBUG', false);
 if ( ! defined('CS_FX_BADGE') )           define('CS_FX_BADGE', true);
-if ( ! defined('CS_FX_HIDE_TAX') )        define('CS_FX_HIDE_TAX', true);
+if ( ! defined('CS_FX_HIDE_TAX') )        define('CS_FX_HIDE_TAX', false);
 if ( ! defined('CS_FX_SEARCH_BS') )       define('CS_FX_SEARCH_BS', true);
 if ( ! defined('CS_FX_PAY_CHIPS') )       define('CS_FX_PAY_CHIPS', true);
+if ( ! defined('CS_FX_ADDONS_BS') )       define('CS_FX_ADDONS_BS', true);
 /* ====== Helpers ====== */
 function cs_fx_site_origin(){ return rtrim( site_url(), '/' ); }
 function cs_fx_sanitize_origin($o){
@@ -170,6 +171,7 @@ add_filter('op_get_login_cashdrawer_data', function($session){
         'hideTax'    => (bool)CS_FX_HIDE_TAX,
         'searchBs'   => (bool)CS_FX_SEARCH_BS,
         'payChips'   => (bool)CS_FX_PAY_CHIPS,
+               'addonsBs'   => (bool)CS_FX_ADDONS_BS,
         'debug'      => (bool)CS_FX_DEBUG,
         'style'      => [
             'bsColor'       => '#0057b7',
@@ -211,8 +213,9 @@ add_filter('openpos_pos_footer_js', function($handles){
         'origin'    => $fx['origin'],
         'badge'     => (bool)CS_FX_BADGE,
         'hideTax'   => (bool)CS_FX_HIDE_TAX,
-              'searchBs'  => (bool)CS_FX_SEARCH_BS,
+        'searchBs'  => (bool)CS_FX_SEARCH_BS,
         'payChips'  => (bool)CS_FX_PAY_CHIPS,
+             'addonsBs'  => (bool)CS_FX_ADDONS_BS,
         'debug'     => (bool)CS_FX_DEBUG,
         'style'     => [
             'bsColor'       => '#0057b7',
