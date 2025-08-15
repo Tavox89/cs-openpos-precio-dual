@@ -3,7 +3,7 @@
  * Plugin Name: CS – OpenPOS Precio Dual Dinámico (USD + Bs) via FOX API
  * Description: Muestra precios en USD y Bs en OpenPOS (buscador, addons, carrito y totales) usando FOX API (/currencies). Autodetecta origen local/remoto y mapea VES↔VEF. Incluye barra con tasa y hora.
  * Author: Tavox
- * Version: 1.7.1
+ * Version: 1.8.0
  */
 
 if ( ! defined('ABSPATH') ) exit;
@@ -13,13 +13,15 @@ if ( ! defined('CS_FX_ORIGIN') )          define('CS_FX_ORIGIN', ''); // '' = au
 if ( ! defined('CS_FX_DEFAULT_REMOTE') )  define('CS_FX_DEFAULT_REMOTE', 'https://clubsamsve.com'); // fallback
 if ( ! defined('CS_FX_BASE') )            define('CS_FX_BASE',  '');
 if ( ! defined('CS_FX_QUOTE') )           define('CS_FX_QUOTE', 'VES'); // alias BS/VEF/VEB
-if ( ! defined('CS_FX_SYMBOL') )          define('CS_FX_SYMBOL', 'Bs');
+// símbolo por defecto en Bs con punto final como exige el cliente
+if ( ! defined('CS_FX_SYMBOL') )          define('CS_FX_SYMBOL', 'Bs.');
 if ( ! defined('CS_FX_DECIMALS') )        define('CS_FX_DECIMALS', 2);
 if ( ! defined('CS_FX_TTL') )             define('CS_FX_TTL', 300);
 if ( ! defined('CS_FX_DEBUG') )           define('CS_FX_DEBUG', false);
 if ( ! defined('CS_FX_BADGE') )           define('CS_FX_BADGE', true);
 if ( ! defined('CS_FX_HIDE_TAX') )        define('CS_FX_HIDE_TAX', true);
-
+if ( ! defined('CS_FX_SEARCH_BS') )       define('CS_FX_SEARCH_BS', true);
+if ( ! defined('CS_FX_PAY_CHIPS') )       define('CS_FX_PAY_CHIPS', true);
 /* ====== Helpers ====== */
 function cs_fx_site_origin(){ return rtrim( site_url(), '/' ); }
 function cs_fx_sanitize_origin($o){
@@ -118,6 +120,12 @@ function cs_fx_get_rate(){
 
     $remote = cs_fx_get_rate_remote();
     $rate   = max(0.0, (float)$remote['rate']);
+       // normaliza orientación para asegurar USD→VES
+    $base  = cs_fx_base_currency();
+    $quote = strtoupper(CS_FX_QUOTE);
+    if ( $base === 'VES' && $quote === 'USD' && $rate > 0 ) {
+        $rate = 1 / $rate;
+    }
     $out = [
         'rate'    => $rate,
         'updated' => time(),
@@ -145,46 +153,68 @@ add_action('wp_ajax_nopriv_cs_fx_rate', function(){ wp_send_json( cs_fx_get_rate
 add_filter('op_get_login_cashdrawer_data', function($session){
     $fx = cs_fx_get_rate();
     $session['setting']['cs_fx'] = [
-        'enabled' => true,
-        'base'    => cs_fx_base_currency(),
-        'quote'   => strtoupper(CS_FX_QUOTE),
-        'symbol'  => CS_FX_SYMBOL,
-        'rate'    => (float)$fx['rate'],
-        'updated' => (int)$fx['updated'],
-        'decimals'=> (int)CS_FX_DECIMALS,
-        'ttl'     => (int)CS_FX_TTL,
-        'ajax'    => admin_url('admin-ajax.php?action=cs_fx_rate'),
-        'source'  => $fx['source'],
-        'origin'  => $fx['origin'],
-        'badge'   => (bool)CS_FX_BADGE,
-        'hideTax' => (bool)CS_FX_HIDE_TAX,
+        'enabled'    => true,
+        'base'       => cs_fx_base_currency(),
+        'quote'      => strtoupper(CS_FX_QUOTE),
+        'symbolUSD'  => get_woocommerce_currency_symbol( cs_fx_base_currency() ),
+        'symbolVES'  => CS_FX_SYMBOL,
+        'rate'       => (float)$fx['rate'],
+        'updated'    => (int)$fx['updated'],
+        'decimals'   => (int)CS_FX_DECIMALS,
+        'ttl'        => (int)CS_FX_TTL,
+        'ajax'       => admin_url('admin-ajax.php?action=cs_fx_rate'),
+        'source'     => $fx['source'],
+        'origin'     => $fx['origin'],
+        'badge'      => (bool)CS_FX_BADGE,
+        'hideTax'    => (bool)CS_FX_HIDE_TAX,
+           'searchBs'=> (bool)CS_FX_SEARCH_BS,
+        'payChips'=> (bool)CS_FX_PAY_CHIPS,
+        'debug'      => (bool)CS_FX_DEBUG,
+        'style'      => [
+            'bsColor'       => '#0057b7',
+            'discountColor' => '#28a745',
+            'usdColor'      => '#000000',
+        ],
     ];
     return $session;
 }, 50);
 
 /* ====== Encolar scripts sólo en la página del POS ====== */
 add_filter('openpos_pos_footer_js', function($handles){
-    $ver = '1.7.1'; // <- versión del JS para cache busting (actualizado para reflejar cambios)
+    // versionado basado en filemtime para busting de cache
+    $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
+    $ver = '1.8.0'; // <- versión del JS para cache busting (actualizado para reflejar cambios)
+    if ( file_exists( $asset_path ) ) {
+        $ver .= '.' . filemtime( $asset_path );
+    }
     $asset = plugins_url('assets/cs-fx.js', __FILE__);
     // JS principal
     wp_register_script('cs-fx', $asset, [], $ver, true);
+        wp_script_add_data('cs-fx', 'defer', true);
 
     // Boot inline para tener rate incluso en pantalla de login
     $fx = cs_fx_get_rate();
     $boot = [
-        'enabled' => true,
-        'base'    => cs_fx_base_currency(),
-        'quote'   => strtoupper(CS_FX_QUOTE),
-        'symbol'  => CS_FX_SYMBOL,
-        'rate'    => (float)$fx['rate'],
-        'updated' => (int)$fx['updated'],
-        'decimals'=> (int)CS_FX_DECIMALS,
-        'ttl'     => (int)CS_FX_TTL,
-        'ajax'    => admin_url('admin-ajax.php?action=cs_fx_rate'),
-        'source'  => $fx['source'],
-        'origin'  => $fx['origin'],
-        'badge'   => (bool)CS_FX_BADGE,
-        'hideTax' => (bool)CS_FX_HIDE_TAX,
+        'enabled'   => true,
+        'base'      => cs_fx_base_currency(),
+        'quote'     => strtoupper(CS_FX_QUOTE),
+        'symbolUSD' => get_woocommerce_currency_symbol( cs_fx_base_currency() ),
+        'symbolVES' => CS_FX_SYMBOL,
+        'rate'      => (float)$fx['rate'],
+        'updated'   => (int)$fx['updated'],
+        'decimals'  => (int)CS_FX_DECIMALS,
+        'ttl'       => (int)CS_FX_TTL,
+        'ajax'      => admin_url('admin-ajax.php?action=cs_fx_rate'),
+        'source'    => $fx['source'],
+        'origin'    => $fx['origin'],
+        'badge'     => (bool)CS_FX_BADGE,
+        'hideTax'   => (bool)CS_FX_HIDE_TAX,
+        'debug'     => (bool)CS_FX_DEBUG,
+        'style'     => [
+            'bsColor'       => '#0057b7',
+            'discountColor' => '#28a745',
+            'usdColor'      => '#000000',
+        ],
     ];
     wp_add_inline_script('cs-fx', 'window.__CS_FX_BOOT = '. wp_json_encode($boot, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE) .';', 'before');
 

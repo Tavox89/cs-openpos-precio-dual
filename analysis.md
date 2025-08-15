@@ -1,23 +1,21 @@
 # Research on Dual Prices for OpenPOS
 
 ## Selector map
-- **Search autocomplete**: `.mat-autocomplete-panel .mat-option` contains option; price element `.variation-price`; fallback `.mat-option-text`.
-- **Cart line item**: `.mat-list-item` each row; unit price `.variation-price`; line total `.total-value`; quantity from text prefix or `data-qty`/input.
-- **Totals area**: `app-pos-order-total` with rows `.mat-list-item[data-total-type]`; generic fallback search in elements containing "total" or "summary"; rows labelled by text for subtotal/total/discount/tax.
-- **Payment modal**: dialogs `.mat-dialog-container,[role="dialog"]`; header with pattern `pagado/total`; inputs for amounts and suggestion buttons.
+### Totales
+- Nativo `app-pos-order-total` con filas `.mat-list-item[data-total-type]`.
+- Fallback en cualquier contenedor con `total|summary|checkout-footer|openpos-summary` y filas `div/li/tr`.
+### Buscador (autocomplete)
+- Panel `.mat-autocomplete-panel` → opciones `.mat-option`.
+- Precio USD dentro `.product-price`, `.variation-price` o último span decimal de `.mat-option-text`.
+### Modal de pago
+- Overlay `.mat-dialog-container`.
+- Encabezado `Pagado/Total` seguido por `.csfx-pay-header-row`.
+- Inputs y botones dentro del mismo modal.
+## Failures & fixes
+- **Impuestos visibles**: selector anterior fallaba con cambios de markup. Ahora se detecta `data-total-type="tax"` o labels `/(impuesto|iva|tax)/`, ocultando el contenedor completo con `csfx-hide-tax`.
+- **Buscador desbordado**: el chip Bs ocupaba todo el ancho. Se creó `.csfx-price-stack` que apila USD arriba y Bs debajo, alineado a la derecha.
+- **Chips de pago pequeños**: poco legibles. Se añadió variante `.csfx-chip--modal` (16 px, bold) y mayor `gap` en `.csfx-pay-header-row`.
 
-## Price sources
-- **Unit USD**: parsed from `.variation-price` or last decimal number.
-- **Line total USD**: `.total-value` preferred; fallback `unit × qty + addons`.
-- **Totals**: values extracted from labelled rows (subtotal, total, discount) and converted.
-- **Payment header**: parsed `pagado / total` to derive Paid and Remaining.
-
-## FX logic
-- Direction forced to USD→VES; aliases VES/VEF/VEB/BS normalised server‑side.
-- Formatting with `Intl.NumberFormat('es-VE')`; symbol `Bs.`; USD symbol from WooCommerce.
-
-## Risks & mitigations
-- **Markup changes**: selectors have fallbacks and dataset markers `data-csfx-*` to avoid duplicate injections.
-- **i18n labels**: regex matches for `impuesto|iva|tax` and `desc|discount`.
-- **Performance**: single `MutationObserver` with `requestAnimationFrame` throttling (<2ms typical).
-- **Locales**: `parsePrice` normalises comma/point decimals and ignores existing Bs amounts.
+## Notes
+- Observers dedicados en totales, buscador y modal evitan fugas y reprocesan sólo cuando cambia cada vista.
+- `data-csfx-*` preserva idempotencia y permite rollback granular.

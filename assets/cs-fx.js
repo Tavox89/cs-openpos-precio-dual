@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.7.1 – 2025-08-09
+* v1.8.0 – 2025-08-09
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -33,6 +33,8 @@
       ajax: '',
       badge: true,
   hideTax: true,
+    searchBs: true,
+      payChips: true,
       debug: false,
       style: {}
     };
@@ -111,7 +113,8 @@
     var css = [
       '.csfx-chip{display:inline-block;margin-left:.5rem;padding:.15rem .45rem;border-radius:12px;font-size:11px;line-height:1;background:#eef1f5;color:#2f3437;white-space:nowrap;vertical-align:middle;}',
       // variante para chips bajo el precio en listas (buscador)
-      '.csfx-chip--under{display:block;margin:.2rem 0 0 0;margin-left:0;width:100%;text-align:right;}',
+        '.csfx-price-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px;line-height:1}',
+      '.csfx-chip--under{margin:0;display:block;font-size:12px;font-weight:600}',
       '.csfx-row{display:flex;justify-content:space-between;font-size:12px;opacity:.95;margin-top:2px;}',
       '.csfx-row .csfx-amount{font-weight:600;}',
       // fila del carrito: sólo muestra el importe en Bs, alineado a la derecha
@@ -121,9 +124,10 @@
             '.csfx-total-row.csfx-total-subtotal .csfx-amount,.csfx-total-row.csfx-total-total .csfx-amount{color:'+ (FX.style.bsColor || '#0057b7') +';}',
       '.csfx-total-row.csfx-total-desc-total .csfx-amount{color:'+ (FX.style.discountColor || '#28a745') +';}',
       '.csfx-info{margin-top:6px;font-size:11px;opacity:.8;}',
-      '.csfx-pay-header-row{display:flex;gap:.4rem;margin-top:2px;}',
+      '.csfx-pay-header-row{display:flex;gap:.8rem;margin-top:2px;}',
+      '.csfx-chip--modal{font-size:16px;font-weight:700;padding:.2rem .6rem}',
       // compactar el hueco de impuestos si se decide ocultar
-      '.csfx-hide-tax{display:none !important;}',
+        '.csfx-hide-tax{display:none!important;line-height:0!important;height:0!important;overflow:hidden!important;margin:0!important;padding:0!important;border:0!important;}',
       // badge colapsable para mostrar la tasa y hora
       '.csfx-badge{position:fixed;right:0;bottom:20px;z-index:10000;font-family:inherit;}',
       '.csfx-badge-handle{background:#2f3437;color:#fff;padding:4px 6px;border-radius:4px 4px 0 0;font-size:14px;cursor:pointer;}',
@@ -166,48 +170,53 @@
     }
     return null;
   }
+  function hideHard(el) {
+    if (!el) return;
+    el.classList.add('csfx-hide-tax');
+    el.style.display = 'none';
+    el.style.lineHeight = '0';
+    el.style.height = '0';
+    el.style.overflow = 'hidden';
+    el.style.margin = '0';
+    el.style.padding = '0';
+    el.style.border = '0';
+  }
 
   // --- Decoradores ---
   function decorateSearch() {
-    if (!FX.rate) return;
-    // Selecciona ítems de búsqueda en el autocomplete de Angular Material
+    if (!FX.rate || !FX.searchBs) return;
     var items = document.querySelectorAll('.mat-autocomplete-panel .mat-option');
     items.forEach(function (it) {
-      // eliminar chips previos dentro de esta opción para evitar duplicados
-      var prev = it.querySelectorAll('.csfx-chip');
-      prev.forEach(function (c) { c.remove(); });
-      // 1) identifica elemento de precio (.variation-price) si existe
-      var priceEl = it.querySelector('.variation-price');
-      var usdVal = NaN;
-      if (priceEl) {
-        usdVal = parsePrice(priceEl.textContent);
+   var prev = it.querySelector('[data-csfx="bs-option"]');
+      if (prev) prev.remove();
+      var stack = it.querySelector('.csfx-price-stack');
+      var priceEl;
+      if (stack) {
+        priceEl = Array.prototype.find.call(stack.childNodes, function (n) {
+          return n.nodeType === 1 && !n.classList.contains('csfx-chip');
+        });
       }
-      // 2) Fallback: analiza el texto de la opción para encontrar el último número con decimales (ignora “Bs”)
-      if (isNaN(usdVal)) {
-        var text = (it.textContent || '').trim();
-        var regex = /(\d[\d.,]*)(\$?)/g;
-        var match;
-        var candidates = [];
-        while ((match = regex.exec(text)) !== null) {
-          var idx = match.index;
-          var before = text.slice(Math.max(0, idx - 3), idx).toLowerCase();
-          if (before.includes('bs')) continue;
-          var val = parsePrice(match[0]);
-          if (!isNaN(val) && val > 0) candidates.push(val);
+      if (!priceEl) {
+        priceEl = it.querySelector('.product-price, .variation-price, [class*="price"]');
+        if (!priceEl) {
+          var textRoot = it.querySelector('.mat-option-text') || it;
+          priceEl = findPriceElement(textRoot);
         }
-        if (candidates.length) {
-          usdVal = candidates[candidates.length - 1];
-        }
+                if (!priceEl) return;
+        stack = document.createElement('span');
+        stack.className = 'csfx-price-stack';
+        stack.dataset.csfx = 'stack';
+        priceEl.after(stack);
+        stack.appendChild(priceEl);
       }
+            var usdVal = parsePrice(priceEl.textContent);
       if (isNaN(usdVal) || usdVal <= 0) return;
-      var bsVal = usd2bs(usdVal);
-         // crear chip y colocarlo dentro del nodo clicable de la opción
+
       var chip = document.createElement('span');
       chip.className = 'csfx-chip csfx-chip--under';
       chip.dataset.csfx = 'bs-option';
-      chip.textContent = fmtBs(bsVal);
-   var container = priceEl || it.querySelector('.mat-option-text') || it;
-      container.appendChild(chip);
+        chip.textContent = fmtBs(usd2bs(usdVal));
+      stack.appendChild(chip);
     });
   }
 
@@ -384,21 +393,18 @@
     // intenta usar contenedor nativo de totales de OpenPOS (app-pos-order-total)
     var containerApp = document.querySelector('app-pos-order-total');
     if (containerApp) {
-      var items = containerApp.querySelectorAll('.mat-list-item[data-total-type]');
+      var items = containerApp.querySelectorAll('.mat-list-item');
       if (items && items.length) {
         items.forEach(function (row) {
-        var type = (row.getAttribute('data-total-type') || '').toLowerCase();
-              if (!type) {
-          var lbltxt = (row.textContent || '').toLowerCase();
-          if (/(impuesto|iva|tax)/.test(lbltxt)) type = 'tax';
-        }
-        // ocultar impuestos
-        if (type === 'tax' || type === 'impuestos' || type === 'iva') {
-          // Oculta siempre la fila de impuestos
-          row.classList.add('csfx-hide-tax');
-          row.style.display = 'none';
-          return;
-        }
+     var type = (row.getAttribute('data-total-type') || '').toLowerCase();
+          if (!type) {
+            var lbltxt = (row.textContent || '').toLowerCase();
+            if (/(impuesto|iva|tax)/.test(lbltxt)) type = 'tax';
+          }
+          if (FX.hideTax && type === 'tax') {
+            hideHard(row.closest('.mat-list-item,li,tr,div') || row);
+            return;
+          }
         if (type === 'subtotal' || type === 'total') {
           // calcula valor USD
           var usdEl = Array.prototype.slice.call(row.querySelectorAll('span,div,strong,b,td')).reverse().find(function (n) {
@@ -476,10 +482,8 @@
       if (dRow) dRow.remove();
     }
     var taxRow = findTotalsRow(container, /impuesto|iva|tax/);
-    if (taxRow) {
-      // oculta siempre los impuestos
-      taxRow.classList.add('csfx-hide-tax');
-      taxRow.style.display = 'none';
+    if (FX.hideTax && taxRow) {
+      hideHard(taxRow.closest('.mat-list-item,li,tr,div') || taxRow);
     }
     // si existe descuento, ajusta padding-bottom para evitar superposición con el botón verde
     if (discountRow) {
@@ -527,14 +531,15 @@
     }
      info2.innerHTML = buildInfoText();
 
-    // Oculta cualquier fila que contenga la palabra impuestos/iva/tax (fallback)
-    var allRows = container.querySelectorAll('div,li,tr');
-    allRows.forEach(function (row) {
-      var tt = (row.textContent || '').trim().toLowerCase();
-      if (/impuesto|iva|tax/.test(tt)) {
-        row.style.display = 'none';
-      }
-    });
+    if (FX.hideTax) {
+      var allRows = container.querySelectorAll('div,li,tr');
+      allRows.forEach(function (row) {
+        var tt = (row.textContent || '').trim().toLowerCase();
+        if (/impuesto|iva|tax/.test(tt)) {
+          hideHard(row);
+        }
+      });
+    }
   }
 
   function buildInfoText() {
@@ -628,7 +633,7 @@
    * presencia de role="dialog" o clases de Angular Material.
    */
   function decoratePaymentModal() {
-    if (!FX.rate) return;
+ if (!FX.rate || !FX.payChips) return;
     var modals = document.querySelectorAll('.mat-dialog-container,[role="dialog"]');
     modals.forEach(function (modal) {
       var headerFound = false;
@@ -646,9 +651,7 @@
         if (!(chipRow && chipRow.classList && chipRow.classList.contains('csfx-pay-header-row'))) {
           chipRow = document.createElement('div');
           chipRow.className = 'csfx-pay-header-row';
-          chipRow.style.display = 'flex';
-          chipRow.style.gap = '.4rem';
-          chipRow.style.marginTop = '2px';
+        
           el.insertAdjacentElement('afterend', chipRow);
         }
         var diff = (u2 - u1);
@@ -664,11 +667,12 @@
           var bs = usd2bs(bsVal);
           if (!child) {
             child = document.createElement('span');
-            child.className = 'csfx-chip';
-                      child.dataset.csfxPay = labels[k].toLowerCase();
+          
             chipRow.appendChild(child);
           }
-      child.textContent = labels[k] + ': ' + fmtBs(bs);
+     child.className = 'csfx-chip csfx-chip--modal';
+          child.dataset.csfxPay = labels[k].toLowerCase();
+          child.textContent = labels[k] + ': ' + fmtBs(bs);
         }
         // marca este encabezado como decorado para idempotencia, pero siempre actualiza
         el.dataset.csfxPayHeader = '1';
@@ -722,8 +726,56 @@
       });
     });
   }
+  var obsTotals = null;
+  var obsSearch = null;
+  var obsPayment = null;
+  var obsEls = { totals: null, search: null, payment: null };
 
+  function ensureObservers() {
+    var t = findTotalsContainer();
+    if (t) {
+      if (!obsTotals || obsEls.totals !== t) {
+        if (obsTotals) obsTotals.disconnect();
+        obsTotals = new MutationObserver(function () { schedule(decorateTotals); });
+        obsTotals.observe(t, { childList: true, subtree: true });
+        obsEls.totals = t;
+      }
+    } else if (obsTotals) {
+      obsTotals.disconnect();
+      obsTotals = null;
+      obsEls.totals = null;
+    }
+
+    var panel = document.querySelector('.mat-autocomplete-panel');
+    if (panel) {
+      if (!obsSearch || obsEls.search !== panel) {
+        if (obsSearch) obsSearch.disconnect();
+        obsSearch = new MutationObserver(function () { schedule(decorateSearch); });
+        obsSearch.observe(panel, { childList: true, subtree: true });
+        obsEls.search = panel;
+      }
+    } else if (obsSearch) {
+      obsSearch.disconnect();
+      obsSearch = null;
+      obsEls.search = null;
+    }
+
+    var modal = document.querySelector('.mat-dialog-container');
+    if (modal) {
+      if (!obsPayment || obsEls.payment !== modal) {
+        if (obsPayment) obsPayment.disconnect();
+        obsPayment = new MutationObserver(function () { schedule(decoratePaymentModal); });
+        obsPayment.observe(modal, { childList: true, subtree: true });
+        obsEls.payment = modal;
+      }
+    } else if (obsPayment) {
+      obsPayment.disconnect();
+      obsPayment = null;
+      obsEls.payment = null;
+    }
+  }
   function runAll() {
+        ensureObservers();
     decorateSearch();
     decorateAddons();
     decorateCart();
@@ -759,8 +811,8 @@
   }
 
   // --- Observer de DOM con throttling ---
-  var obs = new MutationObserver(function () { schedule(runAll); });
-  obs.observe(document.documentElement, { childList: true, subtree: true });
+ var rootObs = new MutationObserver(function () { schedule(runAll); });
+  rootObs.observe(document.documentElement, { childList: true, subtree: true });
 
   // Exponer runner manual para debug
   window.__CS_FX_RUN = function () { schedule(runAll); };
