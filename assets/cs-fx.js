@@ -116,13 +116,13 @@
       // variante para chips bajo el precio en listas (buscador)
        '.csfx-price-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px;line-height:1}',
       '.csfx-chip--under{margin:0;display:block;font-size:12px;font-weight:600}',
-       '.csfx-chip--inline{margin-left:.5rem;font-size:13px;font-weight:700}',
+     '.csfx-chip--inline{margin-left:.5rem;font-size:13px;font-weight:700}',
       '.csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px;line-height:1}',
       '.csfx-chip--addon{font-size:12px;font-weight:600}',
       '.csfx-row{display:flex;justify-content:space-between;font-size:12px;opacity:.95;margin-top:2px;}',
       '.csfx-row .csfx-amount{font-weight:600;}',
       // fila del carrito: sólo muestra el importe en Bs, alineado a la derecha
-      '.csfx-cart-row{display:block;margin-top:2px;font-size:13px;font-weight:600;text-align:right;padding-right:.4rem;}',
+          '.csfx-cart-row{display:block;margin-top:2px;font-size:13px;font-weight:600;text-align:right;padding-right:.6rem;}',
           // filas de totales en Bs (Subtotal)
       '.csfx-total-row{display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-top:4px;padding:0 .4rem;}',
     
@@ -135,7 +135,13 @@
       '.csfx-badge{position:fixed;right:0;bottom:20px;z-index:10000;font-family:inherit;}',
       '.csfx-badge-handle{background:#2f3437;color:#fff;padding:4px 6px;border-radius:4px 4px 0 0;font-size:14px;cursor:pointer;}',
       '.csfx-badge-content{background:#eef1f5;color:#2f3437;padding:4px 6px;border-radius:0 0 4px 4px;display:none;font-size:13px;white-space:nowrap;}',
-      '.csfx-badge.open .csfx-badge-content{display:block;}'
+       '.csfx-badge.open .csfx-badge-content{display:block;}',
+      // especificidad para evitar conflictos con CSS del POS
+      '.mat-autocomplete-panel .mat-option .csfx-price-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px;line-height:1}',
+      '.mat-autocomplete-panel .mat-option .csfx-chip.csfx-chip--under{margin:0;font-size:12px;font-weight:600;background:transparent}',
+      '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
+      '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
+      '[data-csfx="total-inline"]{margin-left:.5rem;font-weight:700;border-radius:12px;padding:.1rem .4rem;background:#eef1f5}'
     ].join('');
     var el = document.createElement('style');
     el.id = id;
@@ -190,29 +196,28 @@
     if (!FX.rate || !FX.searchBs) return;
     var items = document.querySelectorAll('.mat-autocomplete-panel .mat-option');
     items.forEach(function (it) {
-       var stack = it.querySelector('[data-csfx="stack"]');
+    var textRoot = it.querySelector('.mat-option-text') || it;
+      var stack = it.querySelector('[data-csfx="stack"]');
+      if (stack && !textRoot.contains(stack)) textRoot.appendChild(stack);
       var priceEl;
       if (stack) {
         priceEl = Array.prototype.find.call(stack.childNodes, function (n) {
-      return n.nodeType === 1 && !n.dataset.csfx;
+          return n.nodeType === 1 && !n.dataset.csfx;
         });
-  } else {
-        priceEl = it.querySelector('.product-price, .variation-price, [class*="price"]');
-        if (!priceEl) {
-          var textRoot = it.querySelector('.mat-option-text') || it;
-          priceEl = findPriceElement(textRoot);
-        }
-                if (!priceEl) return;
+    } else {
+        priceEl = textRoot.querySelector('.product-price, .variation-price, [class*="price"]');
+        if (!priceEl) priceEl = findPriceElement(textRoot);
+        if (!priceEl) return;
         stack = document.createElement('span');
         stack.className = 'csfx-price-stack';
         stack.dataset.csfx = 'stack';
-           priceEl.parentNode.insertBefore(stack, priceEl);
+  priceEl.parentNode.insertBefore(stack, priceEl);
         stack.appendChild(priceEl);
       }
-            var usdVal = parsePrice(priceEl.textContent);
+   var usdVal = parsePrice(priceEl.textContent);
       if (isNaN(usdVal) || usdVal <= 0) return;
 
-         var chip = stack.querySelector('[data-csfx="bs-option"]');
+       var chip = stack.querySelector('[data-csfx="bs-option"]');
       if (!chip) {
         chip = document.createElement('span');
         chip.className = 'csfx-chip csfx-chip--under';
@@ -227,34 +232,36 @@
     if (!FX.rate || !FX.addonsBs) return;
     var modals = document.querySelectorAll('.mat-dialog-container');
     modals.forEach(function (modal) {
-          var opts = modal.querySelectorAll('mat-radio-button, mat-checkbox, .mat-option, li');
+      var opts = modal.querySelectorAll('mat-radio-button, mat-checkbox, .mat-option, li');
       opts.forEach(function (opt) {
-        var label = opt.querySelector('label') || opt;
-        var stack = label.querySelector('[data-csfx="addon-stack"]');
+        var content = opt.querySelector('.mat-radio-label-content') || opt.querySelector('.mat-checkbox-label') || opt.querySelector('label') || opt;
+        var stack = content.querySelector('[data-csfx="addon-stack"]');
+        if (stack && stack.parentNode !== content) content.appendChild(stack);
         var priceEl;
         if (stack) {
           priceEl = Array.prototype.find.call(stack.childNodes, function (n) {
             return n.nodeType === 1 && !n.dataset.csfx;
           });
         } else {
-          priceEl = label.querySelector('.price, [class*="amount"]');
-          if (!priceEl) priceEl = findPriceElement(label);
+        priceEl = content.querySelector('.price, [class*="amount"]');
+          if (!priceEl) priceEl = findPriceElement(content);
           if (!priceEl) return;
           stack = document.createElement('span');
           stack.className = 'csfx-addon-stack';
           stack.dataset.csfx = 'addon-stack';
           priceEl.parentNode.insertBefore(stack, priceEl);
           stack.appendChild(priceEl);
+               content.appendChild(stack);
         }
         var usdVal = parsePrice(priceEl.textContent);
         if (isNaN(usdVal) || usdVal <= 0) return;
         var chip = stack.querySelector('[data-csfx="addon-bs"]');
         if (!chip) {
-          chip = Array.prototype.find.call(label.childNodes, function (n) {
+     chip = Array.prototype.find.call(content.childNodes, function (n) {
             if (n.nodeType !== 1) return false;
             if (stack.contains(n)) return false;
             var tx = (n.textContent || '').trim();
-            return /^Bs\s*[\d\.,]+$/.test(tx);
+          return /^(Bs|VES|VEF)\s*[\d\.,]+$/i.test(tx);
           });
           if (chip) {
             stack.appendChild(chip);
@@ -265,7 +272,7 @@
           chip.className = 'csfx-chip csfx-chip--under csfx-chip--addon';
           chip.dataset.csfx = 'addon-bs';
         }
-           chip.textContent = fmtBs(usd2bs(usdVal));
+         chip.textContent = fmtBs(usd2bs(usdVal));
       });
     });
   
@@ -279,13 +286,15 @@
       if (n.closest('.csfx-cart-row')) return;
       if ((n.classList && Array.prototype.some.call(n.classList, function (c) { return c.indexOf('csfx-') === 0; })) || n.dataset && n.dataset.csfx) return;
       var tx = (n.textContent || '').trim();
-      if (/^Bs\s*[\d\.,]+$/i.test(tx) && isNaN(bsVisible)) bsVisible = parsePrice(tx);
+     if (/^(Bs|VES|VEF)\s*[\d\.,]+$/i.test(tx) && isNaN(bsVisible)) bsVisible = parsePrice(tx);
     });
     function pushCandidate(val, prio) {
       if (isNaN(val) || val <= 0) return;
+            var bsVal = usd2bs(val);
+      if (bsVal < 1 || bsVal > 1e6) return;
       if (!isNaN(bsVisible)) {
-        var diff = Math.abs(usd2bs(val) - bsVisible) / bsVisible;
-        if (diff > 0.4) return;
+             var diff = Math.abs(bsVal - bsVisible) / bsVisible;
+        if (diff > 0.25) return;
       }
       candidates.push({ usd: val, prio: prio });
     }
@@ -298,7 +307,8 @@
         if (n.querySelector('svg')) return false;
         var t = (n.textContent || '').trim();
         if (/bs|ves|vef/i.test(t)) return false;
-        return /-?\d+[.,]\d{1,2}$/.test(t);
+     if (/^[+-]/.test(t)) return false;
+        return /\d+[.,]\d{1,2}$/.test(t);
       });
       if (nodes.length) {
         nodes.sort(function (a, b) { return b.getBoundingClientRect().right - a.getBoundingClientRect().right; });
@@ -329,10 +339,10 @@
         var rx = /-?\d+[\.,]\d{1,2}/g, m;
         while ((m = rx.exec(text)) !== null) {
           var seg = text.slice(Math.max(0, m.index - 4), m.index + m[0].length + 3).toLowerCase();
-          if (/bs|ves|vef/.test(seg)) continue;
-          var before = text[m.index - 1];
-          if (before === '+' || before === '-') continue;
-          unitUSD = parsePrice(m[0]);
+         if (/bs|ves|vef/.test(seg)) continue;
+        var before = text[m.index - 1];
+        if (before === '+' || before === '-') continue;
+        unitUSD = parsePrice(m[0]);
           if (!isNaN(unitUSD)) break;
         }
       }
@@ -348,12 +358,7 @@
     }
     if (!candidates.length) return NaN;
     candidates.sort(function (a, b) { return a.prio - b.prio; });
-    var best = candidates[0];
-    if (usd2bs(best.usd) > 1e7) {
-      var alt = candidates.find(function (c) { return usd2bs(c.usd) <= 1e7; });
-      if (alt) best = alt; else return NaN;
-    }
-    return best.usd;
+     return candidates[0].usd;
   }
 
   function decorateCart() {
@@ -441,28 +446,31 @@
       } else {
         var oldS = containerApp.querySelector('[data-csfx="subtotal"]'); if (oldS) oldS.remove();
       }
+        var usdT = NaN;
       if (totRow) {
-        var usdT = parsePrice(totRow.textContent);
-        if (!isNaN(usdT)) {
-          var bsT = fmtBs(usd2bs(usdT));
-          var usdEl = Array.prototype.slice.call(totRow.querySelectorAll('span,div,strong,b,td')).reverse().find(function (n) {
-            return /-?\d+[.,]\d{1,2}$/.test((n.textContent || '').trim());
-          });
-      if (usdEl) {
-            var chip = totRow.querySelector('[data-csfx="total-inline"]');
-            if (!chip) {
-              chip = document.createElement('span');
-              chip.className = 'csfx-chip csfx-chip--inline';
-              chip.dataset.csfx = 'total-inline';
-              usdEl.insertAdjacentElement('afterend', chip);
-            }
-            chip.textContent = bsT;
+          usdT = parsePrice(totRow.textContent);
+      }
+      if (!isNaN(usdT) && !isNaN(usdS) && Math.abs(usdT - usdS) > 0.005) {
+        var bsT = fmtBs(usd2bs(usdT));
+        var usdEl = Array.prototype.slice.call(totRow.querySelectorAll('span,div,strong,b,td')).reverse().find(function (n) {
+          return /-?\d+[.,]\d{1,2}$/.test((n.textContent || '').trim());
+        });
+        if (usdEl) {
+          var chip = totRow.querySelector('[data-csfx="total-inline"]');
+          if (!chip) {
+            chip = document.createElement('span');
+            chip.className = 'csfx-chip csfx-chip--inline';
+            chip.dataset.csfx = 'total-inline';
+            usdEl.insertAdjacentElement('afterend', chip);
           }
+                    chip.textContent = bsT;
         }
       } else {
-        var oldChip = containerApp.querySelector('[data-csfx="total-inline"]'); if (oldChip) oldChip.remove();
+       var oldChip = containerApp.querySelector('[data-csfx="total-inline"]');
+        if (oldChip) oldChip.remove();
       }
-           var info = containerApp.querySelector('.csfx-info');
+              Array.prototype.slice.call(containerApp.querySelectorAll('.csfx-total-descuento,[data-csfx="total-descuento"]')).forEach(function (x) { x.remove(); });
+      var info = containerApp.querySelector('.csfx-info');
       if (!info) { info = document.createElement('div'); info.className = 'csfx-info'; containerApp.appendChild(info); }
       info.innerHTML = buildInfoText();
       return;
@@ -470,9 +478,11 @@
   
     var container = findTotalsContainer();
     if (!container) return;
-   var subRow2 = findTotalsRow(container, /^sub\s?total/i);
+    Array.prototype.slice.call(container.querySelectorAll('.csfx-total-descuento,[data-csfx="total-descuento"]')).forEach(function (x) { x.remove(); });
+    var subRow2 = findTotalsRow(container, /^sub\s?total/i);
+    var usdS2 = NaN;
     if (subRow2) {
-      var usdS2 = parsePrice(subRow2.textContent);
+     usdS2 = parsePrice(subRow2.textContent);
       if (!isNaN(usdS2)) {
         var bsS2 = fmtBs(usd2bs(usdS2));
         var next2 = subRow2.nextElementSibling;
@@ -489,29 +499,28 @@
         }
       }
     } else {
-     var oldSub = container.querySelector('[data-csfx="subtotal"]'); if (oldSub) oldSub.remove();
+       var oldSub = container.querySelector('[data-csfx="subtotal"]'); if (oldSub) oldSub.remove();
     }
- var totRow2 = findTotalsRow(container, /^total/i);
-    if (totRow2) {
-      var usdT2 = parsePrice(totRow2.textContent);
-      if (!isNaN(usdT2)) {
-        var bsT2 = fmtBs(usd2bs(usdT2));
-        var usdEl2 = Array.prototype.slice.call(totRow2.querySelectorAll('span,div,strong,b,td')).reverse().find(function (n) {
-          return /-?\d+[.,]\d{1,2}$/.test((n.textContent || '').trim());
-        });
+    var totRow2 = findTotalsRow(container, /^total/i);
+    var usdT2 = NaN;
+    if (totRow2) usdT2 = parsePrice(totRow2.textContent);
+    if (totRow2 && !isNaN(usdT2) && !isNaN(usdS2) && Math.abs(usdT2 - usdS2) > 0.005) {
+      var bsT2 = fmtBs(usd2bs(usdT2));
+      var usdEl2 = Array.prototype.slice.call(totRow2.querySelectorAll('span,div,strong,b,td')).reverse().find(function (n) {
+        return /-?\d+[.,]\d{1,2}$/.test((n.textContent || '').trim());
+      });
       if (usdEl2) {
           var chip2 = totRow2.querySelector('[data-csfx="total-inline"]');
-          if (!chip2) {
-            chip2 = document.createElement('span');
-            chip2.className = 'csfx-chip csfx-chip--inline';
-            chip2.dataset.csfx = 'total-inline';
-            usdEl2.insertAdjacentElement('afterend', chip2);
-          }
-             chip2.textContent = bsT2;
+        if (!chip2) {
+          chip2 = document.createElement('span');
+          chip2.className = 'csfx-chip csfx-chip--inline';
+          chip2.dataset.csfx = 'total-inline';
+          usdEl2.insertAdjacentElement('afterend', chip2);
         }
+         chip2.textContent = bsT2;
       }
     } else {
-     var oldChip2 = container.querySelector('[data-csfx="total-inline"]'); if (oldChip2) oldChip2.remove();
+          var oldChip2 = container.querySelector('[data-csfx="total-inline"]'); if (oldChip2) oldChip2.remove();
     }
     var info2 = container.querySelector('.csfx-info');
     if (!info2) { info2 = document.createElement('div'); info2.className = 'csfx-info'; container.appendChild(info2); }
