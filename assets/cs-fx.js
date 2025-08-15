@@ -122,7 +122,7 @@
       '.csfx-row{display:flex;justify-content:space-between;font-size:12px;opacity:.95;margin-top:2px;}',
       '.csfx-row .csfx-amount{font-weight:600;}',
       // fila del carrito: sólo muestra el importe en Bs, alineado a la derecha
-          '.csfx-cart-row{display:block;margin-top:2px;font-size:13px;font-weight:600;text-align:right;padding-right:.6rem;}',
+           '.csfx-cart-row{display:block;margin-top:2px;font-size:13px;font-weight:600;text-align:right;padding-right:.6rem;width:100%;}',
           // filas de totales en Bs (Subtotal)
       '.csfx-total-row{display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-top:4px;padding:0 .4rem;}',
     
@@ -139,6 +139,7 @@
       // especificidad para evitar conflictos con CSS del POS
       '.mat-autocomplete-panel .mat-option .csfx-price-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px;line-height:1}',
       '.mat-autocomplete-panel .mat-option .csfx-chip.csfx-chip--under{margin:0;font-size:12px;font-weight:600;background:transparent}',
+        '.mat-autocomplete-panel .mat-option .mat-option-text{display:flex;justify-content:space-between;align-items:center;width:100%;gap:8px;}',
       '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
       '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
       '[data-csfx="total-inline"]{margin-left:.5rem;font-weight:700;border-radius:12px;padding:.1rem .4rem;background:#eef1f5}'
@@ -373,9 +374,9 @@
       }
      var bs = usd2bs(usd);
       if (!mark) {
-        mark = document.createElement('div');
-        mark.className = 'csfx-cart-row';
-             mark.dataset.csfx = 'cart-bs';
+           mark = document.createElement('span');
+        mark.className = 'csfx-cart-row mat-line';
+        mark.dataset.csfx = 'cart-bs';
         var sp = document.createElement('span');
         sp.className = 'csfx-amount';
      
@@ -383,7 +384,7 @@
         r.appendChild(mark);
 
       }
-         var sp2 = mark.querySelector('.csfx-amount');
+        var sp2 = mark.querySelector('.csfx-amount');
       if (sp2) sp2.textContent = fmtBs(bs);
     });
   }
@@ -415,16 +416,18 @@
     var containerApp = document.querySelector('app-pos-order-total');
     if (containerApp) {
       var items = containerApp.querySelectorAll('.mat-list-item');
-      var subRow = null, totRow = null;
+       var subRow = null, totRow = null, discRow = null;
       items.forEach(function (row) {
         var type = (row.getAttribute('data-total-type') || '').toLowerCase();
         if (!type) {
           var t = (row.textContent || '').toLowerCase();
           if (/sub\s?total/.test(t)) type = 'subtotal';
+            else if (/descuento/.test(t)) type = 'discount';
           else if (/total/.test(t)) type = 'total';
         }
         if (type === 'subtotal') subRow = row;
         if (type === 'total') totRow = row;
+               if (type === 'discount') discRow = row;
       });
       if (subRow) {
         var usdS = parsePrice(subRow.textContent);
@@ -446,7 +449,33 @@
       } else {
         var oldS = containerApp.querySelector('[data-csfx="subtotal"]'); if (oldS) oldS.remove();
       }
-        var usdT = NaN;
+        if (discRow) {
+        var usdD = parsePrice(discRow.textContent);
+        if (!isNaN(usdD) && usdD !== 0) {
+          var bsD = fmtBs(usd2bs(usdD));
+          var nextD = discRow.nextElementSibling;
+          if (!(nextD && nextD.dataset && nextD.dataset.csfx === 'total-descuento')) {
+            var drow = document.createElement('div');
+            drow.className = 'csfx-total-row csfx-total-descuento';
+            drow.dataset.csfx = 'total-descuento';
+            var ld = document.createElement('span'); ld.textContent = 'Descuento (Bs.)';
+            var vd = document.createElement('span'); vd.className = 'csfx-amount'; vd.textContent = bsD;
+            if (FX.style && FX.style.discountColor) {
+              ld.style.color = FX.style.discountColor; vd.style.color = FX.style.discountColor;
+            }
+            drow.appendChild(ld); drow.appendChild(vd);
+            discRow.insertAdjacentElement('afterend', drow);
+          } else {
+            var vd2 = nextD.querySelector('.csfx-amount'); if (vd2) vd2.textContent = bsD;
+          }
+        } else {
+          var oldDnext = discRow.nextElementSibling;
+          if (oldDnext && oldDnext.dataset && oldDnext.dataset.csfx === 'total-descuento') oldDnext.remove();
+        }
+      } else {
+        var oldD = containerApp.querySelector('[data-csfx="total-descuento"]'); if (oldD) oldD.remove();
+      }
+      var usdT = NaN;
       if (totRow) {
           usdT = parsePrice(totRow.textContent);
       }
@@ -469,7 +498,7 @@
        var oldChip = containerApp.querySelector('[data-csfx="total-inline"]');
         if (oldChip) oldChip.remove();
       }
-              Array.prototype.slice.call(containerApp.querySelectorAll('.csfx-total-descuento,[data-csfx="total-descuento"]')).forEach(function (x) { x.remove(); });
+
       var info = containerApp.querySelector('.csfx-info');
       if (!info) { info = document.createElement('div'); info.className = 'csfx-info'; containerApp.appendChild(info); }
       info.innerHTML = buildInfoText();
@@ -478,9 +507,10 @@
   
     var container = findTotalsContainer();
     if (!container) return;
-    Array.prototype.slice.call(container.querySelectorAll('.csfx-total-descuento,[data-csfx="total-descuento"]')).forEach(function (x) { x.remove(); });
+  
     var subRow2 = findTotalsRow(container, /^sub\s?total/i);
     var usdS2 = NaN;
+        var discRow2 = findTotalsRow(container, /descuento/i);
     if (subRow2) {
      usdS2 = parsePrice(subRow2.textContent);
       if (!isNaN(usdS2)) {
@@ -500,6 +530,32 @@
       }
     } else {
        var oldSub = container.querySelector('[data-csfx="subtotal"]'); if (oldSub) oldSub.remove();
+    }
+        if (discRow2) {
+      var usdD2 = parsePrice(discRow2.textContent);
+      if (!isNaN(usdD2) && usdD2 !== 0) {
+        var bsD2 = fmtBs(usd2bs(usdD2));
+        var nextD2 = discRow2.nextElementSibling;
+        if (!(nextD2 && nextD2.dataset && nextD2.dataset.csfx === 'total-descuento')) {
+          var drow2 = document.createElement('div');
+          drow2.className = 'csfx-total-row csfx-total-descuento';
+          drow2.dataset.csfx = 'total-descuento';
+          var lD2 = document.createElement('span'); lD2.textContent = 'Descuento (Bs.)';
+          var vD2 = document.createElement('span'); vD2.className = 'csfx-amount'; vD2.textContent = bsD2;
+          if (FX.style && FX.style.discountColor) {
+            lD2.style.color = FX.style.discountColor; vD2.style.color = FX.style.discountColor;
+          }
+          drow2.appendChild(lD2); drow2.appendChild(vD2);
+          discRow2.insertAdjacentElement('afterend', drow2);
+        } else {
+          var vD2b = nextD2.querySelector('.csfx-amount'); if (vD2b) vD2b.textContent = bsD2;
+        }
+      } else {
+        var nextD2b = discRow2.nextElementSibling;
+        if (nextD2b && nextD2b.dataset && nextD2b.dataset.csfx === 'total-descuento') nextD2b.remove();
+      }
+    } else {
+      var oldD2 = container.querySelector('[data-csfx="total-descuento"]'); if (oldD2) oldD2.remove();
     }
     var totRow2 = findTotalsRow(container, /^total/i);
     var usdT2 = NaN;
