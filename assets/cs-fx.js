@@ -23,14 +23,18 @@
       enabled: true,
       base: 'USD',
       quote: 'VES',
-      symbol: 'Bs',
+         symbolUSD: '$',
+      symbolVES: 'Bs.',
+      symbol: 'Bs.',
       rate: 0,
       decimals: 2,
       updated: 0,
       ttl: 300,
       ajax: '',
       badge: true,
-      hideTax: true
+  hideTax: true,
+      debug: false,
+      style: {}
     };
     // Datos inyectados por PHP antes de tener sesión
     if (window.__CS_FX_BOOT && typeof window.__CS_FX_BOOT === 'object') {
@@ -52,7 +56,9 @@
       var a = window.action_url;
       def.ajax = a + (a.indexOf('?') > -1 ? '&' : '?') + 'action=cs_fx_rate';
     }
-    window.__CS_FX = def; // debug
+      if (!def.symbol && def.symbolVES) def.symbol = def.symbolVES;
+    window.__CS_FX = def; // legado
+    window.csfx = def; // para debug externo
     return def;
   })();
 
@@ -86,12 +92,12 @@
   }
   function fmtBs(n) {
     try {
-      return (FX.symbol || 'Bs') + ' ' + Number(n).toLocaleString('es-VE', {
+       return (FX.symbol || 'Bs.') + ' ' + Number(n).toLocaleString('es-VE', {
         minimumFractionDigits: FX.decimals,
         maximumFractionDigits: FX.decimals
       });
     } catch (e) {
-      return (FX.symbol || 'Bs') + ' ' + round(n, FX.decimals);
+     return (FX.symbol || 'Bs.') + ' ' + round(n, FX.decimals);
     }
   }
   function usd2bs(u) {
@@ -112,6 +118,8 @@
       '.csfx-cart-row{display:block;margin-top:2px;font-size:13px;font-weight:600;text-align:right;padding-right:.4rem;}',
       // filas de totales en Bs (Subtotal y Total)
       '.csfx-total-row{display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-top:4px;padding:0 .4rem;}',
+            '.csfx-total-row.csfx-total-subtotal .csfx-amount,.csfx-total-row.csfx-total-total .csfx-amount{color:'+ (FX.style.bsColor || '#0057b7') +';}',
+      '.csfx-total-row.csfx-total-desc-total .csfx-amount{color:'+ (FX.style.discountColor || '#28a745') +';}',
       '.csfx-info{margin-top:6px;font-size:11px;opacity:.8;}',
       '.csfx-pay-header-row{display:flex;gap:.4rem;margin-top:2px;}',
       // compactar el hueco de impuestos si se decide ocultar
@@ -193,23 +201,13 @@
       }
       if (isNaN(usdVal) || usdVal <= 0) return;
       var bsVal = usd2bs(usdVal);
-      // crear o reutilizar chip
+         // crear chip y colocarlo dentro del nodo clicable de la opción
       var chip = document.createElement('span');
-      chip.className = 'csfx-chip';
-      // estilos para buscador: no ocupar todo el ancho para que el precio en USD no se mueva
-      chip.style.display = 'inline-block';
-      chip.style.marginTop = '.2rem';
-      chip.style.marginLeft = 'auto';
-      chip.style.float = 'right';
-      chip.style.textAlign = 'right';
-      chip.style.fontSize = '12px';
+      chip.className = 'csfx-chip csfx-chip--under';
+      chip.dataset.csfx = 'bs-option';
       chip.textContent = fmtBs(bsVal);
-      // insertarlo dentro del elemento de precio (para que aparezca debajo) o, si no existe, al final de la opción
-      if (priceEl) {
-        priceEl.appendChild(chip);
-      } else {
-        it.appendChild(chip);
-      }
+   var container = priceEl || it.querySelector('.mat-option-text') || it;
+      container.appendChild(chip);
     });
   }
 
@@ -310,6 +308,7 @@
       if (!mark) {
         mark = document.createElement('div');
         mark.className = 'csfx-cart-row';
+             mark.dataset.csfx = 'cart-bs';
         var sp = document.createElement('span');
         sp.className = 'csfx-amount';
         sp.textContent = fmtBs(bs);
@@ -380,7 +379,7 @@
         infoP.className = 'csfx-info';
         last.parentElement.appendChild(infoP);
       }
-      infoP.textContent = buildInfoText();
+        infoP.innerHTML = buildInfoText();
     }
     // intenta usar contenedor nativo de totales de OpenPOS (app-pos-order-total)
     var containerApp = document.querySelector('app-pos-order-total');
@@ -389,6 +388,10 @@
       if (items && items.length) {
         items.forEach(function (row) {
         var type = (row.getAttribute('data-total-type') || '').toLowerCase();
+              if (!type) {
+          var lbltxt = (row.textContent || '').toLowerCase();
+          if (/(impuesto|iva|tax)/.test(lbltxt)) type = 'tax';
+        }
         // ocultar impuestos
         if (type === 'tax' || type === 'impuestos' || type === 'iva') {
           // Oculta siempre la fila de impuestos
@@ -441,7 +444,7 @@
           info.className = 'csfx-info';
           containerApp.appendChild(info);
         }
-        info.textContent = buildInfoText();
+           info.innerHTML = buildInfoText();
         // si no existe una fila de descuento en las nativas, elimina cualquier fila Bs de descuento
         var nativeDisc = containerApp.querySelector(
           '.mat-list-item[data-total-type="discount"], .mat-list-item[data-total-type="descuento"], .mat-list-item[data-total-type="desc"]'
@@ -498,6 +501,7 @@
             // crea nueva fila
             var nrowT = document.createElement('div');
             nrowT.className = 'csfx-total-row csfx-row csfx-total-desc-total';
+              nrowT.dataset.csfx = 'total-desc';
             var lT = document.createElement('span');
             lT.textContent = 'Total (Bs)';
             var vT = document.createElement('span');
@@ -521,7 +525,7 @@
       info2.className = 'csfx-info';
       container.appendChild(info2);
     }
-    info2.textContent = buildInfoText();
+     info2.innerHTML = buildInfoText();
 
     // Oculta cualquier fila que contenga la palabra impuestos/iva/tax (fallback)
     var allRows = container.querySelectorAll('div,li,tr');
@@ -534,16 +538,16 @@
   }
 
   function buildInfoText() {
-    var t = 'USD→' + (FX.quote || 'VES') + ': ';
-    t += FX.rate ? FX.rate.toFixed(FX.decimals) : '(sin datos)';
+  var t = '<strong>Tasa BCV:</strong> ' + (FX.rate ? FX.rate.toFixed(FX.decimals) : '(sin datos)');
     if (FX.updated) {
       var d = new Date(FX.updated * 1000);
+         var hh;
       try {
-        var hh = d.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
-        t += ' · ' + hh;
+        hh = d.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
       } catch (e) {
-        t += ' · ' + d.getHours() + ':' + ('' + d.getMinutes()).padStart(2, '0');
+           hh = d.getHours() + ':' + ('' + d.getMinutes()).padStart(2, '0');
       }
+            t += ' · <strong>Actualizado:</strong> ' + hh;
     }
     return t;
   }
@@ -577,7 +581,7 @@
       document.body.appendChild(badge);
     }
     var contentDiv = badge.querySelector('.csfx-badge-content');
-    if (contentDiv) contentDiv.textContent = buildInfoText();
+     if (contentDiv) contentDiv.innerHTML = buildInfoText();
   }
 
   function injectBsRow(container, nativeRow, key) {
@@ -596,11 +600,18 @@
     if (!row) {
       row = document.createElement('div');
       row.className = 'csfx-total-row csfx-row ' + cls;
+            row.dataset.csfx = 'total-' + key;
       var l = document.createElement('span');
       l.textContent = label;
       var v = document.createElement('span');
       v.className = 'csfx-amount';
       v.textContent = fmtBs(bs);
+         if (key === 'subtotal' || key === 'total') {
+        v.style.color = (FX.style.bsColor || '#0057b7');
+      }
+      if (key === 'descuento') {
+        v.style.color = (FX.style.discountColor || '#28a745');
+      }
       row.appendChild(l);
       row.appendChild(v);
       // insertamos justo DESPUÉS de la fila nativa para que la UX sea consistente
@@ -642,6 +653,7 @@
         }
         var diff = (u2 - u1);
         var vals = [u1, u2];
+          var labels = ['Pagado', 'Faltante'];
         for (var k = 0; k < vals.length; k++) {
           var child = chipRow.children[k];
           var bsVal = vals[k];
@@ -653,9 +665,10 @@
           if (!child) {
             child = document.createElement('span');
             child.className = 'csfx-chip';
+                      child.dataset.csfxPay = labels[k].toLowerCase();
             chipRow.appendChild(child);
           }
-          child.textContent = fmtBs(bs);
+      child.textContent = labels[k] + ': ' + fmtBs(bs);
         }
         // marca este encabezado como decorado para idempotencia, pero siempre actualiza
         el.dataset.csfxPayHeader = '1';
