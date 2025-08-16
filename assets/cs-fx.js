@@ -155,6 +155,8 @@
        '.csfx-badge.open .csfx-badge-content{display:block;}',
       // especificidad para evitar conflictos con CSS del POS
       /* Reglas específicas para el buscador (sin romper layout nativo) */
+            '.mat-autocomplete-panel .mat-option .csfx-usd-chip{color:#0b5e3c;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.35);box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 1px 3px rgba(0,0,0,.08);}',
+      '.mat-autocomplete-panel .mat-option .csfx-usd-chip.usd-outline{background:transparent;color:#0a7d55;border:1px solid rgba(16,185,129,.45);box-shadow:none;}',
       '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;}',
            '.csfx-chip--search{position:absolute;right:0;bottom:2px;background:transparent;color:#7a7a7a;font-size:12px;font-weight:600;border-radius:10px;padding:.1rem .35rem;pointer-events:none;line-height:1;}',
       '.csfx-chip--search.vip{background:var(--csfx-vip-bg,rgba(0,87,183,.10));border:1px solid var(--csfx-vip-border,rgba(0,87,183,.28));color:var(--csfx-vip-text,#1e3a8a);box-shadow:var(--csfx-vip-shadow,0 1px 0 rgba(255,255,255,.4) inset,0 1px 4px rgba(0,0,0,.12));backdrop-filter:saturate(130%);}',
@@ -231,6 +233,9 @@
       var priceEl = textRoot.querySelector('.product-price, .variation-price, [class*="price"]');
       if (!priceEl) priceEl = findPriceElement(textRoot);
       if (!priceEl) return;
+         if (!priceEl.classList.contains('csfx-usd-chip')) {
+        priceEl.classList.add('csfx-usd-chip');
+      }
       var usdVal = parsePrice(priceEl.textContent);
       if (isNaN(usdVal) || usdVal <= 0) return;
 
