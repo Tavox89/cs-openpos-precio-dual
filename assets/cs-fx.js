@@ -143,7 +143,9 @@
       // fila del carrito: sólo muestra el importe en Bs, alineado a la derecha
            '.csfx-cart-row{display:block;margin-top:2px;font-size:13px;font-weight:600;text-align:right;padding-right:.6rem;width:100%;}',
           // filas de totales en Bs (Subtotal)
-      '.csfx-total-row{display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-top:4px;padding:0 .4rem;}',
+        '.csfx-total-row{display:flex;justify-content:space-between;font-size:14px;font-weight:700;margin-top:8px;padding:0 .4rem;}',
+        '.csfx-total-row span{font-weight:700;font-size:14px;}',
+        '.csfx-total-row .csfx-amount{color:#1e3a8a;font-weight:700;font-size:14px;}',
     
       '.csfx-info{margin-top:6px;font-size:11px;opacity:.8;}',
       '.csfx-pay-header-row{display:flex;gap:.8rem;margin-top:2px;}',
@@ -164,9 +166,7 @@
       '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
       '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
       // Fila resumen de totales (debajo del Subtotal USD)
-      '[data-csfx="summary-bs"]{display:flex;align-items:center;gap:10px;padding:0 .4rem;margin-top:4px;justify-content:flex-start;}',
-      '[data-csfx="summary-bs"] .csfx-amount{font-weight:700;}',
-      '[data-csfx="summary-bs"] [data-csfx="tot-bs"]{background:#eef1f5;border-radius:12px;padding:.1rem .4rem;}'
+      '[data-csfx="summary-bs"]{display:flex;align-items:center;gap:10px;padding:0 .4rem;margin-top:4px;justify-content:flex-start;}'
     ].join('');
     var el = document.createElement('style');
     el.id = id;
@@ -492,26 +492,30 @@
           summary = document.createElement('div');
           summary.className = 'csfx-total-row';
           summary.dataset.csfx = 'summary-bs';
-          var l = document.createElement('span'); l.textContent = 'Subtotal (Bs.)';
-          var vSub = document.createElement('span'); vSub.className = 'csfx-amount'; vSub.dataset.csfx = 'sub-bs';
-          var flex = document.createElement('span'); flex.style.flex = '1';
-          var vTot = document.createElement('span'); vTot.className = 'csfx-amount'; vTot.dataset.csfx = 'tot-bs'; vTot.hidden = true;
-          summary.appendChild(l); summary.appendChild(vSub); summary.appendChild(flex); summary.appendChild(vTot);
+        summary.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
           if (subRow) subRow.insertAdjacentElement('afterend', summary);
         }
         if (summary) {
           var subSpan = summary.querySelector('[data-csfx="sub-bs"]');
           if (subSpan && !isNaN(usdS)) subSpan.textContent = fmtBs(usd2bs(usdS));
-          var totSpan = summary.querySelector('[data-csfx="tot-bs"]');
-          if (totSpan) {
-            if (!isNaN(usdT) && !isNaN(usdS) && Math.abs(usdT - usdS) > 0.005) {
-              totSpan.hidden = false;
-              totSpan.textContent = fmtBs(usd2bs(usdT));
-            } else {
-              totSpan.hidden = true;
             }
+        var totalRow = summary ? summary.nextElementSibling : null;
+        if (!(totalRow && totalRow.dataset && totalRow.dataset.csfx === 'total-bs')) {
+          if (totalRow && totalRow.dataset && totalRow.dataset.csfx) totalRow.remove();
+          totalRow = null;
+        }
+        if (!isNaN(usdT) && !isNaN(usdS) && Math.abs(usdT - usdS) > 0.005) {
+          if (!totalRow) {
+            totalRow = document.createElement('div');
+            totalRow.className = 'csfx-total-row';
+            totalRow.dataset.csfx = 'total-bs';
+            totalRow.innerHTML = '<span>Total:</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
+            summary.insertAdjacentElement('afterend', totalRow);
           }
-        
+          var totSpan = totalRow.querySelector('[data-csfx="tot-bs"]');
+          if (totSpan) totSpan.textContent = fmtBs(usd2bs(usdT));
+        } else {
+          if (totalRow) totalRow.remove();
         }
          var oldInline = containerApp.querySelector('[data-csfx="total-inline"]'); if (oldInline) oldInline.remove();
         var oldSub = containerApp.querySelector('[data-csfx="subtotal"]'); if (oldSub) oldSub.remove();
@@ -529,30 +533,39 @@
       var totRow2 = findTotalsRow(container, /^total/i);
       var usdS2 = subRow2 ? parsePrice(subRow2.textContent) : NaN;
       var usdT2 = totRow2 ? parsePrice(totRow2.textContent) : NaN;
-      var summary2 = subRow2 ? subRow2.nextElementSibling : null;
-      if (!(summary2 && summary2.dataset && summary2.dataset.csfx === 'summary-bs')) {
-        if (summary2 && summary2.dataset && summary2.dataset.csfx) summary2.remove();
-        var existing = container.querySelector('[data-csfx="summary-bs"]'); if (existing) existing.remove();
-        summary2 = document.createElement('div');
-        summary2.className = 'csfx-total-row';
-        summary2.dataset.csfx = 'summary-bs';
-        summary2.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span><span style="flex:1"></span><span class="csfx-amount" data-csfx="tot-bs" hidden></span>';
-        if (subRow2) subRow2.insertAdjacentElement('afterend', summary2);
-      }
-      if (summary2) {
-        var subSp2 = summary2.querySelector('[data-csfx="sub-bs"]'); if (subSp2 && !isNaN(usdS2)) subSp2.textContent = fmtBs(usd2bs(usdS2));
-        var totSp2 = summary2.querySelector('[data-csfx="tot-bs"]');
-        if (totSp2) {
-          if (!isNaN(usdT2) && !isNaN(usdS2) && Math.abs(usdT2 - usdS2) > 0.005) {
-            totSp2.hidden = false;
-            totSp2.textContent = fmtBs(usd2bs(usdT2));
-          } else {
-            totSp2.hidden = true;
+         var summary2 = subRow2 ? subRow2.nextElementSibling : null;
+        if (!(summary2 && summary2.dataset && summary2.dataset.csfx === 'summary-bs')) {
+          if (summary2 && summary2.dataset && summary2.dataset.csfx) summary2.remove();
+          var existing = container.querySelector('[data-csfx="summary-bs"]'); if (existing) existing.remove();
+          summary2 = document.createElement('div');
+          summary2.className = 'csfx-total-row';
+          summary2.dataset.csfx = 'summary-bs';
+          summary2.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
+          if (subRow2) subRow2.insertAdjacentElement('afterend', summary2);
+        }
+        if (summary2) {
+          var subSp2 = summary2.querySelector('[data-csfx="sub-bs"]'); if (subSp2 && !isNaN(usdS2)) subSp2.textContent = fmtBs(usd2bs(usdS2));
+        }
+        var totalRow2 = summary2 ? summary2.nextElementSibling : null;
+        if (!(totalRow2 && totalRow2.dataset && totalRow2.dataset.csfx === 'total-bs')) {
+          if (totalRow2 && totalRow2.dataset && totalRow2.dataset.csfx) totalRow2.remove();
+          totalRow2 = null;
+        }
+        if (!isNaN(usdT2) && !isNaN(usdS2) && Math.abs(usdT2 - usdS2) > 0.005) {
+          if (!totalRow2) {
+            totalRow2 = document.createElement('div');
+            totalRow2.className = 'csfx-total-row';
+            totalRow2.dataset.csfx = 'total-bs';
+            totalRow2.innerHTML = '<span>Total:</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
+            summary2.insertAdjacentElement('afterend', totalRow2);
           }
-
+     var totSp2 = totalRow2.querySelector('[data-csfx="tot-bs"]');
+          if (totSp2) totSp2.textContent = fmtBs(usd2bs(usdT2));
+        } else {
+          if (totalRow2) totalRow2.remove();
         }
         
-      }
+      
        var oldInline2 = container.querySelector('[data-csfx="total-inline"]'); if (oldInline2) oldInline2.remove();
       var oldSub2 = container.querySelector('[data-csfx="subtotal"]'); if (oldSub2) oldSub2.remove();
       var oldDesc2 = container.querySelector('[data-csfx="total-descuento"]'); if (oldDesc2) oldDesc2.remove();
