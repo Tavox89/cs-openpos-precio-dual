@@ -156,15 +156,11 @@
       '.csfx-badge-content{background:#eef1f5;color:#2f3437;padding:4px 6px;border-radius:0 0 4px 4px;display:none;font-size:13px;white-space:nowrap;}',
        '.csfx-badge.open .csfx-badge-content{display:block;}',
       // especificidad para evitar conflictos con CSS del POS
-         /* Reglas específicas para el buscador (sin romper layout nativo) */
-      '/* USD: solo maquillaje óptico; nada de display/padding/margin/line-height/position */',
-      '.mat-autocomplete-panel .mat-option .csfx-usd-chip{color:#0b5e3c;background:rgba(16,185,129,.10);box-shadow:inset 0 0 0 1px rgba(16,185,129,.35),0 1px 3px rgba(0,0,0,.08);filter:saturate(115%);}',
-       '/* USD: solo "maquillaje" via transform (no cambia layout) */',
-      '.mat-autocomplete-panel .mat-option .csfx-usd-boost{will-change:transform;transform-origin:right center;transform:translateY(var(--csfx-usd-dy,0)) scale(var(--csfx-usd-scale,1));}',
-      '/* Bs centrado vertical (X la pone JS por geometría) */',
-      '.csfx-chip--search{background:rgba(0,87,183,.10);color:#1e3a8a;border:1px solid rgba(0,87,183,.30);box-shadow:0 1px 0 rgba(255,255,255,.35) inset,0 1px 3px rgba(0,0,0,.08);border-radius:12px;white-space:nowrap;position:absolute;top:50%;transform:translateY(-50%);pointer-events:none;z-index:2;}',
-      '/* Anchor relativo; no forzar flex ni paddings aquí */',
-      '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;overflow:visible;}',
+        /* Reglas específicas para el buscador (sin romper layout nativo) */
+      '.csfx-chip{font-family:inherit;font-size:16px;font-weight:700;text-align:right;padding-right:10px;}',
+      '.csfx-usd-chip{position:absolute;top:0;left:0;font-size:16px;font-weight:700;color:#0b5e3c;background:rgba(16,185,129,.10);box-shadow:inset 0 0 0 1px rgba(16,185,129,.35),0 1px 3px rgba(0,0,0,.08);padding:.2rem .5rem;border-radius:12px;}',
+      '.csfx-bs-chip{position:absolute;top:50%;transform:translateY(-50%);right:0;font-size:16px;font-weight:700;color:#1e3a8a;background:rgba(0,87,183,.10);box-shadow:inset 0 0 0 1px rgba(0,87,183,.35),0 1px 3px rgba(0,0,0,.08);padding:.2rem .5rem;border-radius:12px;}',
+      '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;overflow:visible;padding-right:2rem;}',
       '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
       '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
       // Fila resumen de totales (debajo del Subtotal USD)
@@ -240,11 +236,9 @@
       }
       var priceEl = textRoot.querySelector('.product-price, .variation-price, [class*="price"]');
       if (!priceEl) priceEl = findPriceElement(textRoot);
-     if (!priceEl) return; // sin USD confiable, no insertes Bs
-      // Asegura hook de estilo para USD sin alterar su posición
+    if (!priceEl) return; // sin USD confiable, no insertes Bs
       if (!priceEl.classList.contains('csfx-usd-chip')) {
-        priceEl.classList.add('csfx-usd-chip');
-  
+
       }
       var usdVal = parsePrice(priceEl.textContent);
       if (isNaN(usdVal) || usdVal <= 0) return;
@@ -260,7 +254,7 @@
         chip.dataset.csfx = 'bs-search';
         anchor.appendChild(chip);
       }
-      chip.className = 'csfx-chip--search' + (FX.style && FX.style.vipSearch ? ' vip' : '');
+         chip.className = 'csfx-chip csfx-bs-chip' + (FX.style && FX.style.vipSearch ? ' vip' : '');
       if (FX.style && FX.style.vipSearch) {
         chip.style.background = FX.style.vipSearchBg || '';
         chip.style.borderColor = FX.style.vipSearchBorder || '';
@@ -279,38 +273,12 @@
       chip.style.fontFeatureSettings = cs.fontFeatureSettings || 'normal';
       chip.style.fontVariantNumeric = 'tabular-nums lining-nums';
 
-          let lh = cs.lineHeight;
+      let lh = cs.lineHeight;
       if (!lh || lh === 'normal') lh = `${Math.round(parseFloat(cs.fontSize) || 12)}px`;
       chip.style.lineHeight = lh;
       chip.style.borderRadius = cs.borderRadius || '12px';
 
-          // rail por geometría: centrar en la fila y clamplear a la derecha del USD
-      chip.style.position = 'absolute';
-      chip.style.pointerEvents = 'none';
-      chip.style.whiteSpace = 'nowrap';
-      chip.style.zIndex = '2';
-      chip.style.top = '50%';
-      chip.style.transform = 'translateY(-50%)';
 
-      const ar = anchor.getBoundingClientRect();
-      const pr = priceEl.getBoundingClientRect();
-      const chipW = chip.offsetWidth;
-      let left = Math.round(pr.right - ar.left + 6);
-      const maxLeft = ar.width - chipW - 2;
-      if (left > maxLeft) left = Math.max(0, maxLeft);
-      if (left < 0) left = 0;
-      chip.style.left = left + 'px';
-      chip.style.right = 'auto';
-
-
-       // === USD boost sin reflow ===
-      priceEl.classList.add('csfx-usd-boost');
-      const aRect = anchor.getBoundingClientRect();
-      const uRect = priceEl.getBoundingClientRect();
-      const deltaY = Math.round((aRect.top + aRect.height / 2) - (uRect.top + uRect.height / 2));
-      priceEl.style.setProperty('--csfx-usd-dy', `${deltaY}px`);
-      priceEl.style.setProperty('--csfx-usd-scale', '1.06');
-     
     });
   }
 
