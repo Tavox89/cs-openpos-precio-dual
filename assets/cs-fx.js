@@ -159,9 +159,9 @@
        '.csfx-badge.open .csfx-badge-content{display:block;}',
       // especificidad para evitar conflictos con CSS del POS
         /* Reglas específicas para el buscador (sin romper layout nativo) */
-      '.csfx-chip{font-family:inherit;font-size:16px;font-weight:700;text-align:right;padding-right:10px;}',
-      '.csfx-usd-chip{position:absolute;top:0;left:0;font-size:16px;font-weight:700;color:#0b5e3c;background:rgba(16,185,129,.10);box-shadow:inset 0 0 0 1px rgba(16,185,129,.35),0 1px 3px rgba(0,0,0,.08);padding:.2rem .5rem;border-radius:12px;}',
-      '.csfx-bs-chip{position:absolute;top:50%;transform:translateY(-50%);right:0;font-size:16px;font-weight:700;color:#1e3a8a;background:rgba(0,87,183,.10);box-shadow:inset 0 0 0 1px rgba(0,87,183,.35),0 1px 3px rgba(0,0,0,.08);padding:.2rem .5rem;border-radius:12px;}',
+      '.csfx-chip{font-family:inherit;font-size:16px;font-weight:700;}',
+      '.csfx-usd-chip{font-size:16px;font-weight:700;color:#0b5e3c;background:rgba(16,185,129,.10);padding:.2rem .5rem;border-radius:12px;}',
+      '.csfx-bs-chip{font-size:16px;font-weight:700;color:#1e3a8a;background:rgba(0,87,183,.10);padding:.2rem .5rem;border-radius:12px;position:absolute;top:50%;transform:translateY(-50%);right:0;}',
       '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;overflow:visible;padding-right:2rem;}',
       '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
       '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
@@ -238,7 +238,7 @@
       if (!priceEl) priceEl = findPriceElement(textRoot);
     if (!priceEl) return; // sin USD confiable, no insertes Bs
       if (!priceEl.classList.contains('csfx-usd-chip')) {
-
+   priceEl.classList.add('csfx-chip', 'csfx-usd-chip');
       }
       var usdVal = parsePrice(priceEl.textContent);
       if (isNaN(usdVal) || usdVal <= 0) return;
@@ -509,7 +509,7 @@
             totalRow = document.createElement('div');
             totalRow.className = 'csfx-total-row';
             totalRow.dataset.csfx = 'total-bs';
-            totalRow.innerHTML = '<span>Total:</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
+        totalRow.innerHTML = '<span>Total (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
             summary.insertAdjacentElement('afterend', totalRow);
           }
           var totSpan = totalRow.querySelector('[data-csfx="tot-bs"]');
@@ -556,7 +556,7 @@
             totalRow2 = document.createElement('div');
             totalRow2.className = 'csfx-total-row';
             totalRow2.dataset.csfx = 'total-bs';
-            totalRow2.innerHTML = '<span>Total:</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
+                   totalRow2.innerHTML = '<span>Total (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
             summary2.insertAdjacentElement('afterend', totalRow2);
           }
      var totSp2 = totalRow2.querySelector('[data-csfx="tot-bs"]');
