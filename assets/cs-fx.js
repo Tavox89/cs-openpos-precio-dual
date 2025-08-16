@@ -221,8 +221,12 @@
   }
 
   // --- Decoradores ---
+    // bandera para evitar actualizaciones repetidas que generan parpadeo
+  var updateApplied = false;
+
   function decorateSearch() {
-    if (!FX.rate || !FX.searchBs) return;
+      if (!FX.rate || !FX.searchBs || updateApplied) return;
+    updateApplied = true;
     var items = document.querySelectorAll('.mat-autocomplete-panel .mat-option');
     items.forEach(function (it) {
      var textRoot = it.querySelector('.mat-option-text') || it;
@@ -298,14 +302,6 @@
       chip.style.left = left + 'px';
       chip.style.right = 'auto';
 
-      // reposicionar 1 frame después por si la fuente ajusta
-      requestAnimationFrame(() => {
-        const chipW2 = chip.offsetWidth;
-        let left2 = Math.round(priceEl.getBoundingClientRect().right - anchor.getBoundingClientRect().left + 6);
-        const maxLeft2 = anchor.getBoundingClientRect().width - chipW2 - 2;
-        if (left2 > maxLeft2) left2 = Math.max(0, maxLeft2);
-        chip.style.left = left2 + 'px';
-      });
 
        // === USD boost sin reflow ===
       priceEl.classList.add('csfx-usd-boost');
@@ -316,6 +312,10 @@
       priceEl.style.setProperty('--csfx-usd-scale', '1.06');
      
     });
+  }
+
+    function resetUpdates() {
+    updateApplied = false;
   }
 
   function decorateAddons() {
@@ -765,7 +765,7 @@
     if (panel) {
       if (!obsSearch || obsEls.search !== panel) {
         if (obsSearch) obsSearch.disconnect();
-        obsSearch = new MutationObserver(function () { schedule(decorateSearch); });
+ obsSearch = new MutationObserver(function () { resetUpdates(); schedule(decorateSearch); });
         obsSearch.observe(panel, { childList: true, subtree: true });
         obsEls.search = panel;
       }
@@ -793,7 +793,8 @@
     }
   }
   function runAll() {
-        ensureObservers();
+   ensureObservers();
+    resetUpdates();
     decorateSearch();
     decorateAddons();
     decorateCart();
