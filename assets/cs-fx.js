@@ -37,18 +37,37 @@
       payChips: true,
        addonsBs: true,
       debug: false,
-      style: {}
+           style: {
+        bsColor: '#0057b7',
+        vipSearch: true,
+        vipSearchBg: 'rgba(0,87,183,.10)',
+        vipSearchBorder: 'rgba(0,87,183,.28)',
+        vipSearchText: '#1e3a8a',
+        vipSearchShadow: '0 1px 0 rgba(255,255,255,.4) inset, 0 1px 4px rgba(0,0,0,.12)'
+      }
     };
     // Datos inyectados por PHP antes de tener sesión
     if (window.__CS_FX_BOOT && typeof window.__CS_FX_BOOT === 'object') {
-      Object.assign(def, window.__CS_FX_BOOT);
+       var boot = window.__CS_FX_BOOT;
+      if (boot.style && typeof boot.style === 'object') {
+        Object.assign(def.style, boot.style);
+      }
+      Object.keys(boot).forEach(function (k) {
+        if (k !== 'style' && boot[k] != null) def[k] = boot[k];
+      });
     }
     // Datos persistidos por el POS una vez logueado
     try {
       var s = JSON.parse(localStorage.getItem('op_settings') || '{}');
       var fx = (s.setting && s.setting.cs_fx) || {};
       Object.keys(fx).forEach(function (k) {
-        if (fx[k] != null) def[k] = fx[k];
+             if (fx[k] != null) {
+          if (k === 'style' && typeof fx[k] === 'object') {
+            Object.assign(def.style, fx[k]);
+          } else {
+            def[k] = fx[k];
+          }
+        }
       });
     } catch (e) {}
     def.rate = Number(def.rate) || 0;
@@ -137,7 +156,9 @@
       // especificidad para evitar conflictos con CSS del POS
       /* Reglas específicas para el buscador (sin romper layout nativo) */
       '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;}',
-      '.csfx-chip--search{position:absolute;right:0;bottom:2px;background:transparent;color:#7a7a7a;font-size:12px;font-weight:600;pointer-events:none;}',
+           '.csfx-chip--search{position:absolute;right:0;bottom:2px;background:transparent;color:#7a7a7a;font-size:12px;font-weight:600;border-radius:10px;padding:.1rem .35rem;pointer-events:none;line-height:1;}',
+      '.csfx-chip--search.vip{background:var(--csfx-vip-bg,rgba(0,87,183,.10));border:1px solid var(--csfx-vip-border,rgba(0,87,183,.28));color:var(--csfx-vip-text,#1e3a8a);box-shadow:var(--csfx-vip-shadow,0 1px 0 rgba(255,255,255,.4) inset,0 1px 4px rgba(0,0,0,.12));backdrop-filter:saturate(130%);}',
+      '.csfx-chip--search.vip.outline{background:transparent;border:1px solid rgba(0,87,183,.35);color:#0f3d91;box-shadow:none;}',
       '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
       '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
       // Fila resumen de totales (debajo del Subtotal USD)
@@ -219,9 +240,16 @@
       var chip = anchor.querySelector('[data-csfx="bs-search"]');
       if (!chip) {
         chip = document.createElement('span');
-         chip.className = 'csfx-chip csfx-chip--search';
+ 
         chip.dataset.csfx = 'bs-search';
         anchor.appendChild(chip);
+      }
+          chip.className = 'csfx-chip csfx-chip--search' + (FX.style && FX.style.vipSearch ? ' vip' : '');
+      if (FX.style && FX.style.vipSearch) {
+        chip.style.setProperty('--csfx-vip-bg', FX.style.vipSearchBg || '');
+        chip.style.setProperty('--csfx-vip-border', FX.style.vipSearchBorder || '');
+        chip.style.setProperty('--csfx-vip-text', FX.style.vipSearchText || '');
+        chip.style.setProperty('--csfx-vip-shadow', FX.style.vipSearchShadow || '');
       }
       chip.textContent = fmtBs(usd2bs(usdVal));
     });
