@@ -159,9 +159,11 @@
          /* Reglas específicas para el buscador (sin romper layout nativo) */
       '/* USD: solo maquillaje óptico; nada de display/padding/margin/line-height/position */',
       '.mat-autocomplete-panel .mat-option .csfx-usd-chip{color:#0b5e3c;background:rgba(16,185,129,.10);box-shadow:inset 0 0 0 1px rgba(16,185,129,.35),0 1px 3px rgba(0,0,0,.08);filter:saturate(115%);}',
-      '/* Bs: absoluto, pero con tipografía clonada por JS */',
-      '.csfx-chip--search{background:rgba(0,87,183,.10);color:#1e3a8a;border:1px solid rgba(0,87,183,.30);box-shadow:0 1px 0 rgba(255,255,255,.35) inset,0 1px 3px rgba(0,0,0,.08);border-radius:12px;white-space:nowrap;}',
-      '/* Ancla relativa del contenedor de texto (sin flex/justify forzados) */',
+       '/* USD: solo "maquillaje" via transform (no cambia layout) */',
+      '.mat-autocomplete-panel .mat-option .csfx-usd-boost{will-change:transform;transform-origin:right center;transform:translateY(var(--csfx-usd-dy,0)) scale(var(--csfx-usd-scale,1));}',
+      '/* Bs centrado vertical (X la pone JS por geometría) */',
+      '.csfx-chip--search{background:rgba(0,87,183,.10);color:#1e3a8a;border:1px solid rgba(0,87,183,.30);box-shadow:0 1px 0 rgba(255,255,255,.35) inset,0 1px 3px rgba(0,0,0,.08);border-radius:12px;white-space:nowrap;position:absolute;top:50%;transform:translateY(-50%);pointer-events:none;z-index:2;}',
+      '/* Anchor relativo; no forzar flex ni paddings aquí */',
       '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;overflow:visible;}',
       '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
       '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
@@ -243,7 +245,7 @@
       var usdVal = parsePrice(priceEl.textContent);
       if (isNaN(usdVal) || usdVal <= 0) return;
 
-        const anchor = priceEl.closest('.mat-option-text') || priceEl.parentNode;
+     const anchor = priceEl.closest('.mat-option-text') || priceEl.parentNode;
       if (!anchor) return;
     
 
@@ -256,50 +258,62 @@
       }
       chip.className = 'csfx-chip--search' + (FX.style && FX.style.vipSearch ? ' vip' : '');
       if (FX.style && FX.style.vipSearch) {
-   chip.style.background = FX.style.vipSearchBg || '';
+        chip.style.background = FX.style.vipSearchBg || '';
         chip.style.borderColor = FX.style.vipSearchBorder || '';
         chip.style.color = FX.style.vipSearchText || '';
         chip.style.boxShadow = FX.style.vipSearchShadow || '';
       }
       
-       chip.textContent = fmtBs(usd2bs(usdVal));
-      chip.style.position = 'absolute';
-      chip.style.bottom = '2px';
-      chip.style.pointerEvents = 'none';
-      chip.style.whiteSpace = 'nowrap';
-      chip.style.zIndex = '1';
+      chip.textContent = fmtBs(usd2bs(usdVal));
 
-      // 2) Clonar tipografía del USD para simetría
-      const cs = window.getComputedStyle(priceEl);
+      // tipografía simétrica (copiar del USD, sin tocar USD)
+      const cs = getComputedStyle(priceEl);
       chip.style.fontFamily = cs.fontFamily || 'inherit';
       chip.style.fontSize = cs.fontSize;
-     chip.style.fontWeight = cs.fontWeight;
+      chip.style.fontWeight = cs.fontWeight;
       chip.style.letterSpacing = cs.letterSpacing;
       chip.style.fontFeatureSettings = cs.fontFeatureSettings || 'normal';
       chip.style.fontVariantNumeric = 'tabular-nums lining-nums';
 
-        let lh = cs.lineHeight;
-      if (!lh || lh === 'normal') {
-        lh = `${Math.round(parseFloat(cs.fontSize) || 12)}px`;
-      }
+          let lh = cs.lineHeight;
+      if (!lh || lh === 'normal') lh = `${Math.round(parseFloat(cs.fontSize) || 12)}px`;
       chip.style.lineHeight = lh;
       chip.style.borderRadius = cs.borderRadius || '12px';
 
-      // 3) Rail por geometría (coloca Bs a la derecha del USD sin salirse)
-      function placeChip() {
-        const ar = anchor.getBoundingClientRect();
-        const pr = priceEl.getBoundingClientRect();
-        const chipW = chip.offsetWidth;
-        let left = Math.round(pr.right - ar.left + 6);
-        const maxLeft = ar.width - chipW - 2;
-        if (left > maxLeft) left = Math.max(0, maxLeft);
-        if (left < 0) left = 0;
-        chip.style.left = left + 'px';
-        chip.style.right = 'auto';
-      }
+          // rail por geometría: centrar en la fila y clamplear a la derecha del USD
+      chip.style.position = 'absolute';
+      chip.style.pointerEvents = 'none';
+      chip.style.whiteSpace = 'nowrap';
+      chip.style.zIndex = '2';
+      chip.style.top = '50%';
+      chip.style.transform = 'translateY(-50%)';
 
-      placeChip();
-      requestAnimationFrame(placeChip);
+      const ar = anchor.getBoundingClientRect();
+      const pr = priceEl.getBoundingClientRect();
+      const chipW = chip.offsetWidth;
+      let left = Math.round(pr.right - ar.left + 6);
+      const maxLeft = ar.width - chipW - 2;
+      if (left > maxLeft) left = Math.max(0, maxLeft);
+      if (left < 0) left = 0;
+      chip.style.left = left + 'px';
+      chip.style.right = 'auto';
+
+      // reposicionar 1 frame después por si la fuente ajusta
+      requestAnimationFrame(() => {
+        const chipW2 = chip.offsetWidth;
+        let left2 = Math.round(priceEl.getBoundingClientRect().right - anchor.getBoundingClientRect().left + 6);
+        const maxLeft2 = anchor.getBoundingClientRect().width - chipW2 - 2;
+        if (left2 > maxLeft2) left2 = Math.max(0, maxLeft2);
+        chip.style.left = left2 + 'px';
+      });
+
+       // === USD boost sin reflow ===
+      priceEl.classList.add('csfx-usd-boost');
+      const aRect = anchor.getBoundingClientRect();
+      const uRect = priceEl.getBoundingClientRect();
+      const deltaY = Math.round((aRect.top + aRect.height / 2) - (uRect.top + uRect.height / 2));
+      priceEl.style.setProperty('--csfx-usd-dy', `${deltaY}px`);
+      priceEl.style.setProperty('--csfx-usd-scale', '1.06');
      
     });
   }
