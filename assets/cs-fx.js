@@ -160,9 +160,9 @@
       '/* USD: solo maquillaje óptico; nada de display/padding/margin/line-height/position */',
       '.mat-autocomplete-panel .mat-option .csfx-usd-chip{color:#0b5e3c;background:rgba(16,185,129,.10);box-shadow:inset 0 0 0 1px rgba(16,185,129,.35),0 1px 3px rgba(0,0,0,.08);filter:saturate(115%);}',
       '/* Bs: absoluto, pero con tipografía clonada por JS */',
-      '.csfx-chip--search{background:rgba(0,87,183,.10);color:#1e3a8a;border:1px solid rgba(0,87,183,.30);box-shadow:0 1px 0 rgba(255,255,255,.35) inset,0 1px 3px rgba(0,0,0,.08);border-radius:12px;}',
+      '.csfx-chip--search{background:rgba(0,87,183,.10);color:#1e3a8a;border:1px solid rgba(0,87,183,.30);box-shadow:0 1px 0 rgba(255,255,255,.35) inset,0 1px 3px rgba(0,0,0,.08);border-radius:12px;white-space:nowrap;}',
       '/* Ancla relativa del contenedor de texto (sin flex/justify forzados) */',
-      '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;}',
+      '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;overflow:visible;}',
       '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
       '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
       // Fila resumen de totales (debajo del Subtotal USD)
@@ -243,10 +243,11 @@
       var usdVal = parsePrice(priceEl.textContent);
       if (isNaN(usdVal) || usdVal <= 0) return;
 
-      var anchor = priceEl.closest('.mat-option-text') || priceEl.parentNode;
+        const anchor = priceEl.closest('.mat-option-text') || priceEl.parentNode;
       if (!anchor) return;
     
-      var chip = anchor.querySelector('[data-csfx="bs-search"]');
+
+      let chip = anchor.querySelector('[data-csfx="bs-search"]');
       if (!chip) {
         chip = document.createElement('span');
  
@@ -255,54 +256,50 @@
       }
       chip.className = 'csfx-chip--search' + (FX.style && FX.style.vipSearch ? ' vip' : '');
       if (FX.style && FX.style.vipSearch) {
-      chip.style.background = FX.style.vipSearchBg || '';
+   chip.style.background = FX.style.vipSearchBg || '';
         chip.style.borderColor = FX.style.vipSearchBorder || '';
         chip.style.color = FX.style.vipSearchText || '';
         chip.style.boxShadow = FX.style.vipSearchShadow || '';
       }
       
-      // 1) Copiar métricas tipográficas del USD al chip Bs
-      const cs = window.getComputedStyle(priceEl);
+       chip.textContent = fmtBs(usd2bs(usdVal));
+      chip.style.position = 'absolute';
+      chip.style.bottom = '2px';
+      chip.style.pointerEvents = 'none';
+      chip.style.whiteSpace = 'nowrap';
+      chip.style.zIndex = '1';
 
-      // familia, tamaño y peso
+      // 2) Clonar tipografía del USD para simetría
+      const cs = window.getComputedStyle(priceEl);
       chip.style.fontFamily = cs.fontFamily || 'inherit';
       chip.style.fontSize = cs.fontSize;
-          chip.style.fontWeight = cs.fontWeight;
-
-      // letter-spacing y features para dígitos
+     chip.style.fontWeight = cs.fontWeight;
       chip.style.letterSpacing = cs.letterSpacing;
       chip.style.fontFeatureSettings = cs.fontFeatureSettings || 'normal';
       chip.style.fontVariantNumeric = 'tabular-nums lining-nums';
 
-      // line-height: si viene 'normal', derivar de la caja del USD
-      let lineH = cs.lineHeight;
-      if (!lineH || lineH === 'normal') {
-        const rect = priceEl.getBoundingClientRect();
-        const padT = parseFloat(cs.paddingTop) || 0;
-        const padB = parseFloat(cs.paddingBottom) || 0;
-        const inner = Math.max(parseFloat(cs.fontSize) || 12, rect.height - padT - padB);
-        lineH = `${Math.round(inner)}px`;
+        let lh = cs.lineHeight;
+      if (!lh || lh === 'normal') {
+        lh = `${Math.round(parseFloat(cs.fontSize) || 12)}px`;
       }
-      chip.style.lineHeight = lineH;
-
-      // 2) Redondeo del Bs acorde al USD (sin tocar USD)
+      chip.style.lineHeight = lh;
       chip.style.borderRadius = cs.borderRadius || '12px';
 
-      // valor del chip antes de reservar espacio
-      chip.textContent = fmtBs(usd2bs(usdVal));
-
-      // 3) Reservar espacio a la derecha para que el USD no haga wrap
-      const reserve = Math.min(Math.max(chip.offsetWidth + 12, 88), 120); // entre 88–120px
-      const curPR = parseFloat(window.getComputedStyle(anchor).paddingRight) || 0;
-      if (curPR < reserve - 4) {
-        anchor.style.paddingRight = `${reserve}px`;
+      // 3) Rail por geometría (coloca Bs a la derecha del USD sin salirse)
+      function placeChip() {
+        const ar = anchor.getBoundingClientRect();
+        const pr = priceEl.getBoundingClientRect();
+        const chipW = chip.offsetWidth;
+        let left = Math.round(pr.right - ar.left + 6);
+        const maxLeft = ar.width - chipW - 2;
+        if (left > maxLeft) left = Math.max(0, maxLeft);
+        if (left < 0) left = 0;
+        chip.style.left = left + 'px';
+        chip.style.right = 'auto';
       }
 
-      // 4) Asegurar anclaje y posición del Bs (USD no se toca)
-      chip.style.position = 'absolute';
-      chip.style.right = '0';
-      chip.style.bottom = '2px';
-      chip.style.pointerEvents = 'none';
+      placeChip();
+      requestAnimationFrame(placeChip);
      
     });
   }
