@@ -157,9 +157,9 @@
        '.csfx-badge.open .csfx-badge-content{display:block;}',
       // especificidad para evitar conflictos con CSS del POS
          /* Reglas específicas para el buscador (sin romper layout nativo) */
-        '.csfx-chip--search{position:absolute;right:0;bottom:2px;pointer-events:none;background:var(--csfx-bs-bg,transparent);color:var(--csfx-bs-text,#1e3a8a);border:1px solid var(--csfx-bs-border,rgba(0,87,183,.30));box-shadow:var(--csfx-bs-shadow,0 1px 0 rgba(255,255,255,.35) inset,0 1px 3px rgba(0,0,0,.08));}',
-        '.mat-autocomplete-panel .mat-option .csfx-usd-chip{color:var(--csfx-usd-text,#0b5e3c);background:var(--csfx-usd-bg,rgba(16,185,129,.10));border:1px solid var(--csfx-usd-border,rgba(16,185,129,.35));box-shadow:var(--csfx-usd-shadow,0 1px 0 rgba(255,255,255,.4) inset,0 1px 3px rgba(0,0,0,.08));}',
-        '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;padding-right:6.5em;}',
+    '.csfx-chip--search{background:rgba(0,87,183,.10);color:#1e3a8a;border:1px solid rgba(0,87,183,.30);box-shadow:0 1px 0 rgba(255,255,255,.35) inset,0 1px 3px rgba(0,0,0,.08);border-radius:12px;line-height:1;}',
+        '.mat-autocomplete-panel .mat-option .csfx-usd-chip{color:#0b5e3c;box-shadow:inset 0 0 0 1px rgba(16,185,129,.35),0 1px 3px rgba(0,0,0,.08);background:rgba(16,185,129,.10);filter:saturate(115%);}',
+        '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;}',
       '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
       '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
       // Fila resumen de totales (debajo del Subtotal USD)
@@ -231,19 +231,18 @@
       }
       var priceEl = textRoot.querySelector('.product-price, .variation-price, [class*="price"]');
       if (!priceEl) priceEl = findPriceElement(textRoot);
-      if (!priceEl) return;
-     // Asegura hook de estilo para USD sin alterar su posición
+     if (!priceEl) return; // sin USD confiable, no insertes Bs
+      // Asegura hook de estilo para USD sin alterar su posición
       if (!priceEl.classList.contains('csfx-usd-chip')) {
         priceEl.classList.add('csfx-usd-chip');
-            // base común de “pill” para que USD = Bs en altura y padding
-        priceEl.classList.add('csfx-chip-pill');
+  
       }
       var usdVal = parsePrice(priceEl.textContent);
       if (isNaN(usdVal) || usdVal <= 0) return;
 
       var anchor = priceEl.closest('.mat-option-text') || priceEl.parentNode;
       if (!anchor) return;
-      anchor.style.position = anchor.style.position || 'relative';
+    
       var chip = anchor.querySelector('[data-csfx="bs-search"]');
       if (!chip) {
         chip = document.createElement('span');
@@ -251,13 +250,24 @@
         chip.dataset.csfx = 'bs-search';
         anchor.appendChild(chip);
       }
-         chip.className = 'csfx-chip csfx-chip--search csfx-chip-pill' + (FX.style && FX.style.vipSearch ? ' vip' : '');
+      chip.className = 'csfx-chip--search' + (FX.style && FX.style.vipSearch ? ' vip' : '');
       if (FX.style && FX.style.vipSearch) {
-        chip.style.setProperty('--csfx-bs-bg', FX.style.vipSearchBg || '');
-        chip.style.setProperty('--csfx-bs-border', FX.style.vipSearchBorder || '');
-        chip.style.setProperty('--csfx-bs-text', FX.style.vipSearchText || '');
-        chip.style.setProperty('--csfx-bs-shadow', FX.style.vipSearchShadow || '');
+            chip.style.background = FX.style.vipSearchBg || '';
+        chip.style.borderColor = FX.style.vipSearchBorder || '';
+        chip.style.color = FX.style.vipSearchText || '';
+        chip.style.boxShadow = FX.style.vipSearchShadow || '';
       }
+        var cs = window.getComputedStyle(priceEl);
+      chip.style.fontSize = cs.fontSize;
+      chip.style.lineHeight = cs.lineHeight;
+      chip.style.borderRadius = cs.borderRadius;
+      var padH = (parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)) || 8;
+      var padV = (parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)) || 2;
+      chip.style.padding = Math.max(1, padV / 2) + 'px ' + Math.max(6, padH / 2) + 'px';
+      chip.style.position = 'absolute';
+      chip.style.right = '0';
+      chip.style.bottom = '2px';
+      chip.style.pointerEvents = 'none';
       chip.textContent = fmtBs(usd2bs(usdVal));
     });
   }
