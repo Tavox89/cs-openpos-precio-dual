@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.8.2 – 2025-08-09
+ * v1.8.3 – 2025-08-09
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -125,7 +125,16 @@
   function usd2bs(u) {
     return round((Number(u) || 0) * (FX.rate || 0), FX.decimals);
   }
-
+  function fmtUsd(n) {
+    try {
+      return (FX.symbolUSD || '$') + ' ' + Number(n).toLocaleString('en-US', {
+        minimumFractionDigits: FX.decimals,
+        maximumFractionDigits: FX.decimals
+      });
+    } catch (e) {
+      return (FX.symbolUSD || '$') + ' ' + round(n, FX.decimals);
+    }
+  }
   // --- CSS mínimo/limpio ---
   (function addCss() {
     var id = 'csfx-css';
@@ -479,52 +488,62 @@
     var containerApp = document.querySelector('app-pos-order-total');
       if (containerApp) {
         var items = containerApp.querySelectorAll('.mat-list-item');
-        var subRow = null, totRow = null;
+    var subRow = null, totRow = null, discRow = null;
         items.forEach(function (row) {
           var type = (row.getAttribute('data-total-type') || '').toLowerCase();
           if (!type) {
             var t = (row.textContent || '').toLowerCase();
             if (/sub\s?total/.test(t)) type = 'subtotal';
+                 else if (/descuento|discount/.test(t)) type = 'discount';
             else if (/total/.test(t)) type = 'total';
           }
-        if (type === 'subtotal') subRow = row;
-          if (type === 'total') totRow = row;
+          if (type === 'subtotal') subRow = row;
+          else if (type === 'total') totRow = row;
+          else if (type === 'discount') discRow = row;
         });
-             var usdS = subRow ? parsePrice(subRow.textContent) : NaN;
+          var usdS = subRow ? parsePrice(subRow.textContent) : NaN;
         var usdT = totRow ? parsePrice(totRow.textContent) : NaN;
+               if (totRow) totRow.remove();
         var summary = subRow ? subRow.nextElementSibling : null;
         if (!(summary && summary.dataset && summary.dataset.csfx === 'summary-bs')) {
           if (summary && summary.dataset && summary.dataset.csfx) summary.remove();
           summary = document.createElement('div');
           summary.className = 'csfx-total-row';
           summary.dataset.csfx = 'summary-bs';
-        summary.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
+          summary.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
           if (subRow) subRow.insertAdjacentElement('afterend', summary);
         }
         if (summary) {
           var subSpan = summary.querySelector('[data-csfx="sub-bs"]');
           if (subSpan && !isNaN(usdS)) subSpan.textContent = fmtBs(usd2bs(usdS));
-            }
-             var totalRow = totRow ? totRow.nextElementSibling : null;
-        if (!(totalRow && totalRow.dataset && totalRow.dataset.csfx === 'total-bs')) {
-          if (totalRow && totalRow.dataset && totalRow.dataset.csfx) totalRow.remove();
-          totalRow = null;
+    
         }
-        if (!isNaN(usdT) && !isNaN(usdS) && Math.abs(usdT - usdS) > 0.005) {
-          if (!totalRow) {
-            totalRow = document.createElement('div');
-            totalRow.className = 'csfx-total-row';
-            totalRow.dataset.csfx = 'total-bs';
-        totalRow.innerHTML = '<span>Total (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
-              if (totRow) totRow.insertAdjacentElement('afterend', totalRow);
-            else summary.insertAdjacentElement('afterend', totalRow);
-          }
-          var totSpan = totalRow.querySelector('[data-csfx="tot-bs"]');
-          if (totSpan) totSpan.textContent = fmtBs(usd2bs(usdT));
-        } else {
-          if (totalRow) totalRow.remove();
+            var after = discRow || summary || subRow;
+        var rowUsd = containerApp.querySelector('[data-csfx="total-usd"]');
+        if (!rowUsd) {
+          rowUsd = document.createElement('div');
+          rowUsd.className = 'csfx-total-row';
+          rowUsd.dataset.csfx = 'total-usd';
+          rowUsd.innerHTML = '<span>Total (USD)</span><span class="csfx-amount" data-csfx="tot-usd"></span>';
+          if (after) after.insertAdjacentElement('afterend', rowUsd);
         }
-         var oldInline = containerApp.querySelector('[data-csfx="total-inline"]'); if (oldInline) oldInline.remove();
+        var rowBs = containerApp.querySelector('[data-csfx="total-bs"]');
+        if (!rowBs) {
+          rowBs = document.createElement('div');
+          rowBs.className = 'csfx-total-row';
+          rowBs.dataset.csfx = 'total-bs';
+          rowBs.innerHTML = '<span>Total (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
+          if (rowUsd) rowUsd.insertAdjacentElement('afterend', rowBs);
+        }
+             if (rowUsd) {
+          var usdSpan = rowUsd.querySelector('[data-csfx="tot-usd"]');
+          if (usdSpan && !isNaN(usdT)) usdSpan.textContent = fmtUsd(usdT);
+        }
+        if (rowBs) {
+          var bsSpan = rowBs.querySelector('[data-csfx="tot-bs"]');
+          if (bsSpan && !isNaN(usdT)) bsSpan.textContent = fmtBs(usd2bs(usdT));
+        }
+        var oldInline = containerApp.querySelector('[data-csfx="total-inline"]'); if (oldInline) oldInline.remove();
         var oldSub = containerApp.querySelector('[data-csfx="subtotal"]'); if (oldSub) oldSub.remove();
         var oldDesc = containerApp.querySelector('[data-csfx="total-descuento"]'); if (oldDesc) oldDesc.remove();
         var info = containerApp.querySelector('.csfx-info');
@@ -537,44 +556,50 @@
       if (!container) return;
 
       var subRow2 = findTotalsRow(container, /^sub\s?total/i);
+            var discRow2 = findTotalsRow(container, /descuento|discount/i);
       var totRow2 = findTotalsRow(container, /^total/i);
       var usdS2 = subRow2 ? parsePrice(subRow2.textContent) : NaN;
       var usdT2 = totRow2 ? parsePrice(totRow2.textContent) : NaN;
-         var summary2 = subRow2 ? subRow2.nextElementSibling : null;
-        if (!(summary2 && summary2.dataset && summary2.dataset.csfx === 'summary-bs')) {
-          if (summary2 && summary2.dataset && summary2.dataset.csfx) summary2.remove();
-          var existing = container.querySelector('[data-csfx="summary-bs"]'); if (existing) existing.remove();
-          summary2 = document.createElement('div');
-          summary2.className = 'csfx-total-row';
-          summary2.dataset.csfx = 'summary-bs';
-          summary2.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
-          if (subRow2) subRow2.insertAdjacentElement('afterend', summary2);
-        }
-        if (summary2) {
-          var subSp2 = summary2.querySelector('[data-csfx="sub-bs"]'); if (subSp2 && !isNaN(usdS2)) subSp2.textContent = fmtBs(usd2bs(usdS2));
-        }
-               var totalRow2 = totRow2 ? totRow2.nextElementSibling : null;
-        if (!(totalRow2 && totalRow2.dataset && totalRow2.dataset.csfx === 'total-bs')) {
-          if (totalRow2 && totalRow2.dataset && totalRow2.dataset.csfx) totalRow2.remove();
-          totalRow2 = null;
-        }
-        if (!isNaN(usdT2) && !isNaN(usdS2) && Math.abs(usdT2 - usdS2) > 0.005) {
-          if (!totalRow2) {
-            totalRow2 = document.createElement('div');
-            totalRow2.className = 'csfx-total-row';
-            totalRow2.dataset.csfx = 'total-bs';
-                   totalRow2.innerHTML = '<span>Total (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
-                    if (totRow2) totRow2.insertAdjacentElement('afterend', totalRow2);
-            else summary2.insertAdjacentElement('afterend', totalRow2);
-          }
-     var totSp2 = totalRow2.querySelector('[data-csfx="tot-bs"]');
-          if (totSp2) totSp2.textContent = fmtBs(usd2bs(usdT2));
-        } else {
-          if (totalRow2) totalRow2.remove();
-        }
-        
-      
-       var oldInline2 = container.querySelector('[data-csfx="total-inline"]'); if (oldInline2) oldInline2.remove();
+       if (totRow2) totRow2.remove();
+      var summary2 = subRow2 ? subRow2.nextElementSibling : null;
+      if (!(summary2 && summary2.dataset && summary2.dataset.csfx === 'summary-bs')) {
+        if (summary2 && summary2.dataset && summary2.dataset.csfx) summary2.remove();
+        var existing = container.querySelector('[data-csfx="summary-bs"]'); if (existing) existing.remove();
+        summary2 = document.createElement('div');
+        summary2.className = 'csfx-total-row';
+        summary2.dataset.csfx = 'summary-bs';
+        summary2.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
+        if (subRow2) subRow2.insertAdjacentElement('afterend', summary2);
+      }
+      if (summary2) {
+        var subSp2 = summary2.querySelector('[data-csfx="sub-bs"]'); if (subSp2 && !isNaN(usdS2)) subSp2.textContent = fmtBs(usd2bs(usdS2));
+      }
+      var after2 = discRow2 || summary2 || subRow2;
+      var rowUsd2 = container.querySelector('[data-csfx="total-usd"]');
+      if (!rowUsd2) {
+        rowUsd2 = document.createElement('div');
+        rowUsd2.className = 'csfx-total-row';
+        rowUsd2.dataset.csfx = 'total-usd';
+        rowUsd2.innerHTML = '<span>Total (USD)</span><span class="csfx-amount" data-csfx="tot-usd"></span>';
+        if (after2) after2.insertAdjacentElement('afterend', rowUsd2);
+      }
+      var rowBs2 = container.querySelector('[data-csfx="total-bs"]');
+      if (!rowBs2) {
+        rowBs2 = document.createElement('div');
+        rowBs2.className = 'csfx-total-row';
+        rowBs2.dataset.csfx = 'total-bs';
+        rowBs2.innerHTML = '<span>Total (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
+        if (rowUsd2) rowUsd2.insertAdjacentElement('afterend', rowBs2);
+      }
+      if (rowUsd2) {
+        var usdSp2 = rowUsd2.querySelector('[data-csfx="tot-usd"]');
+        if (usdSp2 && !isNaN(usdT2)) usdSp2.textContent = fmtUsd(usdT2);
+      }
+      if (rowBs2) {
+        var totSp2 = rowBs2.querySelector('[data-csfx="tot-bs"]');
+        if (totSp2 && !isNaN(usdT2)) totSp2.textContent = fmtBs(usd2bs(usdT2));
+      }
+      var oldInline2 = container.querySelector('[data-csfx="total-inline"]'); if (oldInline2) oldInline2.remove();
       var oldSub2 = container.querySelector('[data-csfx="subtotal"]'); if (oldSub2) oldSub2.remove();
       var oldDesc2 = container.querySelector('[data-csfx="total-descuento"]'); if (oldDesc2) oldDesc2.remove();
       var info2 = container.querySelector('.csfx-info');

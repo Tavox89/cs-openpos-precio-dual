@@ -3,7 +3,7 @@
  * Plugin Name: CS – OpenPOS Precio Dual Dinámico (USD + Bs) via FOX API
  * Description: Muestra precios en USD y Bs en OpenPOS (buscador, addons, carrito y totales) usando FOX API (/currencies). Autodetecta origen local/remoto y mapea VES↔VEF. Incluye barra con tasa y hora.
  * Author: Tavox
- * Version: 1.8.2
+ * Version: 1.8.3
  */
 
 if ( ! defined('ABSPATH') ) exit;
@@ -186,7 +186,7 @@ add_filter('op_get_login_cashdrawer_data', function($session){
 add_filter('openpos_pos_footer_js', function($handles){
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
-   $ver = '1.8.2'; // <- versión del JS para cache busting (actualizado para reflejar cambios)
+     $ver = '1.8.3'; // <- versión del JS para cache busting (actualizado para reflejar cambios)
     if ( file_exists( $asset_path ) ) {
         $ver .= '.' . filemtime( $asset_path );
     }
