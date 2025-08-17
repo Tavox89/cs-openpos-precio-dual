@@ -432,11 +432,16 @@
 
   function decorateCart() {
     if (!FX.rate) return;
-    var rows = document.querySelectorAll('.mat-list-item');
+    var cartRows = document.querySelectorAll('app-cart .mat-list-item');
+    var rows = cartRows.length ? cartRows : document.querySelectorAll('.mat-list-item');
     rows.forEach(function (r) {
-
+      if (r.closest('app-pos-order-total, .total-sub')) {
+        var leak = r.querySelector(':scope > .csfx-cart-row');
+        if (leak) leak.remove();
+        return;
+      }
       var mark = r.querySelector(':scope > .csfx-cart-row[data-csfx="cart-bs"]');
-            var labelText = (r.textContent || '').toLowerCase();
+  var labelText = (r.textContent || '').toLowerCase();
       if (/descuento|discount/.test(labelText)) {
         if (mark) mark.remove();
         return;
@@ -467,7 +472,7 @@
     // footer/totales (suele vivir al final del panel derecho)
     // Intenta localizar el contenedor de totales. Abarcamos varios casos: componentes
     // Angular específicos, clases con "total" o "summary" y variantes de OpenPOS.
-    return document.querySelector('app-pos-order-total, app-pos-order-summary, app-pos-summary, .op-total, .order-total, [class*="totals"], [class*="summary"], [class*="checkout-footer"], .openpos-summary');
+    return document.querySelector('app-pos-order-total, app-pos-order-summary, app-pos-summary, .total-sub, .op-total, .order-total, [class*="totals"], [class*="summary"], [class*="checkout-footer"], .openpos-summary');
   }
   function findTotalsRow(container, rx) {
     if (!container) return null;
@@ -484,124 +489,62 @@
     return null;
   }
 
-    function decorateTotals() {
-      if (!FX.rate) return;
-
-    var containerApp = document.querySelector('app-pos-order-total');
-      if (containerApp) {
-        var items = containerApp.querySelectorAll('.mat-list-item');
-    var subRow = null, totRow = null, discRow = null;
-        items.forEach(function (row) {
-          var type = (row.getAttribute('data-total-type') || '').toLowerCase();
-          if (!type) {
-            var t = (row.textContent || '').toLowerCase();
-            if (/sub\s?total/.test(t)) type = 'subtotal';
-                 else if (/descuento|discount/.test(t)) type = 'discount';
-            else if (/total/.test(t)) type = 'total';
-          }
-          if (type === 'subtotal') subRow = row;
-          else if (type === 'total') totRow = row;
-          else if (type === 'discount') discRow = row;
-        });
-         var usdS = subRow ? parsePrice(subRow.textContent) : NaN;
-        var usdT = totRow ? parsePrice(totRow.textContent) : NaN;
-  if (isNaN(usdT)) {
-          var usdDisc = discRow ? parsePrice(discRow.textContent) : 0;
-          if (!isNaN(usdS)) usdT = usdS + (isNaN(usdDisc) ? 0 : usdDisc);
-        }
-        if (totRow) totRow.remove();
-        var summary = subRow ? subRow.nextElementSibling : null;
-        if (!(summary && summary.dataset && summary.dataset.csfx === 'summary-bs')) {
-          if (summary && summary.dataset && summary.dataset.csfx) summary.remove();
-          summary = document.createElement('div');
-          summary.className = 'csfx-total-row';
-          summary.dataset.csfx = 'summary-bs';
-          summary.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
-          if (subRow) subRow.insertAdjacentElement('afterend', summary);
-        }
-        if (summary) {
-          var subSpan = summary.querySelector('[data-csfx="sub-bs"]');
-          if (subSpan && !isNaN(usdS)) subSpan.textContent = fmtBs(usd2bs(usdS));
-    
-        }
-        var after = discRow || summary || subRow;
-        var rowFinal = containerApp.querySelector('[data-csfx="total-final"]');
-        if (!rowFinal) {
-          rowFinal = document.createElement('div');
-          rowFinal.className = 'csfx-total-row';
-          rowFinal.dataset.csfx = 'total-final';
-          rowFinal.innerHTML = '<span>Total Final (USD)</span><span class="csfx-amount" data-csfx="tot-usd"></span><span>Total Final (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
-          if (after) after.insertAdjacentElement('afterend', rowFinal);
-        }
-        if (rowFinal) {
-          var usdSpan = rowFinal.querySelector('[data-csfx="tot-usd"]');
-          if (usdSpan && !isNaN(usdT)) usdSpan.textContent = fmtUsd(usdT);
-          var bsSpan = rowFinal.querySelector('[data-csfx="tot-bs"]');
-          if (bsSpan && !isNaN(usdT)) bsSpan.textContent = fmtBs(usd2bs(usdT));
-        }
-                var oldUsd = containerApp.querySelector('[data-csfx="total-usd"]'); if (oldUsd) oldUsd.remove();
-        var oldBs = containerApp.querySelector('[data-csfx="total-bs"]'); if (oldBs) oldBs.remove();
-        var oldInline = containerApp.querySelector('[data-csfx="total-inline"]'); if (oldInline) oldInline.remove();
-        var oldSub = containerApp.querySelector('[data-csfx="subtotal"]'); if (oldSub) oldSub.remove();
-        var oldDesc = containerApp.querySelector('[data-csfx="total-descuento"]'); if (oldDesc) oldDesc.remove();
-        var info = containerApp.querySelector('.csfx-info');
-        if (!info) { info = document.createElement('div'); info.className = 'csfx-info'; containerApp.appendChild(info); }
-        info.innerHTML = buildInfoText();
-        return;
-      }
+  function decorateTotals() {
+    if (!FX.rate) return;
 
     var container = findTotalsContainer();
-      if (!container) return;
+     if (!container) return;
 
-      var subRow2 = findTotalsRow(container, /^sub\s?total/i);
-            var discRow2 = findTotalsRow(container, /descuento|discount/i);
-      var totRow2 = findTotalsRow(container, /^total/i);
-      var usdS2 = subRow2 ? parsePrice(subRow2.textContent) : NaN;
-      var usdT2 = totRow2 ? parsePrice(totRow2.textContent) : NaN;
-      if (isNaN(usdT2)) {
-        var usdDisc2 = discRow2 ? parsePrice(discRow2.textContent) : 0;
-        if (!isNaN(usdS2)) usdT2 = usdS2 + (isNaN(usdDisc2) ? 0 : usdDisc2);
-      }
-      if (totRow2) totRow2.remove();
-      var summary2 = subRow2 ? subRow2.nextElementSibling : null;
-      if (!(summary2 && summary2.dataset && summary2.dataset.csfx === 'summary-bs')) {
-        if (summary2 && summary2.dataset && summary2.dataset.csfx) summary2.remove();
-        var existing = container.querySelector('[data-csfx="summary-bs"]'); if (existing) existing.remove();
-        summary2 = document.createElement('div');
-        summary2.className = 'csfx-total-row';
-        summary2.dataset.csfx = 'summary-bs';
-        summary2.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
-        if (subRow2) subRow2.insertAdjacentElement('afterend', summary2);
-      }
-      if (summary2) {
-        var subSp2 = summary2.querySelector('[data-csfx="sub-bs"]'); if (subSp2 && !isNaN(usdS2)) subSp2.textContent = fmtBs(usd2bs(usdS2));
-      }
-      var after2 = discRow2 || summary2 || subRow2;
-      var rowFinal2 = container.querySelector('[data-csfx="total-final"]');
-      if (!rowFinal2) {
-        rowFinal2 = document.createElement('div');
-        rowFinal2.className = 'csfx-total-row';
-        rowFinal2.dataset.csfx = 'total-final';
-        rowFinal2.innerHTML = '<span>Total Final (USD)</span><span class="csfx-amount" data-csfx="tot-usd"></span><span>Total Final (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
-        if (after2) after2.insertAdjacentElement('afterend', rowFinal2);
-      }
-     if (rowFinal2) {
-        var usdSp2 = rowFinal2.querySelector('[data-csfx="tot-usd"]');
-        if (usdSp2 && !isNaN(usdT2)) usdSp2.textContent = fmtUsd(usdT2);
-       var totSp2 = rowFinal2.querySelector('[data-csfx="tot-bs"]');
-        if (totSp2 && !isNaN(usdT2)) totSp2.textContent = fmtBs(usd2bs(usdT2));
-      }
-            var oldUsd2 = container.querySelector('[data-csfx="total-usd"]'); if (oldUsd2) oldUsd2.remove();
-      var oldBs2 = container.querySelector('[data-csfx="total-bs"]'); if (oldBs2) oldBs2.remove();
-      var oldInline2 = container.querySelector('[data-csfx="total-inline"]'); if (oldInline2) oldInline2.remove();
-      var oldSub2 = container.querySelector('[data-csfx="subtotal"]'); if (oldSub2) oldSub2.remove();
-      var oldDesc2 = container.querySelector('[data-csfx="total-descuento"]'); if (oldDesc2) oldDesc2.remove();
-      var info2 = container.querySelector('.csfx-info');
-      if (!info2) { info2 = document.createElement('div'); info2.className = 'csfx-info'; container.appendChild(info2); }
-      info2.innerHTML = buildInfoText();
+    // limpieza: NUNCA permitir filas del carrito en totales
+    container.querySelectorAll('.csfx-cart-row').forEach(function (n) { n.remove(); });
+
+    // eliminar previos para idempotencia
+    container.querySelectorAll('[data-csfx="total-final"], [data-csfx="total-inline"], [data-csfx="total-usd"], [data-csfx="total-bs"]').forEach(function (n) { n.remove(); });
+
+    var subRow = findTotalsRow(container, /^sub\\s?total/i);
+    var discRow = findTotalsRow(container, /descuento|discount/i);
+    var taxRow = findTotalsRow(container, /impuesto|tax/i);
+    var totRow = findTotalsRow(container, /^total/i);
+
+    var usdS = subRow ? parsePrice(subRow.textContent) : NaN;
+    var usdD = discRow ? Math.abs(parsePrice(discRow.textContent)) : 0;
+    var usdI = taxRow ? parsePrice(taxRow.textContent) : 0;
+    var usdT = totRow ? parsePrice(totRow.textContent) : NaN;
+    if (isNaN(usdT) && !isNaN(usdS)) usdT = usdS - usdD + usdI;
+
+    if (totRow) totRow.remove();
+
+    var summary = subRow ? subRow.nextElementSibling : null;
+    if (!(summary && summary.dataset && summary.dataset.csfx === 'summary-bs')) {
+      if (summary && summary.dataset && summary.dataset.csfx) summary.remove();
+      var existing = container.querySelector('[data-csfx="summary-bs"]'); if (existing) existing.remove();
+      summary = document.createElement('div');
+      summary.className = 'csfx-total-row';
+      summary.dataset.csfx = 'summary-bs';
+      summary.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
+      if (subRow) subRow.insertAdjacentElement('afterend', summary);
+    }
+    if (summary) {
+      var subSp = summary.querySelector('[data-csfx="sub-bs"]');
+      if (subSp && !isNaN(usdS)) subSp.textContent = fmtBs(usd2bs(usdS));
     }
 
+    var after = discRow || summary || subRow;
+    var rowFinal = document.createElement('div');
+    rowFinal.className = 'csfx-total-row';
+    rowFinal.dataset.csfx = 'total-final';
+    rowFinal.innerHTML = '<span>Total Final (USD)</span><span class="csfx-amount" data-csfx="tot-usd"></span><span>Total Final (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
+    if (after) after.insertAdjacentElement('afterend', rowFinal);
 
+    var usdSp = rowFinal.querySelector('[data-csfx="tot-usd"]');
+    if (usdSp && !isNaN(usdT)) usdSp.textContent = fmtUsd(usdT);
+    var totSp = rowFinal.querySelector('[data-csfx="tot-bs"]');
+    if (totSp && !isNaN(usdT)) totSp.textContent = fmtBs(usd2bs(usdT));
+
+    var info = container.querySelector('.csfx-info');
+    if (!info) { info = document.createElement('div'); info.className = 'csfx-info'; container.appendChild(info); }
+    info.innerHTML = buildInfoText();
+  }
   function buildInfoText() {
   var t = '<strong>Tasa BCV:</strong> ' + (FX.rate ? FX.rate.toFixed(FX.decimals) : '(sin datos)');
     if (FX.updated) {
@@ -755,13 +698,13 @@
   var obsEls = { totals: null, search: null, payment: null };
 
   function ensureObservers() {
-    var t = findTotalsContainer();
-    if (t) {
-      if (!obsTotals || obsEls.totals !== t) {
+    var cont = findTotalsContainer();
+    if (cont) {
+      if (!obsTotals || obsEls.totals !== cont) {
         if (obsTotals) obsTotals.disconnect();
         obsTotals = new MutationObserver(function () { schedule(decorateTotals); });
-        obsTotals.observe(t, { childList: true, subtree: true });
-        obsEls.totals = t;
+         obsTotals.observe(cont, { childList: true, subtree: true });
+        obsEls.totals = cont;
       }
     } else if (obsTotals) {
       obsTotals.disconnect();
