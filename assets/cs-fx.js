@@ -503,9 +503,13 @@
           else if (type === 'total') totRow = row;
           else if (type === 'discount') discRow = row;
         });
-          var usdS = subRow ? parsePrice(subRow.textContent) : NaN;
+         var usdS = subRow ? parsePrice(subRow.textContent) : NaN;
         var usdT = totRow ? parsePrice(totRow.textContent) : NaN;
-               if (totRow) totRow.remove();
+  if (isNaN(usdT)) {
+          var usdDisc = discRow ? parsePrice(discRow.textContent) : 0;
+          if (!isNaN(usdS)) usdT = usdS + (isNaN(usdDisc) ? 0 : usdDisc);
+        }
+        if (totRow) totRow.remove();
         var summary = subRow ? subRow.nextElementSibling : null;
         if (!(summary && summary.dataset && summary.dataset.csfx === 'summary-bs')) {
           if (summary && summary.dataset && summary.dataset.csfx) summary.remove();
@@ -554,7 +558,11 @@
       var totRow2 = findTotalsRow(container, /^total/i);
       var usdS2 = subRow2 ? parsePrice(subRow2.textContent) : NaN;
       var usdT2 = totRow2 ? parsePrice(totRow2.textContent) : NaN;
-       if (totRow2) totRow2.remove();
+      if (isNaN(usdT2)) {
+        var usdDisc2 = discRow2 ? parsePrice(discRow2.textContent) : 0;
+        if (!isNaN(usdS2)) usdT2 = usdS2 + (isNaN(usdDisc2) ? 0 : usdDisc2);
+      }
+      if (totRow2) totRow2.remove();
       var summary2 = subRow2 ? subRow2.nextElementSibling : null;
       if (!(summary2 && summary2.dataset && summary2.dataset.csfx === 'summary-bs')) {
         if (summary2 && summary2.dataset && summary2.dataset.csfx) summary2.remove();
