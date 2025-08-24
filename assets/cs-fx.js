@@ -487,7 +487,22 @@
     }
     return null;
   }
-
+  // --- Helpers de anclaje y fallback de total ---
+  function anchorRow(row) {
+    if (!row) return null;
+    // Sube al nivel de item de lista/fila de tabla si existe
+    var top = row.closest('li, .mat-list-item, tr');
+    return top || row;
+  }
+  function readCheckoutUSD() {
+    // Botón/barra verde de total en OpenPOS
+    var btn = document.querySelector(
+      '.op-cart-footer .btn.btn-success, .op-cart-footer .op-button-checkout, ' +
+      '.op-footer button.btn-success, .op-footer .op-checkout'
+    );
+    if (!btn) return NaN;
+    return parsePrice(btn.textContent);
+  }
   function decorateTotals() {
     if (!FX.rate) return;
 
@@ -505,34 +520,44 @@
     var taxRow = findTotalsRow(container, /impuesto|tax/i);
     var totRow = findTotalsRow(container, /^total/i);
 
+        // Elevar filas a su contenedor top-level para insertar correctamente
+    var subA = anchorRow(subRow);
+    var discA = anchorRow(discRow);
+    var totA = anchorRow(totRow);
+
+
     var usdS = subRow ? parsePrice(subRow.textContent) : NaN;
     var usdD = discRow ? Math.abs(parsePrice(discRow.textContent)) : 0;
     var usdI = taxRow ? parsePrice(taxRow.textContent) : 0;
     var usdT = totRow ? parsePrice(totRow.textContent) : NaN;
     if (isNaN(usdT) && !isNaN(usdS)) usdT = usdS - usdD + usdI;
-
+   if (isNaN(usdT)) {
+      // Fallback robusto: toma el número del botón de checkout
+      var btnUsd = readCheckoutUSD();
+      if (!isNaN(btnUsd)) usdT = btnUsd;
+    }
     // Solo removemos la fila de Total nativa si hay descuento global
     var replaceNativeTotal = !!discRow;
-    if (replaceNativeTotal && totRow) totRow.remove();
+    if (replaceNativeTotal && totA) totA.remove();
 
-    var summary = subRow ? subRow.nextElementSibling : null;
+    // Subtotal (Bs.) SIEMPRE visible, justo debajo del Subtotal USD (fila top-level)
+    var summary = container.querySelector('[data-csfx="summary-bs"]');
     if (!(summary && summary.dataset && summary.dataset.csfx === 'summary-bs')) {
-      if (summary && summary.dataset && summary.dataset.csfx) summary.remove();
-      var existing = container.querySelector('[data-csfx="summary-bs"]'); if (existing) existing.remove();
+      if (summary && summary.parentNode) summary.parentNode.removeChild(summary);
       summary = document.createElement('div');
       summary.className = 'csfx-total-row';
       summary.dataset.csfx = 'summary-bs';
       summary.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
-      if (subRow) subRow.insertAdjacentElement('afterend', summary);
+           if (subA) subA.insertAdjacentElement('afterend', summary);
     }
     if (summary) {
       var subSp = summary.querySelector('[data-csfx="sub-bs"]');
       if (subSp && !isNaN(usdS)) subSp.textContent = fmtBs(usd2bs(usdS));
     }
 
-     // Mostrar Total Final (Bs.) solo si hay descuento global
-    if (discRow) {
-      var after = discRow;
+    // Mostrar Total Final (Bs.) solo si hay descuento global
+    if (discA) {
+      var after = discA;
       var rowFinal = document.createElement('div');
       rowFinal.className = 'csfx-total-row';
       rowFinal.dataset.csfx = 'total-final';
