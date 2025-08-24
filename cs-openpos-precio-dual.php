@@ -3,7 +3,7 @@
  * Plugin Name: CS – OpenPOS Precio Dual Dinámico (USD + Bs) via FOX API
  * Description: Muestra precios en USD y Bs en OpenPOS (buscador, addons, carrito y totales) usando FOX API (/currencies). Autodetecta origen local/remoto y mapea VES↔VEF. Incluye barra con tasa y hora.
  * Author: Tavox
- * Version: 1.8.6
+ * Version: 1.8.7
  */
 
 if ( ! defined('ABSPATH') ) exit;
@@ -19,7 +19,8 @@ if ( ! defined('CS_FX_DECIMALS') )        define('CS_FX_DECIMALS', 2);
 if ( ! defined('CS_FX_TTL') )             define('CS_FX_TTL', 300);
 if ( ! defined('CS_FX_DEBUG') )           define('CS_FX_DEBUG', false);
 if ( ! defined('CS_FX_BADGE') )           define('CS_FX_BADGE', true);
-if ( ! defined('CS_FX_HIDE_TAX') )        define('CS_FX_HIDE_TAX', false);
+if ( ! defined('CS_FX_HIDE_TAX') )        define('CS_FX_HIDE_TAX', true); // ocultar Impuestos por defecto (espacio)
+
 if ( ! defined('CS_FX_SEARCH_BS') )       define('CS_FX_SEARCH_BS', true);
 if ( ! defined('CS_FX_PAY_CHIPS') )       define('CS_FX_PAY_CHIPS', true);
 if ( ! defined('CS_FX_ADDONS_BS') )       define('CS_FX_ADDONS_BS', true);
@@ -186,7 +187,7 @@ add_filter('op_get_login_cashdrawer_data', function($session){
 add_filter('openpos_pos_footer_js', function($handles){
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
-     $ver = '1.8.5'; // bump para busting de caché tras refacto
+    $ver = '1.8.7'; // bump para busting de caché tras refactor
     if ( file_exists( $asset_path ) ) {
         $ver .= '.' . filemtime( $asset_path );
     }
