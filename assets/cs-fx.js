@@ -475,7 +475,8 @@
   }
   function findTotalsRow(container, rx) {
     if (!container) return null;
-    var rows = Array.prototype.slice.call(container.querySelectorAll('div,li,tr'));
+    // incluir Angular Material y filas de tabla
+    var rows = Array.prototype.slice.call(container.querySelectorAll('div,li,tr,mat-list-item,mat-row'));
     // busca por label
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
@@ -530,10 +531,20 @@
     var usdD = discRow ? Math.abs(parsePrice(discRow.textContent)) : 0;
     var usdI = taxRow ? parsePrice(taxRow.textContent) : 0;
     var usdT = totRow ? parsePrice(totRow.textContent) : NaN;
+    
+    // === Fallbacks robustos ===
+    // 1) intenta derivar TOTAL a partir de subtotal/desc/impuesto
     if (isNaN(usdT) && !isNaN(usdS)) usdT = usdS - usdD + usdI;
-  if (isNaN(usdT)) {
+    // 2) botón verde
+    if (isNaN(usdT)) {
       var btnUsd = readCheckoutUSD();
       if (!isNaN(btnUsd)) usdT = btnUsd;
+    }
+       // 3) intenta derivar SUBTOTAL si no lo conseguimos
+    if (isNaN(usdS) && !isNaN(usdT)) usdS = usdT + usdD - usdI;
+    if (isNaN(usdS)) {
+      var btnUsd2 = readCheckoutUSD();
+      if (!isNaN(btnUsd2)) usdS = btnUsd2 + usdD - usdI;
     }
     // Solo removemos la fila de Total nativa si hay descuento global
     var replaceNativeTotal = !!discRow;
@@ -543,20 +554,24 @@
     // Ocultar impuestos si la opción está activa
     if (FX.hideTax && taxRow) hideHard(anchorRow(taxRow));
 
-    // Subtotal (Bs.) SIEMPRE visible, anclado a la fila top-level
-    var subA = anchorRow(subRow);    var summary = container.querySelector('[data-csfx="summary-bs"]');
+     // Subtotal (Bs.) SIEMPRE visible y con anclaje robusto
+    var subA = anchorRow(subRow);
+    var fallbackAnchor = subA || anchorRow(discRow) || anchorRow(taxRow) || anchorRow(totRow);
+    var summary = container.querySelector('[data-csfx="summary-bs"]');
     if (!summary) {
 
       summary = document.createElement('div');
       summary.className = 'csfx-total-row';
       summary.dataset.csfx = 'summary-bs';
       summary.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
-      if (subA) subA.insertAdjacentElement('afterend', summary);
+     if (fallbackAnchor) fallbackAnchor.insertAdjacentElement('afterend', summary);
+      else container.appendChild(summary);
     }
     if (summary) {
       var subSp = summary.querySelector('[data-csfx="sub-bs"]');
-      if (subSp && !isNaN(usdS)) subSp.textContent = fmtBs(usd2bs(usdS));
-    }
+      if (subSp && !isNaN(usdS)) {
+        subSp.textContent = fmtBs(usd2bs(usdS));
+      }    }
 
     // Mostrar Total Final (Bs.) solo si hay descuento global
     if (discRow) {
@@ -567,8 +582,14 @@
       rowFinal.innerHTML = '<span>Total Final (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
       if (after) after.insertAdjacentElement('afterend', rowFinal);
       var totSp = rowFinal.querySelector('[data-csfx="tot-bs"]');
-      if (totSp && !isNaN(usdT)) totSp.textContent = fmtBs(usd2bs(usdT));
-    }
+      // cálculo preferente: SUBTOTAL - DESCUENTO + IMPUESTO
+      var usdFinal = !isNaN(usdS) ? usdS - usdD + usdI : NaN;
+      if (isNaN(usdFinal) && !isNaN(usdT)) usdFinal = usdT;
+      if (isNaN(usdFinal)) {
+        var b = readCheckoutUSD();
+        if (!isNaN(b)) usdFinal = b;
+      }
+      if (totSp && !isNaN(usdFinal)) totSp.textContent = fmtBs(usd2bs(usdFinal));    }
     // La información de tasa se muestra exclusivamente en el badge
   }
   function buildInfoText() {
