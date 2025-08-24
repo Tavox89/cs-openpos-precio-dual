@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.9.2 – 2025-08-24
+ * v1.9.3 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -165,9 +165,9 @@
       // compactar el hueco de impuestos si se decide ocultar
        '.csfx-hide-tax{display:none!important;line-height:0!important;height:0!important;overflow:hidden!important;margin:0!important;padding:0!important;border:0!important;}',
       // badge colapsable para mostrar la tasa y hora
-      '.csfx-badge{position:fixed;right:0;bottom:20px;z-index:10000;font-family:inherit;}',
-      '.csfx-badge-handle{background:#2f3437;color:#fff;padding:4px 6px;border-radius:4px 4px 0 0;font-size:14px;cursor:pointer;}',
-      '.csfx-badge-content{background:#eef1f5;color:#2f3437;padding:4px 6px;border-radius:0 0 4px 4px;display:none;font-size:13px;white-space:nowrap;}',
+      '.csfx-badge{position:fixed;right:12px;bottom:96px;z-index:10000;font-family:inherit;}',
+      '.csfx-badge-handle{background:#2f3437;color:#fff;padding:6px 8px;border-radius:4px 4px 0 0;font-size:16px;cursor:pointer;}',
+      '.csfx-badge-content{background:#eef1f5;color:#2f3437;padding:6px 8px;border-radius:0 0 4px 4px;display:none;font-size:14px;white-space:nowrap;}',
        '.csfx-badge.open .csfx-badge-content{display:block;}',
       // especificidad para evitar conflictos con CSS del POS
         /* Reglas específicas para el buscador (sin romper layout nativo) */
@@ -479,8 +479,8 @@
         return;
       }
       var mark = r.querySelector(':scope > .csfx-cart-row[data-csfx="cart-bs"]');
-  var labelText = (r.textContent || '').toLowerCase();
-      if (/descuento|discount/.test(labelText)) {
+      // Saltar únicamente la FILA de descuento global, no las líneas de producto con texto “de Descuento”
+      if (r.classList && r.classList.contains('cart-discount')) {
         if (mark) mark.remove();
         return;
       }
