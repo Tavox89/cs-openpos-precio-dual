@@ -477,13 +477,16 @@
     if (!container) return null;
     // incluir Angular Material y filas de tabla
     var rows = Array.prototype.slice.call(container.querySelectorAll('div,li,tr,mat-list-item,mat-row'));
-    // busca por label
+
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
-      var txt = (row.textContent || '').trim();
-      if (!txt) continue;
-      var label = (row.querySelector('span,div,b,strong,td') || row);
+       // Ignorar cualquier fila/nodo inyectado por nosotros
+      if (row.closest && row.closest('[data-csfx], [class*="csfx-"]')) continue;
+      // Preferir el elemento de título si existe; si no, usamos el propio row
+      var labelEl = row.querySelector('.total-title, [class*="title"]');
+      var label = labelEl || row.querySelector('span,div,b,strong,td') || row;
       var t = (label.textContent || '').trim().toLowerCase();
+            if (!t) continue;
       if (rx.test(t)) return row;
     }
     return null;
@@ -564,14 +567,21 @@
       summary.className = 'csfx-total-row';
       summary.dataset.csfx = 'summary-bs';
       summary.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
-     if (fallbackAnchor) fallbackAnchor.insertAdjacentElement('afterend', summary);
+      if (fallbackAnchor) fallbackAnchor.insertAdjacentElement('afterend', summary);
+
       else container.appendChild(summary);
     }
     if (summary) {
       var subSp = summary.querySelector('[data-csfx="sub-bs"]');
-      if (subSp && !isNaN(usdS)) {
-        subSp.textContent = fmtBs(usd2bs(usdS));
-      }    }
+      if (subSp) {
+        // Con fallbacks arriba, usdS debería estar definido; si no, reintenta con botón
+        if (isNaN(usdS)) {
+          var __btn = readCheckoutUSD();
+          if (!isNaN(__btn)) usdS = __btn + usdD - usdI;
+        }
+        if (!isNaN(usdS)) subSp.textContent = fmtBs(usd2bs(usdS));
+      }
+    }
 
     // Mostrar Total Final (Bs.) solo si hay descuento global
     if (discRow) {
@@ -583,13 +593,15 @@
       if (after) after.insertAdjacentElement('afterend', rowFinal);
       var totSp = rowFinal.querySelector('[data-csfx="tot-bs"]');
       // cálculo preferente: SUBTOTAL - DESCUENTO + IMPUESTO
-      var usdFinal = !isNaN(usdS) ? usdS - usdD + usdI : NaN;
+      var usdFinal = !isNaN(usdS) ? (usdS - usdD + usdI) : NaN;
+      // fallback al Total nativo ya leído
       if (isNaN(usdFinal) && !isNaN(usdT)) usdFinal = usdT;
-      if (isNaN(usdFinal)) {
-        var b = readCheckoutUSD();
-        if (!isNaN(b)) usdFinal = b;
+      // último fallback: botón verde
+      if (isNaN(usdFinal)) { var b = readCheckoutUSD(); if (!isNaN(b)) usdFinal = b; }
+      if (totSp && !isNaN(usdFinal)) {
+        totSp.textContent = fmtBs(usd2bs(usdFinal));
       }
-      if (totSp && !isNaN(usdFinal)) totSp.textContent = fmtBs(usd2bs(usdFinal));    }
+    }
     // La información de tasa se muestra exclusivamente en el badge
   }
   function buildInfoText() {
