@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.9.3 – 2025-08-24
+ * v1.9.4 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -165,7 +165,7 @@
       // compactar el hueco de impuestos si se decide ocultar
        '.csfx-hide-tax{display:none!important;line-height:0!important;height:0!important;overflow:hidden!important;margin:0!important;padding:0!important;border:0!important;}',
       // badge colapsable para mostrar la tasa y hora
-      '.csfx-badge{position:fixed;right:12px;bottom:96px;z-index:10000;font-family:inherit;}',
+        '.csfx-badge{position:fixed;right:12px;bottom:96px;z-index:10000;font-family:inherit;}', /* bottom se recalcula por JS */
       '.csfx-badge-handle{background:#2f3437;color:#fff;padding:6px 8px;border-radius:4px 4px 0 0;font-size:16px;cursor:pointer;}',
       '.csfx-badge-content{background:#eef1f5;color:#2f3437;padding:6px 8px;border-radius:0 0 4px 4px;display:none;font-size:14px;white-space:nowrap;}',
        '.csfx-badge.open .csfx-badge-content{display:block;}',
@@ -548,10 +548,47 @@
       '.op-cart-footer .btn.btn-success, .op-cart-footer .op-button-checkout,' +
       ' .op-footer button.btn-success, .op-footer .op-checkout'
     );
-    if (!btn) return NaN;
-    return parsePrice(btn.textContent);
+      if (!btn) return NaN;
+      return parsePrice(btn.textContent);
+    }
+
+  // --- Posicionar badge justo arriba del botón verde ---
+  function positionBadge() {
+    var badge = document.querySelector('.csfx-badge');
+    if (!badge) return;
+    var btn = document.querySelector(
+      '.op-cart-footer .btn.btn-success, .op-cart-footer .op-button-checkout,' +
+      ' .op-footer button.btn-success, .op-footer .op-checkout'
+    );
+    var bottom = 96; // fallback
+    try {
+      if (btn) {
+        var r = btn.getBoundingClientRect();
+        // distancia desde el borde inferior del viewport hasta el borde superior del botón
+        var gap = Math.max(0, Math.round(window.innerHeight - r.top));
+        bottom = Math.max(8, gap + 8); // deja 8px de respiro
+      }
+    } catch (e) { /* no-op */ }
+    // solo aplica si cambia para evitar reflows innecesarios
+    if (badge.style.bottom !== (bottom + 'px')) {
+      badge.style.bottom = bottom + 'px';
+    }
   }
-  function decorateTotals() {
+
+  // enganchar el posicionamiento del badge a eventos relevantes
+  function initBadgePositioning() {
+    positionBadge();
+    window.addEventListener('load', positionBadge, { passive: true });
+    window.addEventListener('resize', positionBadge, { passive: true });
+    // observar cambios de DOM que puedan mover el botón
+    var mo = new MutationObserver(function(){ positionBadge(); });
+    mo.observe(document.body, { subtree:true, childList:true, attributes:true });
+    // respaldo defensivo
+    setInterval(positionBadge, 2000);
+  }
+  
+    function decorateTotals() {
+
     if (!FX.rate) return;
 
     var container = findTotalsContainer();
@@ -862,6 +899,15 @@
       })
       .catch(function () { ensureBadge(); cb && cb(); });
   }
+
+    // Inicializar posicionamiento del badge y decoradores clave al cargar el DOM
+  document.addEventListener('DOMContentLoaded', function(){
+    try {
+      initBadgePositioning();
+      decorateCart();
+      decorateTotals();
+    } catch(e){}
+  });
 
   // --- Observer de DOM con throttling ---
  var rootObs = new MutationObserver(function () { schedule(runAll); });
