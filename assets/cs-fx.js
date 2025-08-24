@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.9.0 – 2025-08-24
+ * v1.9.1 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -157,6 +157,8 @@
       '.csfx-total-row .csfx-amount{color:#1e3a8a;font-weight:700;font-size:14px;}',
       '.csfx-total-row[data-csfx="total-final"]{display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:2px;align-items:center;}',
       '.csfx-total-row[data-csfx="total-final"] .csfx-amount{text-align:right;}',
+            '.csfx-sub-bs-inline{display:block;text-align:right;font-weight:700;color:#0d6efd;line-height:1.1;margin-top:2px;font-size:12px;}',
+
       '.csfx-info{margin-top:6px;font-size:11px;opacity:.8;}',
       '.csfx-pay-header-row{display:flex;gap:.8rem;margin-top:2px;}',
       '.csfx-chip--modal{font-size:16px;font-weight:700;padding:.2rem .6rem}',
@@ -174,9 +176,8 @@
       '.csfx-bs-chip{font-size:16px;font-weight:700;color:#1e3a8a;background:rgba(0,87,183,.10);padding:.2rem .5rem;border-radius:12px;position:absolute;top:50%;transform:translateY(-50%);right:0;}',
       '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;overflow:visible;padding-right:2rem;}',
       '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
-      '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
-      // Fila resumen de totales (debajo del Subtotal USD)
-      '[data-csfx="summary-bs"]{display:flex;align-items:center;gap:10px;padding:0 .4rem;margin-top:4px;justify-content:flex-start;}'
+      '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}'
+
     ].join('');
     var el = document.createElement('style');
     el.id = id;
@@ -578,22 +579,21 @@
     // ocultar impuestos si está activo
 
     if (FX.hideTax && taxRow) hideHard(anchorRow(taxRow));
-    // --- SUBTOTAL (Bs.) SIEMPRE ---
-    var subA = anchorRow(subRow);
-    var fallbackAnchor = subA || anchorRow(discRow) || anchorRow(taxRow) || anchorRow(totRow);
-    var summary = container.querySelector('[data-csfx="summary-bs"]');
-    if (!summary) {
-
-      summary = document.createElement('div');
-      summary.className = 'csfx-total-row';
-      summary.dataset.csfx = 'summary-bs';
-      summary.innerHTML = '<span>Subtotal (Bs.)</span><span class="csfx-amount" data-csfx="sub-bs"></span>';
-      if (fallbackAnchor) fallbackAnchor.insertAdjacentElement('afterend', summary);
-
-      else container.appendChild(summary);
+    // --- SUBTOTAL (Bs.) INLINE (debajo del USD, alineado a la derecha) ---
+    var legacy = container.querySelector('[data-csfx="summary-bs"]');
+    if (legacy) legacy.remove();
+    var subValEl = pickValueElement(subRow);
+    if (subValEl) {
+      var inline = subValEl.querySelector('[data-csfx="sub-bs-inline"]');
+      if (!inline) {
+        inline = document.createElement('div');
+        inline.dataset.csfx = 'sub-bs-inline';
+        inline.className = 'csfx-sub-bs-inline';
+        subValEl.appendChild(inline);
+      }
+      if (!isNaN(usdS)) inline.textContent = 'Bs. ' + fmtBs(usd2bs(usdS));
     }
-    var subSp = summary.querySelector('[data-csfx="sub-bs"]');
-    if (subSp && !isNaN(usdS)) subSp.textContent = fmtBs(usd2bs(usdS));
+
 
      // --- TOTAL FINAL (Bs.) SOLO SI HAY DESCUENTO ---
     if (discRow) {
