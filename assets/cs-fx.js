@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.8.7 – 2025-08-09
+ * v1.8.9 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -480,13 +480,19 @@
 
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
-       // Ignorar cualquier fila/nodo inyectado por nosotros
-      if (row.closest && row.closest('[data-csfx], [class*="csfx-"]')) continue;
-      // Preferir el elemento de título si existe; si no, usamos el propio row
-      var labelEl = row.querySelector('.total-title, [class*="title"]');
+       // Ignora cualquier fila/nodo inyectado por nosotros
+      if (
+        (row.dataset && row.dataset.csfx) ||
+        (row.classList && (row.classList.contains('csfx-total-row') || row.classList.contains('csfx-cart-row'))) ||
+        (row.closest && (row.closest('[data-csfx]') || row.closest('.csfx-total-row')))
+      ) {
+        continue;
+      }
+      // Preferir el elemento de título si existe
+      var labelEl = row.querySelector('.total-title, [class*="total-title"], [class*="title"]');
       var label = labelEl || row.querySelector('span,div,b,strong,td') || row;
       var t = (label.textContent || '').trim().toLowerCase();
-            if (!t) continue;
+      if (!t) continue;
       if (rx.test(t)) return row;
     }
     return null;
@@ -574,10 +580,10 @@
     if (summary) {
       var subSp = summary.querySelector('[data-csfx="sub-bs"]');
       if (subSp) {
-        // Con fallbacks arriba, usdS debería estar definido; si no, reintenta con botón
+        // si el primer intento no trajo USD válido, reintenta con fallbacks ya calculados
         if (isNaN(usdS)) {
-          var __btn = readCheckoutUSD();
-          if (!isNaN(__btn)) usdS = __btn + usdD - usdI;
+       var btnUsd2 = readCheckoutUSD();
+          if (!isNaN(btnUsd2)) usdS = btnUsd2 + usdD - usdI;
         }
         if (!isNaN(usdS)) subSp.textContent = fmtBs(usd2bs(usdS));
       }
@@ -594,9 +600,9 @@
       var totSp = rowFinal.querySelector('[data-csfx="tot-bs"]');
       // cálculo preferente: SUBTOTAL - DESCUENTO + IMPUESTO
       var usdFinal = !isNaN(usdS) ? (usdS - usdD + usdI) : NaN;
-      // fallback al Total nativo ya leído
+      // fallback al Total nativo y por último al botón verde
       if (isNaN(usdFinal) && !isNaN(usdT)) usdFinal = usdT;
-      // último fallback: botón verde
+
       if (isNaN(usdFinal)) { var b = readCheckoutUSD(); if (!isNaN(b)) usdFinal = b; }
       if (totSp && !isNaN(usdFinal)) {
         totSp.textContent = fmtBs(usd2bs(usdFinal));

@@ -187,7 +187,7 @@ add_filter('op_get_login_cashdrawer_data', function($session){
 add_filter('openpos_pos_footer_js', function($handles){
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
-    $ver = '1.8.9'; // bump para busting de caché tras refactor
+    $ver = '1.8.9'; // bump para busting de caché tras refactor de totales
 
     if ( file_exists( $asset_path ) ) {
         $ver .= '.' . filemtime( $asset_path );
