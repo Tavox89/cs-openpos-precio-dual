@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.9.1 – 2025-08-24
+ * v1.9.2 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -254,8 +254,16 @@
   function readUsdFromRow(row) {
     if (!row) return NaN;
     var valEl = pickValueElement(row);
-    var txt = valEl && valEl.textContent ? valEl.textContent : (row.textContent || '');
-    return parsePrice(txt);
+   if (!valEl) return NaN;
+    // Evitar contaminación por nuestros hijos inline (data-csfx)
+    var txt;
+    if (valEl.querySelector && valEl.querySelector('[data-csfx]')) {
+      var clone = valEl.cloneNode(true);
+      Array.prototype.slice.call(clone.querySelectorAll('[data-csfx]')).forEach(function (n) { n.remove(); });
+      txt = clone.textContent || '';
+    } else {
+      txt = valEl.textContent || '';
+    }    return parsePrice(txt);
   }
   // --- Decoradores ---
     // bandera para evitar actualizaciones repetidas que generan parpadeo
@@ -591,7 +599,7 @@
         inline.className = 'csfx-sub-bs-inline';
         subValEl.appendChild(inline);
       }
-      if (!isNaN(usdS)) inline.textContent = 'Bs. ' + fmtBs(usd2bs(usdS));
+      if (!isNaN(usdS)) inline.textContent = fmtBs(usd2bs(usdS));
     }
 
 
