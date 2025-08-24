@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.8.4 – 2025-08-09
+ * v1.8.5 – 2025-08-09
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -155,9 +155,8 @@
         '.csfx-total-row{display:flex;justify-content:space-between;font-size:14px;font-weight:700;margin-top:8px;padding:0 .4rem;}',
       '.csfx-total-row span{font-weight:700;font-size:14px;}',
       '.csfx-total-row .csfx-amount{color:#1e3a8a;font-weight:700;font-size:14px;}',
-      '.csfx-total-row[data-csfx="total-final"]{display:grid;grid-template-columns:auto 1fr auto 1fr;column-gap:8px;row-gap:2px;align-items:center;}',
+      '.csfx-total-row[data-csfx="total-final"]{display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:2px;align-items:center;}',
       '.csfx-total-row[data-csfx="total-final"] .csfx-amount{text-align:right;}',
-    
       '.csfx-info{margin-top:6px;font-size:11px;opacity:.8;}',
       '.csfx-pay-header-row{display:flex;gap:.8rem;margin-top:2px;}',
       '.csfx-chip--modal{font-size:16px;font-weight:700;padding:.2rem .6rem}',
@@ -499,7 +498,7 @@
     container.querySelectorAll('.csfx-cart-row').forEach(function (n) { n.remove(); });
 
     // eliminar previos para idempotencia
-    container.querySelectorAll('[data-csfx="total-final"], [data-csfx="total-inline"], [data-csfx="total-usd"], [data-csfx="total-bs"]').forEach(function (n) { n.remove(); });
+    container.querySelectorAll('[data-csfx="total-final"], [data-csfx="total-inline"], [data-csfx="total-usd"], [data-csfx="total-bs"], .csfx-info').forEach(function (n) { n.remove(); });
 
     var subRow = findTotalsRow(container, /^sub\\s?total/i);
     var discRow = findTotalsRow(container, /descuento|discount/i);
@@ -512,7 +511,9 @@
     var usdT = totRow ? parsePrice(totRow.textContent) : NaN;
     if (isNaN(usdT) && !isNaN(usdS)) usdT = usdS - usdD + usdI;
 
-    if (totRow) totRow.remove();
+    // Solo removemos la fila de Total nativa si hay descuento global
+    var replaceNativeTotal = !!discRow;
+    if (replaceNativeTotal && totRow) totRow.remove();
 
     var summary = subRow ? subRow.nextElementSibling : null;
     if (!(summary && summary.dataset && summary.dataset.csfx === 'summary-bs')) {
@@ -529,21 +530,18 @@
       if (subSp && !isNaN(usdS)) subSp.textContent = fmtBs(usd2bs(usdS));
     }
 
-    var after = discRow || summary || subRow;
-    var rowFinal = document.createElement('div');
-    rowFinal.className = 'csfx-total-row';
-    rowFinal.dataset.csfx = 'total-final';
-    rowFinal.innerHTML = '<span>Total Final (USD)</span><span class="csfx-amount" data-csfx="tot-usd"></span><span>Total Final (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
-    if (after) after.insertAdjacentElement('afterend', rowFinal);
-
-    var usdSp = rowFinal.querySelector('[data-csfx="tot-usd"]');
-    if (usdSp && !isNaN(usdT)) usdSp.textContent = fmtUsd(usdT);
-    var totSp = rowFinal.querySelector('[data-csfx="tot-bs"]');
-    if (totSp && !isNaN(usdT)) totSp.textContent = fmtBs(usd2bs(usdT));
-
-    var info = container.querySelector('.csfx-info');
-    if (!info) { info = document.createElement('div'); info.className = 'csfx-info'; container.appendChild(info); }
-    info.innerHTML = buildInfoText();
+     // Mostrar Total Final (Bs.) solo si hay descuento global
+    if (discRow) {
+      var after = discRow;
+      var rowFinal = document.createElement('div');
+      rowFinal.className = 'csfx-total-row';
+      rowFinal.dataset.csfx = 'total-final';
+      rowFinal.innerHTML = '<span>Total Final (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
+      if (after) after.insertAdjacentElement('afterend', rowFinal);
+      var totSp = rowFinal.querySelector('[data-csfx="tot-bs"]');
+      if (totSp && !isNaN(usdT)) totSp.textContent = fmtBs(usd2bs(usdT));
+    }
+    // La información de tasa se muestra exclusivamente en el badge
   }
   function buildInfoText() {
   var t = '<strong>Tasa BCV:</strong> ' + (FX.rate ? FX.rate.toFixed(FX.decimals) : '(sin datos)');
