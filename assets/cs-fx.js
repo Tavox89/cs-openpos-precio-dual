@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.9.8 – 2025-08-24
+ * v2.0.4 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -73,7 +73,8 @@
         }
       });
     } catch (e) {}
-    def.rate = Number(def.rate) || 0;
+    def.rate = 0;
+    def.updated = 0;
     def.decimals = Number(def.decimals) || 2;
 
     // AJAX: si no viene, lo armamos desde action_url global del POS
@@ -86,6 +87,14 @@
     window.csfx = def; // para debug externo
     return def;
   })();
+
+    function csfxClearLegacyStores(){
+    try { localStorage.removeItem('YU_BCV_RATE'); } catch(_){ }
+    try { localStorage.removeItem('CSFX_RATE'); } catch(_){ }
+    try { if (window.YuPrecio) delete window.YuPrecio; } catch(_){ }
+  }
+
+  csfxClearLegacyStores();
 
   // --- Utilidades ---
   function round(n, d) {
@@ -273,8 +282,11 @@
   var updateApplied = false;
 
   function decorateSearch() {
-      if (!FX.rate || !FX.searchBs || updateApplied) return;
-    updateApplied = true;
+    if (!FX.rate) {
+      document.querySelectorAll('[data-csfx="bs-search"], .csfx-search-bs').forEach(function(n){ n.remove(); });
+      return;
+    }
+    if (!FX.searchBs || updateApplied) return;    updateApplied = true;
     var items = document.querySelectorAll('.mat-autocomplete-panel .mat-option');
     items.forEach(function (it) {
      var textRoot = it.querySelector('.mat-option-text') || it;
@@ -339,8 +351,14 @@
   }
 
   function decorateAddons() {
-    if (!FX.rate || !FX.addonsBs) return;
-    var modals = document.querySelectorAll('.mat-dialog-container');
+    if (!FX.rate || !FX.addonsBs) {
+      document.querySelectorAll('[data-csfx="addon-bs"]').forEach(function(n){ n.remove(); });
+      document.querySelectorAll('[data-csfx="addon-stack"]').forEach(function(stack){
+        var child = Array.prototype.find.call(stack.childNodes, function(n){ return n.nodeType === 1 && !n.dataset.csfx; });
+        if (child) stack.replaceWith(child); else stack.remove();
+      });
+      return;
+    }    var modals = document.querySelectorAll('.mat-dialog-container');
     modals.forEach(function (modal) {
       var opts = modal.querySelectorAll('mat-radio-button, mat-checkbox, .mat-option, li');
       opts.forEach(function (opt) {
@@ -472,8 +490,11 @@
   }
 
   function decorateCart() {
-    if (!FX.rate) return;
-    var cartRows = document.querySelectorAll('app-cart .mat-list-item');
+    if (!FX.rate) {
+      var c = findTotalsContainer();
+      if (c) c.querySelectorAll('.csfx-total-row, .csfx-cart-row, [data-csfx]').forEach(function(n){ n.remove(); });
+      return;
+    }    var cartRows = document.querySelectorAll('app-cart .mat-list-item');
     var rows = cartRows.length ? cartRows : document.querySelectorAll('.mat-list-item');
     rows.forEach(function (r) {
       if (r.closest('app-pos-order-total, .total-sub')) {
@@ -786,8 +807,10 @@
    * presencia de role="dialog" o clases de Angular Material.
    */
   function decoratePaymentModal() {
- if (!FX.rate || !FX.payChips) return;
-    var modals = document.querySelectorAll('.mat-dialog-container,[role="dialog"]');
+   if (!FX.rate || !FX.payChips) {
+      document.querySelectorAll('.csfx-pay-header-row,[data-csfxpay],.mat-dialog-container .csfx-chip').forEach(function(n){ n.remove(); });
+      return;
+    }    var modals = document.querySelectorAll('.mat-dialog-container,[role="dialog"]');
     modals.forEach(function (modal) {
       var headerFound = false;
       // buscar encabezado "pagado/total" dentro del modal
@@ -880,8 +903,10 @@
     });
   }
     function decorateBill() {
-    if (!FX.rate) return;
-    var cont = document.getElementById('bill-products') || document.getElementById('bill_products') || document.querySelector('.bill-products');
+   if (!FX.rate) {
+      document.querySelectorAll('.csfx-bill-bs').forEach(function(n){ n.remove(); });
+      return;
+    }    var cont = document.getElementById('bill-products') || document.getElementById('bill_products') || document.querySelector('.bill-products');
     if (!cont) return;
     var rows = cont.querySelectorAll('tr[id^="item-"], tr');
     rows.forEach(function (r) {
@@ -980,38 +1005,36 @@
 
   // --- Refresco de tasa via AJAX ---
   function refreshRate(cb) {
-    if (!FX.ajax) { cb && cb(); return; }
-    fetch(FX.ajax, { credentials: 'same-origin' })
+    var url = (window.CSFX_RATE_ENDPOINT || '/wp-json/csfx/v1/rate') + '?ts=' + Date.now();
+    fetch(url, { cache: 'no-store', credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
-        if (j && typeof j.rate !== 'undefined') {
-          FX.rate = Number(j.rate) || 0;
-          FX.updated = +j.updated || FX.updated || 0;
-          // persistir por si el POS guarda op_settings
-          try {
-            var s = JSON.parse(localStorage.getItem('op_settings') || '{}');
-            if (!s.setting) s.setting = {};
-            if (!s.setting.cs_fx) s.setting.cs_fx = {};
-            s.setting.cs_fx.rate = FX.rate;
-            s.setting.cs_fx.updated = FX.updated;
-            localStorage.setItem('op_settings', JSON.stringify(s));
-          } catch (e) {}
+            if (j && Number(j.rate) > 0) {
+          FX.rate = Number(j.rate);
+          FX.mode = j.mode || '';
+          FX.updated = j.updated || '';
+        } else {
+          FX.rate = 0;
+          csfxClearLegacyStores();
         }
-        // actualizar badge tras refrescar la tasa
+   
         ensureBadge();
         cb && cb();
       })
-      .catch(function () { ensureBadge(); cb && cb(); });
+      .catch(function () {
+        FX.rate = 0;
+        csfxClearLegacyStores();
+        ensureBadge();
+        cb && cb();
+      });
   }
 
-    // Inicializar posicionamiento del badge y decoradores clave al cargar el DOM
+    // Inicializar posicionamiento del badge y carga de tasa al cargar el DOM
   document.addEventListener('DOMContentLoaded', function(){
     try {
-      initBadgePositioning();
-      decorateCart();
-      decorateTotals();
-      // reposicionar tras pintar carrito y totales
-      positionBadge();
+       if (typeof initBadgePositioning === 'function') initBadgePositioning();
+      csfxClearLegacyStores();
+      refreshRate(function(){ schedule(runAll); });
     } catch(e){}
   });
 
@@ -1023,8 +1046,6 @@
   window.__CS_FX_RUN = function () { schedule(runAll); };
 
   // Kickstart
-  schedule(runAll);
-  setTimeout(function () { schedule(runAll); }, 450);
-  setTimeout(function () { refreshRate(function () { schedule(runAll); }); }, 900);
+
   setInterval(function () { refreshRate(function () { schedule(runAll); }); }, (FX.ttl || 300) * 1000);
 })();
