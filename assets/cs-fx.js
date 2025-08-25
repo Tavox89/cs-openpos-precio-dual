@@ -17,6 +17,9 @@
 (function () {
   'use strict';
 
+    // Compatibilidad con distintas versiones de OpenPOS
+  var OPCompat = window.OpenPOSCompat || {};
+
   // --- Config FX (mezcla BOOT + localStorage) ---
   var FX = (function () {
     var def = {
@@ -485,6 +488,10 @@
         return;
       }
       var usd = getLineUSD(r);
+           var discounts = OPCompat.normalizeItemDiscounts ? OPCompat.normalizeItemDiscounts(r.dataset || {}) : [];
+      if (discounts.length) {
+        r.dataset.csfxDiscounts = discounts.join(',');
+      }
       if (isNaN(usd)) {
         if (mark) mark.remove();
         return;
@@ -872,10 +879,32 @@
       });
     });
   }
+    function decorateBill() {
+    if (!FX.rate) return;
+    var cont = document.getElementById('bill-products') || document.getElementById('bill_products') || document.querySelector('.bill-products');
+    if (!cont) return;
+    var rows = cont.querySelectorAll('tr[id^="item-"], tr');
+    rows.forEach(function (r) {
+      var priceCell = r.querySelector('td:last-child');
+      if (!priceCell) return;
+      var usd = parsePrice(priceCell.textContent);
+      if (isNaN(usd)) return;
+      var mark = priceCell.querySelector('.csfx-bill-bs');
+      if (!mark) {
+        mark = document.createElement('div');
+        mark.className = 'csfx-bill-bs';
+        mark.style.fontSize = '11px';
+        mark.style.color = FX.style.bsColor || '#0057b7';
+        priceCell.appendChild(mark);
+      }
+      mark.textContent = fmtBs(usd2bs(usd));
+    });
+  }
   var obsTotals = null;
   var obsSearch = null;
   var obsPayment = null;
-  var obsEls = { totals: null, search: null, payment: null };
+  var obsBill = null;
+  var obsEls = { totals: null, search: null, payment: null, bill: null };
 
   function ensureObservers() {
     var cont = findTotalsContainer();
@@ -922,6 +951,20 @@
       obsPayment = null;
       obsEls.payment = null;
     }
+    
+    var bill = document.getElementById('bill-products') || document.getElementById('bill_products') || document.querySelector('.bill-products');
+    if (bill) {
+      if (!obsBill || obsEls.bill !== bill) {
+        if (obsBill) obsBill.disconnect();
+        obsBill = new MutationObserver(function () { schedule(decorateBill); });
+        obsBill.observe(bill, { childList: true, subtree: true });
+        obsEls.bill = bill;
+      }
+    } else if (obsBill) {
+      obsBill.disconnect();
+      obsBill = null;
+      obsEls.bill = null;
+    }
   }
   function runAll() {
    ensureObservers();
@@ -931,6 +974,7 @@
     decorateCart();
     decorateTotals();
     decoratePaymentModal();
+      decorateBill();
     ensureBadge();
   }
 

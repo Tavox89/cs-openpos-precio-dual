@@ -424,6 +424,15 @@ add_filter('op_get_login_cashdrawer_data', function($session){
 
 /* ====== Encolar scripts sólo en la página del POS ====== */
 add_filter('openpos_pos_footer_js', function($handles){
+        // archivo de compatibilidad con cambios de la API 7.3.x
+    $compat_path = plugin_dir_path(__FILE__) . 'assets/js/compat/openpos-compat.js';
+    $compat_ver  = '1.0.0';
+    if ( file_exists( $compat_path ) ) {
+        $compat_ver .= '.' . filemtime( $compat_path );
+    }
+    $compat_asset = plugins_url('assets/js/compat/openpos-compat.js', __FILE__);
+    wp_register_script('cs-openpos-compat', $compat_asset, [], $compat_ver, true);
+    wp_script_add_data('cs-openpos-compat', 'defer', true);
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
     $ver = '1.9.8';
@@ -436,7 +445,9 @@ add_filter('openpos_pos_footer_js', function($handles){
     // JS principal
     wp_register_script('cs-fx', $asset, [], $ver, true);
         wp_script_add_data('cs-fx', 'defer', true);
-
+    // JS principal dependiente de compat
+    wp_register_script('cs-fx', $asset, ['cs-openpos-compat'], $ver, true);
+    wp_script_add_data('cs-fx', 'defer', true);
     // Boot inline para tener rate incluso en pantalla de login
     $fx = cs_fx_get_rate();
     $boot = [
@@ -468,6 +479,7 @@ add_filter('openpos_pos_footer_js', function($handles){
     wp_add_inline_script('cs-fx', 'window.__CS_FX_BOOT = '. wp_json_encode($boot, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE) .';', 'before');
 
     // al final del POS añádeme
+    $handles[] = 'cs-openpos-compat';
     $handles[] = 'cs-fx';
     return $handles;
 }, 50);
