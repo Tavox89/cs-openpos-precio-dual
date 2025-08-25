@@ -167,6 +167,19 @@ GET <?php echo esc_url( home_url( '/wp-json/csfx/v1/rate' ) ); ?>
 </code></pre>
   </div>
   <style>.csfx-api-row{<?php echo $mode==='api' ? '' : 'display:none;'; ?>}</style>
+    <script>
+  (function(){
+    const radios = document.querySelectorAll('input[name="csfx_rate_mode"]');
+    const row = document.querySelector('.csfx-api-row');
+    function update(){
+      if(!row) return;
+      const val = document.querySelector('input[name="csfx_rate_mode"]:checked')?.value;
+      row.style.display = (val==='api') ? '' : 'none';
+    }
+    radios.forEach(r => r.addEventListener('change', update));
+    update();
+  })();
+  </script>
   <?php
 }
 
@@ -191,22 +204,33 @@ function csfx_get_rate(){
       return apply_filters('csfx_rate', $cache);
     }
     $url = trim(get_option('csfx_api_url', ''));
-    if ($url) {
-      $res = wp_remote_get($url, array('timeout'=>6));
-      if (! is_wp_error($res) && wp_remote_retrieve_response_code($res) === 200) {
-        $body = json_decode(wp_remote_retrieve_body($res), true);
-        // heurística: buscar campos comunes
-        $rate = 0.0;
-        if (isset($body['rate']))               $rate = floatval($body['rate']);
-        elseif (isset($body['USD_VES']))        $rate = floatval($body['USD_VES']);
-        elseif (isset($body['ves']) )           $rate = floatval($body['ves']);
-        elseif (isset($body['currencies'][$to]['rate'])) $rate = floatval($body['currencies'][$to]['rate']);
-        $updated = current_time('c');
-        $data = array('mode'=>'api','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>$updated,'source'=>'api');
-        if ($ttl>0) set_transient('csfx_rate_cache', $data, $ttl);
-        return apply_filters('csfx_rate', $data);
-      }
+    // Modo API ESTRICTO: si no hay URL, NO caer a FOX
+    if ($url === '') {
+      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'missing_api_url');
+      return apply_filters('csfx_rate', $data);
     }
+    // Fetch remoto
+    $res = wp_remote_get($url, array('timeout'=>6));
+    if (is_wp_error($res)) {
+      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'wp_error');
+      return apply_filters('csfx_rate', $data);
+    }
+    $code = wp_remote_retrieve_response_code($res);
+    if (intval($code) !== 200) {
+      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'http_error');
+      return apply_filters('csfx_rate', $data);
+    }
+        $body = json_decode(wp_remote_retrieve_body($res), true);
+    // heurística: buscar campos comunes
+    $rate = 0.0;
+    if (isset($body['rate']))               $rate = floatval($body['rate']);
+    elseif (isset($body['USD_VES']))        $rate = floatval($body['USD_VES']);
+    elseif (isset($body['ves']) )           $rate = floatval($body['ves']);
+    elseif (isset($body['currencies'][$to]['rate'])) $rate = floatval($body['currencies'][$to]['rate']);
+    $updated = current_time('c');
+    $data = array('mode'=>'api','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>$updated,'source'=>'api');
+    if ($ttl>0) set_transient('csfx_rate_cache', $data, $ttl);
+    return apply_filters('csfx_rate', $data);
   }
 
   // modo FOX (nativo)
