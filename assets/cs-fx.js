@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.9.6 – 2025-08-24
+ * v1.9.7 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -553,13 +553,10 @@
       if (!btn) return NaN;
       return parsePrice(btn.textContent);
     }
-
-  // --- Posicionar badge pegado al botón (o footer) ---
-  function positionBadge() {
-    var badge = document.querySelector('.csfx-badge');
-    if (!badge) return;
-    // 1) Intentar el botón de checkout (varios sabores)
-    var btn = document.querySelector([
+  // --- util: obtener el rect del mejor ancla (botón verde o footer visible) ---
+  function getCheckoutAnchorRect() {
+    var selectors = [
+      // botones de checkout (varios sabores)
       '.op-cart-footer .btn.btn-success',
       '.op-cart-footer .op-button-checkout',
       '.op-footer button.btn-success',
@@ -568,23 +565,56 @@
       '.bottom-cart-total-container .btn-success',
       '.bottom-cart-total-container [role="button"]',
       'button[class*="success"]',
-    ].join(', '));
-    var bottom = 96; // fallback
-        // 2) Si no hay botón, probar el contenedor del footer
-    var footer = document.querySelector([
+      
+      // contenedores de footer/cart como respaldo
+
       '.bottom-cart-total-container',
       '.op-cart-footer',
       '.op-footer',
       'footer[class*="cart"]'
-    ].join(', '));
+       ];
+    var nodes = Array.prototype.slice.call(document.querySelectorAll(selectors.join(', ')));
+    if (!nodes.length) return null;
+    // filtrar visibles y con caja válida
+    var visible = nodes.map(function(n){
+      try {
+        var cs = window.getComputedStyle(n);
+        if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return null;
+        var r = n.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return null;
+        return { n:n, r:r };
+      } catch(e){ return null; }
+    }).filter(Boolean);
+    if (!visible.length) return null;
+    // elegir el más cercano al borde inferior del viewport (mayor r.top)
+    visible.sort(function(a,b){ return b.r.top - a.r.top; });
+    return visible[0].r;
+  }
 
+  // registrar scroll en contenedores típicos del layout (además de window)
+  function attachScrollListeners(cb){
+    var containers = document.querySelectorAll([
+      'body', 'html',
+      '.mat-sidenav-content', '.mat-drawer-content',
+      '.mat-mdc-sidenav-content',
+      '.pos-content', '.op-container',
+      '.cdk-virtual-scroll-viewport'
+    ].join(', '));
+    containers.forEach(function(c){
+      try { c.addEventListener('scroll', cb, { passive:true }); } catch(_){ }
+    });
+  }
+    // --- Posicionar badge pegado al botón (o footer) ---
+  function positionBadge() {
+    var badge = document.querySelector('.csfx-badge');
+    if (!badge) return;
+    var bottom = 96; // fallback
     try {
-       var target = btn || footer;
-      if (target) {
-        var r = target.getBoundingClientRect();
-        // distancia del borde inferior de la ventana al borde superior del target
+     var r = getCheckoutAnchorRect();
+      if (r) {
+        // distancia del borde inferior del viewport al borde superior del ancla
         var gap = Math.max(0, Math.round(window.innerHeight - r.top));
-        bottom = Math.max(8, gap + 8); // 8px de respiro
+        bottom = Math.max(12, gap + 12); // 12px de respiro
       }
     } catch (e) { /* no-op */ }
     // solo aplica si cambia para evitar reflows innecesarios
@@ -599,9 +629,11 @@
     positionBadge();
     window.addEventListener('load', positionBadge, { passive: true });
     window.addEventListener('resize', positionBadge, { passive: true });
-        // reposicionar al desplazarse y cambio de orientación
+    // reposicionar al desplazarse y cambio de orientación
     window.addEventListener('scroll', positionBadge, { passive: true });
     window.addEventListener('orientationchange', positionBadge, { passive: true });
+        // scroll en contenedores internos (Angular/Material)
+    attachScrollListeners(positionBadge);
     // observar cambios de DOM que puedan mover el botón
     var mo = new MutationObserver(function(){ positionBadge(); });
     mo.observe(document.body, { subtree:true, childList:true, attributes:true });
