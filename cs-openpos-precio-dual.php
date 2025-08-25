@@ -3,7 +3,7 @@
  * Plugin Name: CS – OpenPOS Precio Dual Dinámico (USD + Bs) via FOX API
  * Description: Muestra precios en USD y Bs en OpenPOS (buscador, addons, carrito y totales) usando FOX API (/currencies). Autodetecta origen local/remoto y mapea VES↔VEF. Incluye barra con tasa y hora.
  * Author: Tavox
- * Version: 1.9.8
+ * Version: 2.0.0
 
 
 
@@ -27,6 +27,202 @@ if ( ! defined('CS_FX_HIDE_TAX') )        define('CS_FX_HIDE_TAX', true); // ocu
 if ( ! defined('CS_FX_SEARCH_BS') )       define('CS_FX_SEARCH_BS', true);
 if ( ! defined('CS_FX_PAY_CHIPS') )       define('CS_FX_PAY_CHIPS', true);
 if ( ! defined('CS_FX_ADDONS_BS') )       define('CS_FX_ADDONS_BS', true);
+
+
+// Nuevas opciones (defaults)
+if ( get_option('csfx_rate_mode') === false )        update_option('csfx_rate_mode', 'api');      // api|fox
+if ( get_option('csfx_api_url') === false )          update_option('csfx_api_url', '');           // URL api externa (si modo=api)
+if ( get_option('csfx_rate_ttl') === false )         update_option('csfx_rate_ttl', 300);
+if ( get_option('csfx_rate_from') === false )        update_option('csfx_rate_from', 'USD');
+if ( get_option('csfx_rate_to') === false )          update_option('csfx_rate_to', 'VES');
+if ( get_option('csfx_discount_enabled') === false ) update_option('csfx_discount_enabled', 1);
+if ( get_option('csfx_discount_percent') === false ) update_option('csfx_discount_percent', 31.0);
+
+// ================== ADMIN: SUBMENU "Conf Tavox" ==================
+add_action('admin_menu', function () {
+  $cap = current_user_can('manage_woocommerce') ? 'manage_woocommerce' : 'manage_options';
+  $title = 'Conf Tavox';
+  $slug  = 'csfx-conf';
+  // Intentar colgarlo de OpenPOS
+  $parent_candidates = array('openpos', 'openpos_dashboard', 'op', 'woocommerce');
+  $hook = null;
+  foreach ($parent_candidates as $parent) {
+    $hook = add_submenu_page($parent, $title, $title, $cap, $slug, 'csfx_render_admin_page');
+    if ($hook) break;
+  }
+  // Si no se pudo colgar, crear top-level
+  if (! $hook) {
+    add_menu_page($title, $title, $cap, $slug, 'csfx_render_admin_page', 'dashicons-admin-generic', 58.7);
+  }
+}, 60);
+
+function csfx_render_admin_page() {
+  if (! current_user_can('manage_woocommerce') && ! current_user_can('manage_options')) return;
+  if (isset($_POST['csfx_save'])) {
+    check_admin_referer('csfx_save_opts');
+    update_option('csfx_rate_mode',        in_array($_POST['csfx_rate_mode'] ?? 'api', array('api','fox'), true) ? $_POST['csfx_rate_mode'] : 'api');
+    update_option('csfx_api_url',          esc_url_raw($_POST['csfx_api_url'] ?? ''));
+    update_option('csfx_rate_ttl',         max(0, intval($_POST['csfx_rate_ttl'] ?? 300)));
+    update_option('csfx_rate_from',        sanitize_text_field($_POST['csfx_rate_from'] ?? 'USD'));
+    update_option('csfx_rate_to',          sanitize_text_field($_POST['csfx_rate_to'] ?? 'VES'));
+    update_option('csfx_discount_enabled', isset($_POST['csfx_discount_enabled']) ? 1 : 0);
+    update_option('csfx_discount_percent', floatval(str_replace(',', '.', $_POST['csfx_discount_percent'] ?? '31')));
+    // limpiar cache de tasa
+    delete_transient('csfx_rate_cache');
+    echo '<div class="updated notice"><p>Configuración guardada.</p></div>';
+  }
+  $mode  = get_option('csfx_rate_mode', 'api');
+  $api   = esc_attr(get_option('csfx_api_url', ''));
+  $ttl   = intval(get_option('csfx_rate_ttl', 300));
+  $from  = esc_attr(get_option('csfx_rate_from', 'USD'));
+  $to    = esc_attr(get_option('csfx_rate_to', 'VES'));
+  $d_on  = get_option('csfx_discount_enabled', 1);
+  $d_pct = floatval(get_option('csfx_discount_percent', 31.0));
+  ?>
+  <div class="wrap">
+    <h1>Configuración · Conf Tavox</h1>
+    <form method="post">
+      <?php wp_nonce_field('csfx_save_opts'); ?>
+      <table class="form-table" role="presentation">
+        <tr><th scope="row">Modo de tasa</th>
+          <td>
+            <label><input type="radio" name="csfx_rate_mode" value="api" <?php checked($mode, 'api'); ?>> API externa</label>&nbsp;&nbsp;
+            <label><input type="radio" name="csfx_rate_mode" value="fox" <?php checked($mode, 'fox'); ?>> Nativo (FOX Currency Switcher)</label>
+            <p class="description">Elegir de dónde leer la tasa Bs: API propia/externa o desde el plugin FOX instalado en este sitio.</p>
+          </td>
+        </tr>
+        <tr class="csfx-api-row"><th scope="row">API URL (si modo = API)</th>
+          <td><input type="url" name="csfx_api_url" class="regular-text" placeholder="https://dominio.tld/currencies" value="<?php echo $api; ?>">
+          <p class="description">Debe devolver un JSON con la tasa USD→Bs u objeto que incluya ese valor.</p></td>
+        </tr>
+        <tr><th scope="row">Par de monedas</th>
+          <td>
+            <input type="text" name="csfx_rate_from" value="<?php echo $from; ?>" size="6"> →
+            <input type="text" name="csfx_rate_to"   value="<?php echo $to;   ?>" size="6">
+            <p class="description">Por defecto USD→VES.</p>
+          </td>
+        </tr>
+        <tr><th scope="row">TTL cache (seg)</th>
+          <td><input type="number" min="0" name="csfx_rate_ttl" value="<?php echo $ttl; ?>" class="small-text"> <span class="description">0 = sin cache</span></td>
+        </tr>
+        <tr><th scope="row">Descuento por pago en USD</th>
+          <td>
+            <label><input type="checkbox" name="csfx_discount_enabled" <?php checked($d_on, 1); ?>> Activar</label>
+            &nbsp;&nbsp;<input type="number" step="0.01" min="0" max="100" name="csfx_discount_percent" value="<?php echo esc_attr($d_pct); ?>" class="small-text"> %
+            <p class="description">Por defecto 31%. Si está desactivado, los endpoints devolverán 0.</p>
+          </td>
+        </tr>
+      </table>
+      <?php submit_button('Guardar cambios', 'primary', 'csfx_save'); ?>
+    </form>
+    <hr>
+    <h2>Mini-API (REST)</h2>
+    <p>Usos rápidos para otros plugins, sitios o scripts:</p>
+    <pre><code># Descuento
+GET <?php echo esc_url( home_url( '/wp-json/csfx/v1/discount' ) ); ?>
+# Respuesta: {"active":true,"percent":31.0,"updated":"2025-08-24T10:25:00-04:00"}
+
+# Tasa
+GET <?php echo esc_url( home_url( '/wp-json/csfx/v1/rate' ) ); ?>
+# Respuesta: {"mode":"<?php echo esc_html($mode); ?>","rate":141.88,"from":"<?php echo esc_html($from); ?>","to":"<?php echo esc_html($to); ?>","ttl":<?php echo $ttl; ?>,"updated":"..."}
+</code></pre>
+  </div>
+  <style>.csfx-api-row{<?php echo $mode==='api' ? '' : 'display:none;'; ?>}</style>
+  <?php
+}
+
+// ================== HELPERS: Rate & Discount ==================
+function csfx_get_discount(){
+  $active = (bool) get_option('csfx_discount_enabled', 1);
+  $pct    = $active ? floatval(get_option('csfx_discount_percent', 31.0)) : 0.0;
+  $out    = array('active'=>$active, 'percent'=>$pct);
+  return apply_filters('csfx_discount', $out);
+}
+
+function csfx_get_rate(){
+  $mode = get_option('csfx_rate_mode', 'api');
+  $from = strtoupper(get_option('csfx_rate_from', 'USD'));
+  $to   = strtoupper(get_option('csfx_rate_to', 'VES'));
+  $ttl  = intval(get_option('csfx_rate_ttl', 300));
+  $rate = 0.0; $updated = '';
+
+  if ($mode === 'api') {
+    $cache = get_transient('csfx_rate_cache');
+    if (is_array($cache) && isset($cache['rate'])) {
+      return apply_filters('csfx_rate', $cache);
+    }
+    $url = trim(get_option('csfx_api_url', ''));
+    if ($url) {
+      $res = wp_remote_get($url, array('timeout'=>6));
+      if (! is_wp_error($res) && wp_remote_retrieve_response_code($res) === 200) {
+        $body = json_decode(wp_remote_retrieve_body($res), true);
+        // heurística: buscar campos comunes
+        $rate = 0.0;
+        if (isset($body['rate']))               $rate = floatval($body['rate']);
+        elseif (isset($body['USD_VES']))        $rate = floatval($body['USD_VES']);
+        elseif (isset($body['ves']) )           $rate = floatval($body['ves']);
+        elseif (isset($body['currencies'][$to]['rate'])) $rate = floatval($body['currencies'][$to]['rate']);
+        $updated = current_time('c');
+        $data = array('mode'=>'api','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>$updated,'source'=>'api');
+        if ($ttl>0) set_transient('csfx_rate_cache', $data, $ttl);
+        return apply_filters('csfx_rate', $data);
+      }
+    }
+  }
+
+  // modo FOX (nativo)
+  if (class_exists('WOOCS')) {
+    global $WOOCS;
+    $currs = is_object($WOOCS) && method_exists($WOOCS, 'get_currencies') ? $WOOCS->get_currencies() : array();
+    // Asumir que 'rate' es respecto a la moneda base de WooCommerce
+    $base = get_option('woocommerce_currency', 'USD');
+    $r_from = ($from===$base) ? 1.0 : floatval($currs[$from]['rate'] ?? 0);
+    $r_to   = ($to===$base)   ? 1.0 : floatval($currs[$to]['rate'] ?? 0);
+    if ($r_from>0 && $r_to>0) {
+      $rate = $r_to / $r_from;
+      $updated = current_time('c');
+      $data = array('mode'=>'fox','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>0,'updated'=>$updated,'source'=>'fox');
+      return apply_filters('csfx_rate', $data);
+    }
+  }
+
+  // Fallback final
+  return apply_filters('csfx_rate', array('mode'=>$mode,'rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>$mode));
+}
+
+// ================== REST API ==================
+add_action('rest_api_init', function () {
+  register_rest_route('csfx/v1', '/discount', array(
+    'methods' => 'GET',
+    'permission_callback' => '__return_true',
+    'callback' => function () {
+      $d = csfx_get_discount();
+      $d['updated'] = current_time('c');
+      return rest_ensure_response($d);
+    },
+  ));
+  register_rest_route('csfx/v1', '/rate', array(
+    'methods' => 'GET',
+    'permission_callback' => '__return_true',
+    'callback' => function () {
+      return rest_ensure_response(csfx_get_rate());
+    },
+  ));
+  register_rest_route('csfx/v1', '/config', array(
+    'methods' => 'GET',
+    'permission_callback' => '__return_true',
+    'callback' => function () {
+      return rest_ensure_response(array(
+        'mode'   => get_option('csfx_rate_mode','api'),
+        'api'    => get_option('csfx_api_url',''),
+        'ttl'    => intval(get_option('csfx_rate_ttl',300)),
+        'from'   => get_option('csfx_rate_from','USD'),
+        'to'     => get_option('csfx_rate_to','VES'),
+        'discount'=> csfx_get_discount(),
+      ));
+    },
+  ));
+});
 /* ====== Helpers ====== */
 function cs_fx_site_origin(){ return rtrim( site_url(), '/' ); }
 function cs_fx_sanitize_origin($o){
