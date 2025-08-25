@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.9.5 – 2025-08-24
+ * v1.9.6 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -504,6 +504,8 @@
         var sp2 = mark.querySelector('.csfx-amount');
       if (sp2) sp2.textContent = fmtBs(bs);
     });
+        positionBadge();
+
   }
 
   function findTotalsContainer() {
@@ -552,7 +554,7 @@
       return parsePrice(btn.textContent);
     }
 
-  // --- Posicionar badge pegado al botón verde (o al footer si no hay botón) ---
+  // --- Posicionar badge pegado al botón (o footer) ---
   function positionBadge() {
     var badge = document.querySelector('.csfx-badge');
     if (!badge) return;
@@ -597,6 +599,9 @@
     positionBadge();
     window.addEventListener('load', positionBadge, { passive: true });
     window.addEventListener('resize', positionBadge, { passive: true });
+        // reposicionar al desplazarse y cambio de orientación
+    window.addEventListener('scroll', positionBadge, { passive: true });
+    window.addEventListener('orientationchange', positionBadge, { passive: true });
     // observar cambios de DOM que puedan mover el botón
     var mo = new MutationObserver(function(){ positionBadge(); });
     mo.observe(document.body, { subtree:true, childList:true, attributes:true });
@@ -604,7 +609,7 @@
     setInterval(positionBadge, 2000);
   }
   
-    function decorateTotals() {
+  function decorateTotals() {
 
     if (!FX.rate) return;
 
@@ -680,6 +685,7 @@
             if (totSp && !isNaN(usdFinal)) totSp.textContent = fmtBs(usd2bs(usdFinal));
 
     }
+    positionBadge();
 
   }
   function buildInfoText() {
@@ -923,7 +929,7 @@
       initBadgePositioning();
       decorateCart();
       decorateTotals();
-            // reposicionar tras pintar totales
+      // reposicionar tras pintar carrito y totales
       positionBadge();
     } catch(e){}
   });
