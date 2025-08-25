@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.9.7 – 2025-08-24
+ * v1.9.8 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -553,71 +553,76 @@
       if (!btn) return NaN;
       return parsePrice(btn.textContent);
     }
-  // --- util: obtener el rect del mejor ancla (botón verde o footer visible) ---
-  function getCheckoutAnchorRect() {
-    var selectors = [
-      // botones de checkout (varios sabores)
-      '.op-cart-footer .btn.btn-success',
-      '.op-cart-footer .op-button-checkout',
-      '.op-footer button.btn-success',
-      '.op-footer .op-checkout',
-      '.bottom-cart-total-container button',
-      '.bottom-cart-total-container .btn-success',
-      '.bottom-cart-total-container [role="button"]',
-      'button[class*="success"]',
-      
-      // contenedores de footer/cart como respaldo
+  // === Anclaje al checkout ===
+  var ANCHOR_BTN_SELECTORS = [
+    '.op-cart-footer .btn.btn-success',
+    '.op-cart-footer .op-button-checkout',
+    '.op-footer button.btn-success',
+    '.op-footer .op-checkout',
+    '.bottom-cart-total-container button',
+    '.bottom-cart-total-container .btn-success',
+    '.bottom-cart-total-container [role="button"]',
+    'button[class*="success"]'
+  ];
+  var FOOTER_SELECTORS = [
+    '.bottom-cart-total-container',
+    '.op-cart-footer',
+    '.op-footer',
+    'footer[class*="cart"]'
+  ];
 
-      '.bottom-cart-total-container',
-      '.op-cart-footer',
-      '.op-footer',
-      'footer[class*="cart"]'
-       ];
+  function pickVisibleRects(selectors){
     var nodes = Array.prototype.slice.call(document.querySelectorAll(selectors.join(', ')));
-    if (!nodes.length) return null;
-    // filtrar visibles y con caja válida
-    var visible = nodes.map(function(n){
-      try {
+    return nodes.map(function(n){
+      try{
         var cs = window.getComputedStyle(n);
-        if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return null;
+        if (!cs || cs.display==='none' || cs.visibility==='hidden') return null;
         var r = n.getBoundingClientRect();
-        if (r.width <= 0 || r.height <= 0) return null;
-        return { n:n, r:r };
-      } catch(e){ return null; }
+         if (r.width<=0 || r.height<=0) return null;
+        return {n:n, r:r};
+      }catch(_){ return null; }
     }).filter(Boolean);
-    if (!visible.length) return null;
-    // elegir el más cercano al borde inferior del viewport (mayor r.top)
-    visible.sort(function(a,b){ return b.r.top - a.r.top; });
-    return visible[0].r;
+   }
+
+  function getCheckoutAnchorRect(){
+    var btns = pickVisibleRects(ANCHOR_BTN_SELECTORS);
+    var footers = pickVisibleRects(FOOTER_SELECTORS);
+    var candidates = btns.concat(footers);
+    if (!candidates.length) return null;
+    candidates.sort(function(a,b){ return b.r.top - a.r.top; });
+    return candidates[0].r;
+  }
+
+  function getCheckoutAreaHeight(){
+    var areas = pickVisibleRects(FOOTER_SELECTORS);
+    if (!areas.length) return 0;
+    areas.sort(function(a,b){ return b.r.top - a.r.top; });
+    return Math.round(areas[0].r.height);
   }
 
   // registrar scroll en contenedores típicos del layout (además de window)
   function attachScrollListeners(cb){
     var containers = document.querySelectorAll([
-      'body', 'html',
-      '.mat-sidenav-content', '.mat-drawer-content',
-      '.mat-mdc-sidenav-content',
-      '.pos-content', '.op-container',
-      '.cdk-virtual-scroll-viewport'
-    ].join(', '));
+      'body','html',
+      '.mat-sidenav-content','.mat-drawer-content','.mat-mdc-sidenav-content','.mat-mdc-drawer-content',
+      '.pos-content','.op-container','.cdk-virtual-scroll-viewport'
+    ].join(','));
     containers.forEach(function(c){
       try { c.addEventListener('scroll', cb, { passive:true }); } catch(_){ }
     });
   }
-    // --- Posicionar badge pegado al botón (o footer) ---
+
+  // --- Posicionar badge pegado al botón (o footer) ---
   function positionBadge() {
     var badge = document.querySelector('.csfx-badge');
     if (!badge) return;
     var bottom = 96; // fallback
-    try {
-     var r = getCheckoutAnchorRect();
-      if (r) {
-        // distancia del borde inferior del viewport al borde superior del ancla
-        var gap = Math.max(0, Math.round(window.innerHeight - r.top));
-        bottom = Math.max(12, gap + 12); // 12px de respiro
-      }
-    } catch (e) { /* no-op */ }
-    // solo aplica si cambia para evitar reflows innecesarios
+   try{
+      var r = getCheckoutAnchorRect();
+      var h = getCheckoutAreaHeight();
+      var gap = r ? Math.max(0, Math.round(window.innerHeight - r.top)) : 0;
+      bottom = Math.max(12, Math.max(gap, h) + 12);
+    }catch(_){ }
     if (badge.style.bottom !== (bottom + 'px')) {
       badge.style.bottom = bottom + 'px';
     }
