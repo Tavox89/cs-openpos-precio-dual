@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v1.9.4 – 2025-08-24
+ * v1.9.5 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -552,21 +552,37 @@
       return parsePrice(btn.textContent);
     }
 
-  // --- Posicionar badge justo arriba del botón verde ---
+  // --- Posicionar badge pegado al botón verde (o al footer si no hay botón) ---
   function positionBadge() {
     var badge = document.querySelector('.csfx-badge');
     if (!badge) return;
-    var btn = document.querySelector(
-      '.op-cart-footer .btn.btn-success, .op-cart-footer .op-button-checkout,' +
-      ' .op-footer button.btn-success, .op-footer .op-checkout'
-    );
+    // 1) Intentar el botón de checkout (varios sabores)
+    var btn = document.querySelector([
+      '.op-cart-footer .btn.btn-success',
+      '.op-cart-footer .op-button-checkout',
+      '.op-footer button.btn-success',
+      '.op-footer .op-checkout',
+      '.bottom-cart-total-container button',
+      '.bottom-cart-total-container .btn-success',
+      '.bottom-cart-total-container [role="button"]',
+      'button[class*="success"]',
+    ].join(', '));
     var bottom = 96; // fallback
+        // 2) Si no hay botón, probar el contenedor del footer
+    var footer = document.querySelector([
+      '.bottom-cart-total-container',
+      '.op-cart-footer',
+      '.op-footer',
+      'footer[class*="cart"]'
+    ].join(', '));
+
     try {
-      if (btn) {
-        var r = btn.getBoundingClientRect();
-        // distancia desde el borde inferior del viewport hasta el borde superior del botón
+       var target = btn || footer;
+      if (target) {
+        var r = target.getBoundingClientRect();
+        // distancia del borde inferior de la ventana al borde superior del target
         var gap = Math.max(0, Math.round(window.innerHeight - r.top));
-        bottom = Math.max(8, gap + 8); // deja 8px de respiro
+        bottom = Math.max(8, gap + 8); // 8px de respiro
       }
     } catch (e) { /* no-op */ }
     // solo aplica si cambia para evitar reflows innecesarios
@@ -574,7 +590,8 @@
       badge.style.bottom = bottom + 'px';
     }
   }
-
+  // exposed para reusar tras renders
+  window.__csfx_positionBadge = positionBadge;
   // enganchar el posicionamiento del badge a eventos relevantes
   function initBadgePositioning() {
     positionBadge();
@@ -906,6 +923,8 @@
       initBadgePositioning();
       decorateCart();
       decorateTotals();
+            // reposicionar tras pintar totales
+      positionBadge();
     } catch(e){}
   });
 
