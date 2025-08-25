@@ -3,7 +3,7 @@
  * Plugin Name: CS – OpenPOS Precio Dual Dinámico (USD + Bs) via FOX API
  * Description: Muestra precios en USD y Bs en OpenPOS (buscador, addons, carrito y totales) usando FOX API (/currencies). Autodetecta origen local/remoto y mapea VES↔VEF. Incluye barra con tasa y hora.
  * Author: Tavox
- * Version: 2.0.0
+ * Version: 2.0.1
 
 
 
@@ -39,22 +39,62 @@ if ( get_option('csfx_discount_enabled') === false ) update_option('csfx_discoun
 if ( get_option('csfx_discount_percent') === false ) update_option('csfx_discount_percent', 31.0);
 
 // ================== ADMIN: SUBMENU "Conf Tavox" ==================
+// Detecta dinámicamente el slug del menú de OpenPOS y cuelga "Conf Tavox" allí (fallback WooCommerce -> top-level)
+function csfx_find_openpos_parent_slug() {
+  global $menu, $submenu;
+  // 1) Buscar por títulos: "POS" / "OpenPOS"
+  if (is_array($menu)) {
+    foreach ($menu as $m) {
+      $title = isset($m[0]) ? wp_strip_all_tags($m[0]) : '';
+      $slug  = isset($m[2]) ? (string)$m[2] : '';
+      if (!$slug) continue;
+      if (stripos($title, 'openpos') !== false || preg_match('/(^|\s)pos(\s|$)/i', $title)) {
+        return $slug;
+      }
+      if (stripos($slug, 'openpos') !== false || stripos($slug, 'pos') !== false || stripos($slug, 'op-') !== false) {
+        return $slug;
+      }
+    }
+  }
+  // 2) Mirar submenús conocidos (por si el top-level es genérico)
+  if (is_array($submenu)) {
+    foreach ($submenu as $parent_slug => $items) {
+      foreach ((array)$items as $it) {
+        $st = isset($it[0]) ? wp_strip_all_tags($it[0]) : '';
+        if (preg_match('/(Pedidos|Transacciones|Tiendas|Cajeros|Mesas|OpenPOS)/i', $st)) {
+          return $parent_slug;
+        }
+      }
+    }
+  }
+  return '';
+}
+
 add_action('admin_menu', function () {
   $cap = current_user_can('manage_woocommerce') ? 'manage_woocommerce' : 'manage_options';
   $title = 'Conf Tavox';
   $slug  = 'csfx-conf';
-  // Intentar colgarlo de OpenPOS
-  $parent_candidates = array('openpos', 'openpos_dashboard', 'op', 'woocommerce');
-  $hook = null;
-  foreach ($parent_candidates as $parent) {
+  $hook = false;
+  // 1) Intentar OpenPOS real
+  $parent = csfx_find_openpos_parent_slug();
+  if ($parent) {
     $hook = add_submenu_page($parent, $title, $title, $cap, $slug, 'csfx_render_admin_page');
-    if ($hook) break;
+
   }
-  // Si no se pudo colgar, crear top-level
+  // 2) Fallback WooCommerce
+  if (! $hook && menu_page_url('woocommerce', false)) {
+    $hook = add_submenu_page('woocommerce', $title, $title, $cap, $slug, 'csfx_render_admin_page');
+  }
+  // 3) Fallback top-level
   if (! $hook) {
     add_menu_page($title, $title, $cap, $slug, 'csfx_render_admin_page', 'dashicons-admin-generic', 58.7);
   }
-}, 60);
+  if (defined('CS_FX_DEBUG') && CS_FX_DEBUG) {
+    add_action('admin_notices', function() use ($parent) {
+      echo '<div class="notice notice-info"><p><strong>CSFX Debug:</strong> parent slug detectado: <code>'.esc_html($parent ?: 'fallback').'</code></p></div>';
+    });
+  }
+}, 99);
 
 function csfx_render_admin_page() {
   if (! current_user_can('manage_woocommerce') && ! current_user_can('manage_options')) return;
