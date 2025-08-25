@@ -3,7 +3,7 @@
  * Plugin Name: CS – OpenPOS Precio Dual Dinámico (USD + Bs) via FOX API
  * Description: Muestra precios en USD y Bs en OpenPOS (buscador, addons, carrito y totales) usando FOX API (/currencies). Autodetecta origen local/remoto y mapea VES↔VEF. Incluye barra con tasa y hora.
  * Author: Tavox
- * Version: 2.0.4
+ * Version: 2.0.5
 
 
 
@@ -37,6 +37,8 @@ if ( get_option('csfx_rate_from') === false )        update_option('csfx_rate_fr
 if ( get_option('csfx_rate_to') === false )          update_option('csfx_rate_to', 'VES');
 if ( get_option('csfx_discount_enabled') === false ) update_option('csfx_discount_enabled', 1);
 if ( get_option('csfx_discount_percent') === false ) update_option('csfx_discount_percent', 31.0);
+if ( get_option('csfx_api_sslverify') === false )    update_option('csfx_api_sslverify', 1);
+if ( get_option('csfx_api_fallback_fox') === false ) update_option('csfx_api_fallback_fox', 0);
 
 // ================== ADMIN: MENÚ "Conf Tavox" SIEMPRE VISIBLE ==================
 // Creamos SIEMPRE un menú top-level. Además intentamos colgarlo en WooCommerce y (si existe) en OpenPOS.
@@ -106,6 +108,8 @@ function csfx_render_admin_page() {
     update_option('csfx_rate_to',          sanitize_text_field($_POST['csfx_rate_to'] ?? 'VES'));
     update_option('csfx_discount_enabled', isset($_POST['csfx_discount_enabled']) ? 1 : 0);
     update_option('csfx_discount_percent', floatval(str_replace(',', '.', $_POST['csfx_discount_percent'] ?? '31')));
+        update_option('csfx_api_sslverify',    isset($_POST['csfx_api_sslverify']) ? 1 : 0);
+    update_option('csfx_api_fallback_fox', isset($_POST['csfx_api_fallback_fox']) ? 1 : 0);
     // limpiar cache de tasa
     delete_transient('csfx_rate_cache');
     echo '<div class="updated notice"><p>Configuración guardada.</p></div>';
@@ -117,6 +121,8 @@ function csfx_render_admin_page() {
   $to    = esc_attr(get_option('csfx_rate_to', 'VES'));
   $d_on  = get_option('csfx_discount_enabled', 1);
   $d_pct = floatval(get_option('csfx_discount_percent', 31.0));
+    $sslv  = get_option('csfx_api_sslverify', 1);
+  $fbfox = get_option('csfx_api_fallback_fox', 0);
   ?>
   <div class="wrap">
     <h1>Configuración · Conf Tavox</h1>
@@ -144,6 +150,12 @@ function csfx_render_admin_page() {
         <tr><th scope="row">TTL cache (seg)</th>
           <td><input type="number" min="0" name="csfx_rate_ttl" value="<?php echo $ttl; ?>" class="small-text"> <span class="description">0 = sin cache</span></td>
         </tr>
+              <tr class="csfx-api-row"><th scope="row">Verificar SSL</th>
+          <td><label><input type="checkbox" name="csfx_api_sslverify" <?php checked($sslv, 1); ?>> Habilitar verificación SSL (recomendado)</label></td>
+        </tr>
+        <tr class="csfx-api-row"><th scope="row">Fallback a FOX si API falla</th>
+          <td><label><input type="checkbox" name="csfx_api_fallback_fox" <?php checked($fbfox, 1); ?>> Permitir usar FOX si la API no responde</label></td>
+        </tr>
         <tr><th scope="row">Descuento por pago en USD</th>
           <td>
             <label><input type="checkbox" name="csfx_discount_enabled" <?php checked($d_on, 1); ?>> Activar</label>
@@ -170,11 +182,11 @@ GET <?php echo esc_url( home_url( '/wp-json/csfx/v1/rate' ) ); ?>
     <script>
   (function(){
     const radios = document.querySelectorAll('input[name="csfx_rate_mode"]');
-    const row = document.querySelector('.csfx-api-row');
+    const rows = document.querySelectorAll('.csfx-api-row');
     function update(){
-      if(!row) return;
+
       const val = document.querySelector('input[name="csfx_rate_mode"]:checked')?.value;
-      row.style.display = (val==='api') ? '' : 'none';
+           rows.forEach(r => { r.style.display = (val==='api') ? '' : 'none'; });
     }
     radios.forEach(r => r.addEventListener('change', update));
     update();
@@ -196,6 +208,8 @@ function csfx_get_rate(){
   $from = strtoupper(get_option('csfx_rate_from', 'USD'));
   $to   = strtoupper(get_option('csfx_rate_to', 'VES'));
   $ttl  = intval(get_option('csfx_rate_ttl', 300));
+    $sslv = !! get_option('csfx_api_sslverify', 1);
+  $fbfx = !! get_option('csfx_api_fallback_fox', 0);
   $rate = 0.0; $updated = '';
 
   if ($mode === 'api') {
@@ -204,53 +218,53 @@ function csfx_get_rate(){
       return apply_filters('csfx_rate', $cache);
     }
     $url = trim(get_option('csfx_api_url', ''));
-    // Modo API ESTRICTO: si no hay URL, NO caer a FOX
     if ($url === '') {
-      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'missing_api_url');
-      return apply_filters('csfx_rate', $data);
+      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'missing_api_url','upstream_url'=>$url);
+      if ($fbfx && class_exists('WOOCS')) return apply_filters('csfx_rate', csfx_get_rate_from_fox($from,$to));
+            return apply_filters('csfx_rate', $data);
     }
-    // Fetch remoto
-    $res = wp_remote_get($url, array('timeout'=>6));
+    $res = wp_remote_get($url, array('timeout'=>8, 'sslverify'=>$sslv));
+
     if (is_wp_error($res)) {
-      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'wp_error');
-      return apply_filters('csfx_rate', $data);
+      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'wp_error','wp_error'=>$res->get_error_message(),'upstream_url'=>$url);
+      if ($fbfx && class_exists('WOOCS')) return apply_filters('csfx_rate', csfx_get_rate_from_fox($from,$to));
+            return apply_filters('csfx_rate', $data);
     }
     $code = wp_remote_retrieve_response_code($res);
     if (intval($code) !== 200) {
-      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'http_error');
-      return apply_filters('csfx_rate', $data);
+      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'http_error','http_code'=>intval($code),'upstream_url'=>$url);
+      if ($fbfx && class_exists('WOOCS')) return apply_filters('csfx_rate', csfx_get_rate_from_fox($from,$to));
+            return apply_filters('csfx_rate', $data);
     }
-        $body = json_decode(wp_remote_retrieve_body($res), true);
-    // heurística: buscar campos comunes
+    $body = json_decode(wp_remote_retrieve_body($res), true);
+
     $rate = 0.0;
     if (isset($body['rate']))               $rate = floatval($body['rate']);
     elseif (isset($body['USD_VES']))        $rate = floatval($body['USD_VES']);
-    elseif (isset($body['ves']) )           $rate = floatval($body['ves']);
+    elseif (isset($body['ves']))            $rate = floatval($body['ves']);
     elseif (isset($body['currencies'][$to]['rate'])) $rate = floatval($body['currencies'][$to]['rate']);
     $updated = current_time('c');
-    $data = array('mode'=>'api','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>$updated,'source'=>'api');
+    $data = array('mode'=>'api','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>$updated,'source'=>'api','upstream_url'=>$url,'http_code'=>200);
+
     if ($ttl>0) set_transient('csfx_rate_cache', $data, $ttl);
     return apply_filters('csfx_rate', $data);
   }
 
-  // modo FOX (nativo)
-  if (class_exists('WOOCS')) {
-    global $WOOCS;
-    $currs = is_object($WOOCS) && method_exists($WOOCS, 'get_currencies') ? $WOOCS->get_currencies() : array();
-    // Asumir que 'rate' es respecto a la moneda base de WooCommerce
-    $base = get_option('woocommerce_currency', 'USD');
-    $r_from = ($from===$base) ? 1.0 : floatval($currs[$from]['rate'] ?? 0);
-    $r_to   = ($to===$base)   ? 1.0 : floatval($currs[$to]['rate'] ?? 0);
-    if ($r_from>0 && $r_to>0) {
-      $rate = $r_to / $r_from;
-      $updated = current_time('c');
-      $data = array('mode'=>'fox','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>0,'updated'=>$updated,'source'=>'fox');
-      return apply_filters('csfx_rate', $data);
-    }
-  }
+  if (class_exists('WOOCS')) return apply_filters('csfx_rate', csfx_get_rate_from_fox($from,$to));
 
-  // Fallback final
+
+
   return apply_filters('csfx_rate', array('mode'=>$mode,'rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>$mode));
+}
+function csfx_get_rate_from_fox($from,$to){
+  global $WOOCS;
+  $rate = 0.0; $updated = current_time('c');
+  $currs = is_object($WOOCS) && method_exists($WOOCS, 'get_currencies') ? $WOOCS->get_currencies() : array();
+  $base = get_option('woocommerce_currency', 'USD');
+  $r_from = ($from===$base) ? 1.0 : floatval($currs[$from]['rate'] ?? 0);
+  $r_to   = ($to===$base)   ? 1.0 : floatval($currs[$to]['rate'] ?? 0);
+  if ($r_from>0 && $r_to>0) $rate = $r_to / $r_from;
+  return array('mode'=>'fox','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>0,'updated'=>$updated,'source'=>'fox');
 }
 
 // ================== REST API ==================
@@ -268,8 +282,13 @@ add_action('rest_api_init', function () {
     'methods' => 'GET',
     'permission_callback' => '__return_true',
     'callback' => function () {
-      return rest_ensure_response(csfx_get_rate());
-    },
+      $data = csfx_get_rate();
+      if (isset($_GET['debug']) || (defined('CS_FX_DEBUG') && CS_FX_DEBUG)) {
+        $data['_debug'] = true;
+      } else {
+        unset($data['upstream_url'], $data['wp_error']);
+      }
+      return rest_ensure_response($data);    },
   ));
   register_rest_route('csfx/v1', '/config', array(
     'methods' => 'GET',
@@ -458,7 +477,7 @@ add_filter('openpos_pos_footer_js', function($handles){
     wp_script_add_data('cs-openpos-compat', 'defer', true);
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
-    $ver = '2.0.4';
+    $ver = '2.0.5';
 
 
     if ( file_exists( $asset_path ) ) {
@@ -500,6 +519,10 @@ add_filter('openpos_pos_footer_js', function($handles){
         ],
     ];
     wp_add_inline_script('cs-fx', 'window.__CS_FX_BOOT = '. wp_json_encode($boot, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE) .';', 'before');
+    add_action('wp_footer', function(){
+      $hide_tax = defined('CS_FX_HIDE_TAX') ? (CS_FX_HIDE_TAX ? 'true' : 'false') : 'true';
+      echo "<script>window.CSFX_RATE_ENDPOINT = '".esc_js( rest_url('csfx/v1/rate') )."'; window.CSFX_OPTS = { hideTax: {$hide_tax} };</script>";
+    }, 99);
 
     // al final del POS añádeme
     $handles[] = 'cs-openpos-compat';

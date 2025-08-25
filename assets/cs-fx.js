@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v2.0.4 – 2025-08-24
+ * v2.0.5 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -87,6 +87,7 @@
     window.csfx = def; // para debug externo
     return def;
   })();
+  FX.hideTax = !!(window.CSFX_OPTS && window.CSFX_OPTS.hideTax);
 
     function csfxClearLegacyStores(){
     try { localStorage.removeItem('YU_BCV_RATE'); } catch(_){ }
@@ -676,13 +677,21 @@
   
   function decorateTotals() {
 
-    if (!FX.rate) return;
+
 
     var container = findTotalsContainer();
+        if (FX.hideTax && container) {
+      var tax0 = findTotalsRow(container, /impuesto|tax/i);
+      if (tax0) hideHard(anchorRow(tax0));
+    }
+    if (!FX.rate) {
+      if (container) container.querySelectorAll('.csfx-total-row,[data-csfx]').forEach(function (n) { n.remove(); });
+      return;
+    }
     if (!container) return;
     if (!container.dataset.csfxPad) { container.style.paddingBottom = '64px'; container.dataset.csfxPad = '1'; }
 
-  // limpiar nuestras filas anteriores
+
     container.querySelectorAll('.csfx-cart-row, .csfx-total-row[data-csfx="total-final"]').forEach(function (n) { n.remove(); });
     var subRow = findTotalsRow(container, /(^|\s)subtotal(\s|$)/i);
 
@@ -690,28 +699,27 @@
     var taxRow = findTotalsRow(container, /impuesto|tax/i);
     var totRow = findTotalsRow(container, /^total(?!.*\(bs\))/i);
 
-    // *** LÉELO SOLO DE LA COLUMNA DE VALOR ***
+
     var usdS = readUsdFromRow(subRow);
     var usdD = Math.abs(readUsdFromRow(discRow)) || 0;
     var usdI = readUsdFromRow(taxRow);
     var usdT = readUsdFromRow(totRow);
 
-    // Fallbacks de TOTAL
+    
     if (isNaN(usdT) && !isNaN(usdS)) usdT = usdS - usdD + (isNaN(usdI) ? 0 : usdI);
     if (isNaN(usdT)) {
       var btnUsd = readCheckoutUSD();
       if (!isNaN(btnUsd)) usdT = btnUsd;
     }
-    // Fallbacks de SUBTOTAL
+  
     if (isNaN(usdS) && !isNaN(usdT)) usdS = usdT + usdD - (isNaN(usdI) ? 0 : usdI);
     if (isNaN(usdS)) {
       var btnUsd2 = readCheckoutUSD();
       if (!isNaN(btnUsd2)) usdS = btnUsd2 + usdD - usdI;
     }
-    // ocultar impuestos si está activo
+   
 
-    if (FX.hideTax && taxRow) hideHard(anchorRow(taxRow));
-    // --- SUBTOTAL (Bs.) INLINE (debajo del USD, alineado a la derecha) ---
+
     var legacy = container.querySelector('[data-csfx="summary-bs"]');
     if (legacy) legacy.remove();
     var subValEl = pickValueElement(subRow);
@@ -727,9 +735,9 @@
     }
 
 
-     // --- TOTAL FINAL (Bs.) SOLO SI HAY DESCUENTO ---
+
     if (discRow) {
-           // remover “Total” nativo si existe
+  
       var totA = anchorRow(totRow);
       if (totA) totA.remove();
       var after = anchorRow(discRow);
@@ -739,7 +747,7 @@
       rowFinal.innerHTML = '<span>Total Final (Bs.)</span><span class="csfx-amount" data-csfx="tot-bs"></span>';
       if (after) after.insertAdjacentElement('afterend', rowFinal);
       var totSp = rowFinal.querySelector('[data-csfx="tot-bs"]');
-      // cálculo preferente: SUBTOTAL - DESCUENTO + IMPUESTOS
+ 
       var usdFinal = !isNaN(usdS) ? (usdS - usdD + (isNaN(usdI) ? 0 : usdI)) : NaN;
       if (isNaN(usdFinal) && !isNaN(usdT)) usdFinal = usdT;
 
@@ -747,7 +755,7 @@
         var b = readCheckoutUSD();
         if (!isNaN(b)) usdFinal = b;
       }
-            if (totSp && !isNaN(usdFinal)) totSp.textContent = fmtBs(usd2bs(usdFinal));
+             if (totSp && !isNaN(usdFinal)) totSp.textContent = fmtBs(usd2bs(usdFinal));
 
     }
     positionBadge();
@@ -1032,10 +1040,15 @@
     // Inicializar posicionamiento del badge y carga de tasa al cargar el DOM
   document.addEventListener('DOMContentLoaded', function(){
     try {
-       if (typeof initBadgePositioning === 'function') initBadgePositioning();
+      if (typeof initBadgePositioning === 'function') initBadgePositioning();
       csfxClearLegacyStores();
-      refreshRate(function(){ schedule(runAll); });
-    } catch(e){}
+     refreshRate(function(){
+        try {
+          var badge = document.querySelector('.csfx-badge-content');
+          if (badge && !FX.rate) badge.innerHTML = '<strong>Tasa BCV:</strong> (sin datos)';
+        } catch(e){}
+        schedule(runAll);
+      });    } catch(e){}
   });
 
   // --- Observer de DOM con throttling ---
