@@ -3,7 +3,7 @@
  * Plugin Name: CS – OpenPOS Precio Dual Dinámico (USD + Bs) via FOX API
  * Description: Muestra precios en USD y Bs en OpenPOS (buscador, addons, carrito y totales) usando FOX API (/currencies). Autodetecta origen local/remoto y mapea VES↔VEF. Incluye barra con tasa y hora.
  * Author: Tavox
- * Version: 2.0.5
+ * Version: 2.0.6
 
 
 
@@ -208,8 +208,10 @@ function csfx_get_rate(){
   $from = strtoupper(get_option('csfx_rate_from', 'USD'));
   $to   = strtoupper(get_option('csfx_rate_to', 'VES'));
   $ttl  = intval(get_option('csfx_rate_ttl', 300));
-    $sslv = !! get_option('csfx_api_sslverify', 1);
+  $sslv = !! get_option('csfx_api_sslverify', 1);
   $fbfx = !! get_option('csfx_api_fallback_fox', 0);
+    $ua   = 'CSFX/2.0 (+'.home_url('/').')';
+  $args = array('timeout'=>10, 'sslverify'=>$sslv, 'redirection'=>3, 'headers'=>array('Accept'=>'application/json', 'User-Agent'=>$ua));
   $rate = 0.0; $updated = '';
 
   if ($mode === 'api') {
@@ -219,11 +221,10 @@ function csfx_get_rate(){
     }
     $url = trim(get_option('csfx_api_url', ''));
     if ($url === '') {
-      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'missing_api_url','upstream_url'=>$url);
-      if ($fbfx && class_exists('WOOCS')) return apply_filters('csfx_rate', csfx_get_rate_from_fox($from,$to));
-            return apply_filters('csfx_rate', $data);
+        $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'missing_api_url');
+      return apply_filters('csfx_rate', $data);
     }
-    $res = wp_remote_get($url, array('timeout'=>8, 'sslverify'=>$sslv));
+    $res = wp_remote_get($url, $args);
 
     if (is_wp_error($res)) {
       $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'wp_error','wp_error'=>$res->get_error_message(),'upstream_url'=>$url);
@@ -243,6 +244,8 @@ function csfx_get_rate(){
     elseif (isset($body['USD_VES']))        $rate = floatval($body['USD_VES']);
     elseif (isset($body['ves']))            $rate = floatval($body['ves']);
     elseif (isset($body['currencies'][$to]['rate'])) $rate = floatval($body['currencies'][$to]['rate']);
+        elseif (is_string($body) || is_numeric($body))   $rate = floatval($body); // algunos endpoints devuelven sólo el número
+
     $updated = current_time('c');
     $data = array('mode'=>'api','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>$updated,'source'=>'api','upstream_url'=>$url,'http_code'=>200);
 
@@ -283,10 +286,11 @@ add_action('rest_api_init', function () {
     'permission_callback' => '__return_true',
     'callback' => function () {
       $data = csfx_get_rate();
-      if (isset($_GET['debug']) || (defined('CS_FX_DEBUG') && CS_FX_DEBUG)) {
+      $debug = isset($_GET['debug']) || (defined('CS_FX_DEBUG') && CS_FX_DEBUG);
+      if ($debug) {
         $data['_debug'] = true;
       } else {
-        unset($data['upstream_url'], $data['wp_error']);
+        unset($data['upstream_url'], $data['wp_error'], $data['http_code']);
       }
       return rest_ensure_response($data);    },
   ));
@@ -477,7 +481,8 @@ add_filter('openpos_pos_footer_js', function($handles){
     wp_script_add_data('cs-openpos-compat', 'defer', true);
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
-    $ver = '2.0.5';
+    $ver = '2.0.6';
+
 
 
     if ( file_exists( $asset_path ) ) {
@@ -520,6 +525,8 @@ add_filter('openpos_pos_footer_js', function($handles){
     ];
     wp_add_inline_script('cs-fx', 'window.__CS_FX_BOOT = '. wp_json_encode($boot, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE) .';', 'before');
     add_action('wp_footer', function(){
+            // Por seguridad UX, default a true
+
       $hide_tax = defined('CS_FX_HIDE_TAX') ? (CS_FX_HIDE_TAX ? 'true' : 'false') : 'true';
       echo "<script>window.CSFX_RATE_ENDPOINT = '".esc_js( rest_url('csfx/v1/rate') )."'; window.CSFX_OPTS = { hideTax: {$hide_tax} };</script>";
     }, 99);

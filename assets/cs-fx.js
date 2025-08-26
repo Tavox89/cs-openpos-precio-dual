@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v2.0.5 – 2025-08-24
+ * v2.0.6 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
@@ -21,7 +21,7 @@
   var OPCompat = window.OpenPOSCompat || {};
 
   // --- Config FX (mezcla BOOT + localStorage) ---
-  var FX = (function () {
+  var FX = window.CSFX = (function () {
     var def = {
       enabled: true,
       base: 'USD',
@@ -35,7 +35,7 @@
       ttl: 300,
       ajax: '',
       badge: true,
-       hideTax: false,
+      hideTax: true,
       searchBs: true,
       payChips: true,
        addonsBs: true,
@@ -87,7 +87,9 @@
     window.csfx = def; // para debug externo
     return def;
   })();
-  FX.hideTax = !!(window.CSFX_OPTS && window.CSFX_OPTS.hideTax);
+  FX.hideTax = true;
+  // si vienen opciones desde PHP, las respetamos; si no, default true
+  if (window.CSFX_OPTS && typeof window.CSFX_OPTS.hideTax !== 'undefined') FX.hideTax = !!window.CSFX_OPTS.hideTax;
 
     function csfxClearLegacyStores(){
     try { localStorage.removeItem('YU_BCV_RATE'); } catch(_){ }
@@ -680,7 +682,8 @@
 
 
     var container = findTotalsContainer();
-        if (FX.hideTax && container) {
+   // 1) Ocultar impuestos SIEMPRE si la opción está activa, aunque no haya tasa
+    if (FX.hideTax && container) {
       var tax0 = findTotalsRow(container, /impuesto|tax/i);
       if (tax0) hideHard(anchorRow(tax0));
     }
@@ -691,6 +694,7 @@
     if (!container) return;
     if (!container.dataset.csfxPad) { container.style.paddingBottom = '64px'; container.dataset.csfxPad = '1'; }
 
+    // 2) Con tasa válida, pintar Subtotal (Bs.) inline + Total Final (Bs.)
 
     container.querySelectorAll('.csfx-cart-row, .csfx-total-row[data-csfx="total-final"]').forEach(function (n) { n.remove(); });
     var subRow = findTotalsRow(container, /(^|\s)subtotal(\s|$)/i);
@@ -1047,7 +1051,7 @@
           var badge = document.querySelector('.csfx-badge-content');
           if (badge && !FX.rate) badge.innerHTML = '<strong>Tasa BCV:</strong> (sin datos)';
         } catch(e){}
-        schedule(runAll);
+        runAll();
       });    } catch(e){}
   });
 
