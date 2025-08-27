@@ -3,7 +3,8 @@
  * Plugin Name: CS – OpenPOS Precio Dual Dinámico (USD + Bs) via FOX API
  * Description: Muestra precios en USD y Bs en OpenPOS (buscador, addons, carrito y totales) usando FOX API (/currencies). Autodetecta origen local/remoto y mapea VES↔VEF. Incluye barra con tasa y hora.
  * Author: Tavox
- * Version: 2.0.6
+ * Version: 2.1.0
+
 
 
 
@@ -99,19 +100,39 @@ add_action('admin_menu', function () {
 
 function csfx_render_admin_page() {
   if (! current_user_can('manage_woocommerce') && ! current_user_can('manage_options')) return;
-  if (isset($_POST['csfx_save'])) {
+  $do_test = isset($_POST['csfx_save_test']);
+  if (isset($_POST['csfx_save']) || $do_test) {
     check_admin_referer('csfx_save_opts');
-    update_option('csfx_rate_mode',        in_array($_POST['csfx_rate_mode'] ?? 'api', array('api','fox'), true) ? $_POST['csfx_rate_mode'] : 'api');
-    update_option('csfx_api_url',          esc_url_raw($_POST['csfx_api_url'] ?? ''));
-    update_option('csfx_rate_ttl',         max(0, intval($_POST['csfx_rate_ttl'] ?? 300)));
-    update_option('csfx_rate_from',        sanitize_text_field($_POST['csfx_rate_from'] ?? 'USD'));
-    update_option('csfx_rate_to',          sanitize_text_field($_POST['csfx_rate_to'] ?? 'VES'));
+    $mode_post = in_array($_POST['csfx_rate_mode'] ?? 'api', array('api','fox'), true) ? $_POST['csfx_rate_mode'] : 'api';
+    update_option('csfx_rate_mode', $mode_post);
+    $api_url  = esc_url_raw($_POST['csfx_api_url'] ?? '');
+    update_option('csfx_api_url', $api_url);
+    $ttl_post = max(0, intval($_POST['csfx_rate_ttl'] ?? 300));
+    update_option('csfx_rate_ttl', $ttl_post);
+    $from_post = sanitize_text_field($_POST['csfx_rate_from'] ?? 'USD');
+    update_option('csfx_rate_from', $from_post);
+    $to_post   = sanitize_text_field($_POST['csfx_rate_to'] ?? 'VES');
+    update_option('csfx_rate_to', $to_post);
     update_option('csfx_discount_enabled', isset($_POST['csfx_discount_enabled']) ? 1 : 0);
     update_option('csfx_discount_percent', floatval(str_replace(',', '.', $_POST['csfx_discount_percent'] ?? '31')));
-        update_option('csfx_api_sslverify',    isset($_POST['csfx_api_sslverify']) ? 1 : 0);
-    update_option('csfx_api_fallback_fox', isset($_POST['csfx_api_fallback_fox']) ? 1 : 0);
+    $sslv = isset($_POST['csfx_api_sslverify']) ? 1 : 0;
+    update_option('csfx_api_sslverify', $sslv);
+    $fbfox = isset($_POST['csfx_api_fallback_fox']) ? 1 : 0;
+    update_option('csfx_api_fallback_fox', $fbfox);
     // limpiar cache de tasa
     delete_transient('csfx_rate_cache');
+        if ($do_test) {
+      $ua   = 'CSFX/2.1 (+'.home_url('/').')';
+      $args = array(
+        'timeout'  => 10,
+        'sslverify'=> $sslv,
+        'redirection'=>3,
+        'headers' => array('Accept'=>'application/json', 'User-Agent'=>$ua),
+        'reject_unsafe_urls' => true,
+        'decompress' => true,
+      );
+      csfx_probe_api($api_url, $args, $to_post);
+    }
     echo '<div class="updated notice"><p>Configuración guardada.</p></div>';
   }
   $mode  = get_option('csfx_rate_mode', 'api');
@@ -121,8 +142,11 @@ function csfx_render_admin_page() {
   $to    = esc_attr(get_option('csfx_rate_to', 'VES'));
   $d_on  = get_option('csfx_discount_enabled', 1);
   $d_pct = floatval(get_option('csfx_discount_percent', 31.0));
-    $sslv  = get_option('csfx_api_sslverify', 1);
+  $sslv  = get_option('csfx_api_sslverify', 1);
+
   $fbfox = get_option('csfx_api_fallback_fox', 0);
+    $health = get_option('csfx_last_api_ok');
+  if (!$health) $health = get_option('csfx_last_api_err');
   ?>
   <div class="wrap">
     <h1>Configuración · Conf Tavox</h1>
@@ -165,6 +189,15 @@ function csfx_render_admin_page() {
         </tr>
       </table>
       <?php submit_button('Guardar cambios', 'primary', 'csfx_save'); ?>
+            <h2 class="csfx-api-row">Health / Probar API ahora</h2>
+      <table class="form-table csfx-api-row" role="presentation">
+        <tr><th scope="row">Status</th><td><?php echo $health ? esc_html($health['status']) : 'n/d'; ?></td></tr>
+        <tr><th scope="row">HTTP / wp_error</th><td><?php echo isset($health['http_code']) ? intval($health['http_code']) : esc_html($health['wp_error'] ?? ''); ?></td></tr>
+        <tr><th scope="row">URL</th><td><code><?php echo esc_html($health['upstream_url'] ?? ''); ?></code></td></tr>
+        <tr><th scope="row">Rate</th><td><?php echo isset($health['rate']) ? esc_html($health['rate']) : ''; ?></td></tr>
+        <tr><th scope="row">When</th><td><?php echo esc_html($health['when'] ?? ''); ?></td></tr>
+      </table>
+      <?php submit_button('Guardar y Probar', 'secondary', 'csfx_save_test'); ?>
     </form>
     <hr>
     <h2>Mini-API (REST)</h2>
@@ -202,7 +235,63 @@ function csfx_get_discount(){
   $out    = array('active'=>$active, 'percent'=>$pct);
   return apply_filters('csfx_discount', $out);
 }
+function csfx_is_self_url($url){
+  $host = wp_parse_url(home_url('/'), PHP_URL_HOST);
+  $u    = wp_parse_url($url, PHP_URL_HOST);
+  return $host && $u && strtolower($host) === strtolower($u);
+}
 
+function csfx_probe_api($url, $args = array(), $to = 'VES'){
+  $out  = array('upstream_url'=>$url);
+  $when = current_time('mysql');
+  if (! $url) {
+    $out['status'] = 'error';
+    $out['error']  = 'missing_api_url';
+    update_option('csfx_last_api_err', $out + array('when'=>$when), false);
+    return $out;
+  }
+  if (csfx_is_self_url($url)) {
+    $out['status'] = 'error';
+    $out['error']  = 'self_url';
+    update_option('csfx_last_api_err', $out + array('when'=>$when), false);
+    return $out;
+  }
+  $args = wp_parse_args($args, array('reject_unsafe_urls'=>true, 'decompress'=>true));
+  $res = wp_remote_get($url, $args);
+  if (is_wp_error($res)) {
+    $out['status']   = 'error';
+    $out['error']    = 'wp_error';
+    $out['wp_error'] = $res->get_error_message();
+    update_option('csfx_last_api_err', $out + array('when'=>$when), false);
+    return $out;
+  }
+  $code = wp_remote_retrieve_response_code($res);
+  $out['http_code'] = intval($code);
+  if (intval($code) !== 200) {
+    $out['status'] = 'error';
+    $out['error']  = 'http_error';
+    update_option('csfx_last_api_err', $out + array('when'=>$when), false);
+    return $out;
+  }
+  $body = wp_remote_retrieve_body($res);
+  $json = json_decode($body, true);
+  $rate = 0.0;
+  if (is_array($json)) {
+    if (isset($json['rate']))               $rate = floatval($json['rate']);
+    elseif (isset($json['USD_VES']))        $rate = floatval($json['USD_VES']);
+    elseif (isset($json['ves']))            $rate = floatval($json['ves']);
+    elseif (isset($json['currencies'][$to]['rate'])) $rate = floatval($json['currencies'][$to]['rate']);
+  } elseif (is_numeric($json)) {
+    $rate = floatval($json);
+  } elseif (is_numeric(trim($body))) {
+    $rate = floatval(trim($body));
+  }
+  $out['status'] = 'ok';
+  $out['rate']   = $rate;
+  update_option('csfx_last_api_ok', $out + array('when'=>$when), false);
+  delete_option('csfx_last_api_err');
+  return $out;
+}
 function csfx_get_rate(){
   $mode = get_option('csfx_rate_mode', 'api');
   $from = strtoupper(get_option('csfx_rate_from', 'USD'));
@@ -210,46 +299,34 @@ function csfx_get_rate(){
   $ttl  = intval(get_option('csfx_rate_ttl', 300));
   $sslv = !! get_option('csfx_api_sslverify', 1);
   $fbfx = !! get_option('csfx_api_fallback_fox', 0);
-    $ua   = 'CSFX/2.0 (+'.home_url('/').')';
-  $args = array('timeout'=>10, 'sslverify'=>$sslv, 'redirection'=>3, 'headers'=>array('Accept'=>'application/json', 'User-Agent'=>$ua));
-  $rate = 0.0; $updated = '';
+  $ua   = 'CSFX/2.1 (+'.home_url('/').')';
+  $args = array('timeout'=>10, 'sslverify'=>$sslv, 'redirection'=>3, 'headers'=>array('Accept'=>'application/json', 'User-Agent'=>$ua), 'reject_unsafe_urls'=>true, 'decompress'=>true);
 
   if ($mode === 'api') {
     $cache = get_transient('csfx_rate_cache');
     if (is_array($cache) && isset($cache['rate'])) {
       return apply_filters('csfx_rate', $cache);
     }
-    $url = trim(get_option('csfx_api_url', ''));
-    if ($url === '') {
-        $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'missing_api_url');
-      return apply_filters('csfx_rate', $data);
+    $url   = trim(get_option('csfx_api_url', ''));
+    $probe = csfx_probe_api($url, $args, $to);
+    if (($probe['status'] ?? '') === 'ok') {
+      $rate    = (float)($probe['rate'] ?? 0);
+      $updated = current_time('c');
+      $data = array('mode'=>'api','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>$updated,'source'=>'api','upstream_url'=>$url,'http_code'=>$probe['http_code'] ?? 200);
+      if ($ttl>0) set_transient('csfx_rate_cache', $data, $ttl);
     }
-    $res = wp_remote_get($url, $args);
-
-    if (is_wp_error($res)) {
-      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'wp_error','wp_error'=>$res->get_error_message(),'upstream_url'=>$url);
-      if ($fbfx && class_exists('WOOCS')) return apply_filters('csfx_rate', csfx_get_rate_from_fox($from,$to));
-            return apply_filters('csfx_rate', $data);
+    $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>$probe['error'] ?? 'unknown','upstream_url'=>$url);
+    if (isset($probe['http_code'])) $data['http_code'] = $probe['http_code'];
+    if (isset($probe['wp_error']))  $data['wp_error']  = $probe['wp_error'];
+    if ($fbfx && class_exists('WOOCS')) {
+      $fox = csfx_get_rate_from_fox($from,$to);
+      $fox['error'] = $probe['error'] ?? 'unknown';
+      $fox['upstream_url'] = $url;
+      if (isset($probe['http_code'])) $fox['http_code'] = $probe['http_code'];
+      if (isset($probe['wp_error'])) $fox['wp_error'] = $probe['wp_error'];
+      return apply_filters('csfx_rate', $fox);
     }
-    $code = wp_remote_retrieve_response_code($res);
-    if (intval($code) !== 200) {
-      $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>'http_error','http_code'=>intval($code),'upstream_url'=>$url);
-      if ($fbfx && class_exists('WOOCS')) return apply_filters('csfx_rate', csfx_get_rate_from_fox($from,$to));
-            return apply_filters('csfx_rate', $data);
-    }
-    $body = json_decode(wp_remote_retrieve_body($res), true);
 
-    $rate = 0.0;
-    if (isset($body['rate']))               $rate = floatval($body['rate']);
-    elseif (isset($body['USD_VES']))        $rate = floatval($body['USD_VES']);
-    elseif (isset($body['ves']))            $rate = floatval($body['ves']);
-    elseif (isset($body['currencies'][$to]['rate'])) $rate = floatval($body['currencies'][$to]['rate']);
-        elseif (is_string($body) || is_numeric($body))   $rate = floatval($body); // algunos endpoints devuelven sólo el número
-
-    $updated = current_time('c');
-    $data = array('mode'=>'api','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>$updated,'source'=>'api','upstream_url'=>$url,'http_code'=>200);
-
-    if ($ttl>0) set_transient('csfx_rate_cache', $data, $ttl);
     return apply_filters('csfx_rate', $data);
   }
 
@@ -481,7 +558,8 @@ add_filter('openpos_pos_footer_js', function($handles){
     wp_script_add_data('cs-openpos-compat', 'defer', true);
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
-    $ver = '2.0.6';
+    $ver = '2.1.0';
+
 
 
 

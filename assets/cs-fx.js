@@ -1,6 +1,6 @@
 /*!
  * CS – OpenPOS Precio Dual Dinámico (USD + Bs)
- * v2.0.6 – 2025-08-24
+ * v2.1.0 – 2025-08-24
  * Muestra Bs en buscador, addons, carrito y totales del POS.
  * Seguro para Angular: idempotente, con throttling y sin mutar contenedores base.
  */
