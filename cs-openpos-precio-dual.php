@@ -3,11 +3,7 @@
  * Plugin Name: CS – OpenPOS Precio Dual Dinámico (USD + Bs) via FOX API
  * Description: Muestra precios en USD y Bs en OpenPOS (buscador, addons, carrito y totales) usando FOX API (/currencies). Autodetecta origen local/remoto y mapea VES↔VEF. Incluye barra con tasa y hora.
  * Author: Tavox
- * Version: 2.1.0
-
-
-
-
+ * Version: 2.1.2
  */
 
 if ( ! defined('ABSPATH') ) exit;
@@ -136,6 +132,12 @@ function csfx_render_admin_page() {
     echo '<div class="updated notice"><p>Configuración guardada.</p></div>';
   }
   $mode  = get_option('csfx_rate_mode', 'api');
+   if ($mode === 'fox' && !class_exists('WOOCS')) {
+    add_action('admin_notices', function() {
+      $url = admin_url('plugins.php');
+      echo '<div class="notice notice-warning"><p>Modo Nativo requiere FOX (WOOCS) activo. <a href="' . esc_url($url) . '">Ir a Plugins</a></p></div>';
+    });
+  }
   $api   = esc_attr(get_option('csfx_api_url', ''));
   $ttl   = intval(get_option('csfx_rate_ttl', 300));
   $from  = esc_attr(get_option('csfx_rate_from', 'USD'));
@@ -145,7 +147,7 @@ function csfx_render_admin_page() {
   $sslv  = get_option('csfx_api_sslverify', 1);
 
   $fbfox = get_option('csfx_api_fallback_fox', 0);
-    $health = get_option('csfx_last_api_ok');
+  $health = get_option('csfx_last_api_ok');
   if (!$health) $health = get_option('csfx_last_api_err');
   ?>
   <div class="wrap">
@@ -195,6 +197,8 @@ function csfx_render_admin_page() {
         <tr><th scope="row">HTTP / wp_error</th><td><?php echo isset($health['http_code']) ? intval($health['http_code']) : esc_html($health['wp_error'] ?? ''); ?></td></tr>
         <tr><th scope="row">URL</th><td><code><?php echo esc_html($health['upstream_url'] ?? ''); ?></code></td></tr>
         <tr><th scope="row">Rate</th><td><?php echo isset($health['rate']) ? esc_html($health['rate']) : ''; ?></td></tr>
+        <tr><th scope="row">Mode</th><td><code><?php echo esc_html($health['mode'] ?? '-'); ?></code></td></tr>
+        <tr><th scope="row">Source</th><td><code><?php echo esc_html($health['source'] ?? '-'); ?></code></td></tr>
         <tr><th scope="row">When</th><td><?php echo esc_html($health['when'] ?? ''); ?></td></tr>
       </table>
       <?php submit_button('Guardar y Probar', 'secondary', 'csfx_save_test'); ?>
@@ -558,10 +562,7 @@ add_filter('openpos_pos_footer_js', function($handles){
     wp_script_add_data('cs-openpos-compat', 'defer', true);
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
-    $ver = '2.1.0';
-
-
-
+    $ver = '2.1.2';
 
     if ( file_exists( $asset_path ) ) {
         $ver .= '.' . filemtime( $asset_path );
