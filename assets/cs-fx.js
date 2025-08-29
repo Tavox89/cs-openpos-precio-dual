@@ -88,6 +88,9 @@
     return def;
   })();
   FX.hideTax = true;
+  // Estado inicial para el descuento; se rellenará tras consultar la mini‑API
+  // No dependemos de storage para el descuento global
+  FX.disc = { active: false, percent: 0 };
   // si vienen opciones desde PHP, las respetamos; si no, default true
   if (window.CSFX_OPTS && typeof window.CSFX_OPTS.hideTax !== 'undefined') FX.hideTax = !!window.CSFX_OPTS.hideTax;
 
@@ -191,7 +194,9 @@
       '.csfx-bs-chip{font-size:16px;font-weight:700;color:#1e3a8a;background:rgba(0,87,183,.10);padding:.2rem .5rem;border-radius:12px;position:absolute;top:50%;transform:translateY(-50%);right:0;}',
       '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;overflow:visible;padding-right:2rem;}',
       '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
-      '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}'
+      '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
+      /* Chip USD con descuento (se inserta dentro del chip Bs en buscador) */
+      '.csfx-usd-disc-inside{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:12px;font-weight:700;font-size:12px;line-height:1.4;background:#e9ecf5;color:#1e2a44;white-space:nowrap;vertical-align:middle;}'
 
     ].join('');
     var el = document.createElement('style');
@@ -329,7 +334,21 @@
         chip.style.boxShadow = FX.style.vipSearchShadow || '';
       }
       
-      chip.textContent = fmtBs(usd2bs(usdVal));
+      // Calcular monto en Bs y armar contenido del chip. Si existe un
+      // descuento activo, se muestra el valor en USD con descuento al lado
+      // dentro del mismo chip para no alterar el layout del buscador.
+      var bsText = fmtBs(usd2bs(usdVal));
+      // Reiniciar contenido del chip
+      chip.innerHTML = '';
+      chip.appendChild(document.createTextNode(bsText));
+      if (FX.disc && FX.disc.active && FX.disc.percent > 0) {
+        var usdDisc = usdVal * (1 - FX.disc.percent / 100);
+        var discSpan = document.createElement('span');
+        discSpan.className = 'csfx-usd-disc-inside';
+        discSpan.title = 'USD con descuento (' + FX.disc.percent + '%)';
+        discSpan.textContent = (new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(usdDisc)) + '$';
+        chip.appendChild(discSpan);
+      }
 
       // tipografía simétrica (copiar del USD, sin tocar USD)
       const cs = getComputedStyle(priceEl);
@@ -765,17 +784,36 @@
     positionBadge();
 
   }
+  // --- Conversor de timestamps a Date robusto ---
+  function parseUpdated(u){
+    if (!u) return null;
+    if (typeof u === 'number') {
+      // epoch en segundos → milisegundos; si ya viene en ms, no multiplicar
+      return new Date(u < 1e12 ? u * 1000 : u);
+    }
+    if (typeof u === 'string') {
+      var d1 = new Date(u);
+      if (!isNaN(d1.getTime())) return d1;
+      var n = parseFloat(u);
+      if (!isNaN(n)) return new Date(n < 1e12 ? n * 1000 : n);
+    }
+    return null;
+  }
+
   function buildInfoText() {
-  var t = '<strong>Tasa BCV:</strong> ' + (FX.rate ? FX.rate.toFixed(FX.decimals) : '(sin datos)');
-    if (FX.updated) {
-      var d = new Date(FX.updated * 1000);
-         var hh;
+    var t = '<strong>Tasa BCV:</strong> ' + (FX.rate ? FX.rate.toFixed(FX.decimals) : '(sin datos)');
+    var d = parseUpdated(FX.updated);
+    if (d) {
+      var hh;
       try {
         hh = d.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
       } catch (e) {
-           hh = d.getHours() + ':' + ('' + d.getMinutes()).padStart(2, '0');
+        hh = d.getHours() + ':' + ('' + d.getMinutes()).padStart(2, '0');
       }
-            t += ' · <strong>Actualizado:</strong> ' + hh;
+      t += ' · <strong>Actualizado:</strong> ' + hh;
+    }
+    if (FX.disc && FX.disc.active && FX.disc.percent > 0) {
+      t += ' · <strong>Desc:</strong> ' + FX.disc.percent + '%';
     }
     return t;
   }
@@ -1041,6 +1079,25 @@
       });
   }
 
+  // --- Refresco del descuento mediante API ---
+  function refreshDiscount(cb){
+    var url = (window.CSFX_DISCOUNT_ENDPOINT || '/wp-json/csfx/v1/discount') + '?ts=' + Date.now();
+    fetch(url, { cache: 'no-store', credentials: 'same-origin' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        FX.disc = {
+          active: !!(j && j.active && Number(j.percent) > 0),
+          percent: Number(j && j.percent || 0)
+        };
+        ensureBadge();
+        cb && cb();
+      })
+      .catch(function(){
+        FX.disc = { active:false, percent:0 };
+        cb && cb();
+      });
+  }
+
     // Inicializar posicionamiento del badge y carga de tasa al cargar el DOM
   document.addEventListener('DOMContentLoaded', function(){
     try {
@@ -1051,7 +1108,8 @@
           var badge = document.querySelector('.csfx-badge-content');
           if (badge && !FX.rate) badge.innerHTML = '<strong>Tasa BCV:</strong> (sin datos)';
         } catch(e){}
-        runAll();
+        // Tras refrescar la tasa, refrescamos el descuento y luego ejecutamos decoradores
+        refreshDiscount(function(){ runAll(); });
       });    } catch(e){}
   });
 
@@ -1065,4 +1123,13 @@
   // Kickstart
 
   setInterval(function () { refreshRate(function () { schedule(runAll); }); }, (FX.ttl || 300) * 1000);
+
+  // Intervalo para refrescar el descuento periódicamente (p.ej. cada 60 segundos)
+  setInterval(function(){
+    refreshDiscount(function(){
+      // Actualizamos solo el buscador y el badge para evitar recargar todo
+      schedule(decorateSearch);
+      ensureBadge();
+    });
+  }, 60 * 1000);
 })();

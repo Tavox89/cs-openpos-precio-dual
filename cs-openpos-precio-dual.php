@@ -367,13 +367,24 @@ add_action('rest_api_init', function () {
     'permission_callback' => '__return_true',
     'callback' => function () {
       $data = csfx_get_rate();
+      // Normaliza el campo "updated" a epoch (segundos) si no es numérico. Esto
+      // evita que el front reciba cadenas ISO y reduzca las posibilidades de
+      // mostrar "Invalid Date".
+      if (!empty($data['updated']) && !is_numeric($data['updated'])) {
+        $ts = strtotime($data['updated']);
+        if ($ts) {
+          // strtotime devuelve segundos; asignamos tal cual
+          $data['updated'] = $ts;
+        }
+      }
       $debug = isset($_GET['debug']) || (defined('CS_FX_DEBUG') && CS_FX_DEBUG);
       if ($debug) {
         $data['_debug'] = true;
       } else {
         unset($data['upstream_url'], $data['wp_error'], $data['http_code']);
       }
-      return rest_ensure_response($data);    },
+      return rest_ensure_response($data);
+    },
   ));
   register_rest_route('csfx/v1', '/config', array(
     'methods' => 'GET',
@@ -562,7 +573,10 @@ add_filter('openpos_pos_footer_js', function($handles){
     wp_script_add_data('cs-openpos-compat', 'defer', true);
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
-    $ver = '2.1.2';
+    // Actualizamos la versión del script principal. Este número se incrementa al añadir
+    // nuevas funcionalidades (por ejemplo: soporte para descuento) sin afectar la
+    // compatibilidad del plugin. El filemtime() sigue sumándose al final para bust de caché.
+    $ver = '2.2.4';
 
     if ( file_exists( $asset_path ) ) {
         $ver .= '.' . filemtime( $asset_path );
@@ -604,10 +618,17 @@ add_filter('openpos_pos_footer_js', function($handles){
     ];
     wp_add_inline_script('cs-fx', 'window.__CS_FX_BOOT = '. wp_json_encode($boot, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE) .';', 'before');
     add_action('wp_footer', function(){
-            // Por seguridad UX, default a true
-
+      // Inyectar los endpoints utilizados por el front. Se define siempre un
+      // endpoint de tasa y un endpoint de descuento para permitir refrescos
+      // independientes. También exportamos opciones como hideTax.
       $hide_tax = defined('CS_FX_HIDE_TAX') ? (CS_FX_HIDE_TAX ? 'true' : 'false') : 'true';
-      echo "<script>window.CSFX_RATE_ENDPOINT = '".esc_js( rest_url('csfx/v1/rate') )."'; window.CSFX_OPTS = { hideTax: {$hide_tax} };</script>";
+      $rate_url = esc_js( rest_url('csfx/v1/rate') );
+      $disc_url = esc_js( rest_url('csfx/v1/discount') );
+      echo "<script>\n";
+      echo "  window.CSFX_RATE_ENDPOINT = '" . $rate_url . "';\n";
+      echo "  window.CSFX_DISCOUNT_ENDPOINT = '" . $disc_url . "';\n";
+      echo "  window.CSFX_OPTS = { hideTax: " . $hide_tax . " };\n";
+      echo "</script>";
     }, 99);
 
     // al final del POS añádeme
