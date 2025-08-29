@@ -347,7 +347,72 @@ function csfx_get_rate_from_fox($from,$to){
   $base = get_option('woocommerce_currency', 'USD');
   $r_from = ($from===$base) ? 1.0 : floatval($currs[$from]['rate'] ?? 0);
   $r_to   = ($to===$base)   ? 1.0 : floatval($currs[$to]['rate'] ?? 0);
-  if ($r_from>0 && $r_to>0) $rate = $r_to / $r_from;
+  if ($r_from > 0 && $r_to > 0) {
+    // Si ambas tasas existen, usa la relación directa.
+    $rate = $r_to / $r_from;
+  } else {
+    /*
+     * Fallback avanzado: cuando alguna de las monedas no está registrada en el objeto
+     * $WOOCS (p. ej. VES o VEF según la versión del plugin), intentamos calcular
+     * la tasa consultando los endpoints públicos del propio plugin FOX. Primero
+     * intentamos obtener todas las monedas con sus tasas mediante
+     * /fox-rate/v1/currencies y calculamos la relación. Si eso falla o no
+     * contiene las monedas deseadas, recurrimos a /fox-rate/v1/convert, pero
+     * sustituyendo VES↔VEF según exista.
+     */
+    // Construimos la URL del listado de monedas.
+    $curr_url = home_url( '/wp-json/fox-rate/v1/currencies' );
+    $resp_c   = wp_remote_get( $curr_url, array( 'timeout' => 10, 'sslverify' => true ) );
+    $computed = false;
+    if ( ! is_wp_error( $resp_c ) && wp_remote_retrieve_response_code( $resp_c ) == 200 ) {
+      $body_c = json_decode( wp_remote_retrieve_body( $resp_c ), true );
+      if ( is_array( $body_c ) ) {
+        // Determinar alias: si el código no existe pero su alternativo sí, usarlo.
+        $from_x = isset( $body_c[ $from ] ) ? $from : ( ( $from === 'VES' && isset( $body_c['VEF'] ) ) ? 'VEF' : ( ( $from === 'VEF' && isset( $body_c['VES'] ) ) ? 'VES' : $from ) );
+        $to_x   = isset( $body_c[ $to ] )   ? $to   : ( ( $to   === 'VES' && isset( $body_c['VEF'] ) ) ? 'VEF' : ( ( $to   === 'VEF' && isset( $body_c['VES'] ) ) ? 'VES' : $to ) );
+        // Recuperamos las tasas de cada moneda. La tasa está definida frente al
+        // currency base, que es la moneda definida en WooCommerce.
+        $base = get_option( 'woocommerce_currency', 'USD' );
+        $r_from2 = ( $from_x === $base ) ? 1.0 : floatval( $body_c[ $from_x ]['rate'] ?? 0 );
+        $r_to2   = ( $to_x   === $base ) ? 1.0 : floatval( $body_c[ $to_x ]['rate'] ?? 0 );
+        if ( $r_from2 > 0 && $r_to2 > 0 ) {
+          $rate = $r_to2 / $r_from2;
+          $computed = true;
+        }
+      }
+    }
+    if ( ! $computed ) {
+      // Si no logramos calcular la tasa, probamos con el endpoint de conversión.
+      $amount = 1;
+      // Aplica alias para VES/VEF en caso de que una de las divisas no exista.
+      $from_alias = $from;
+      $to_alias   = $to;
+      if ( $from_alias === 'VES' || $from_alias === 'VEF' ) {
+        // Cambiar a la existente en el listado de monedas si disponible.
+        $alt_from   = $from_alias === 'VES' ? 'VEF' : 'VES';
+        // Sólo reemplazamos si la moneda alterna existe en $currs (si lo tenemos) o
+        // en los datos remotos (si la petición anterior falló no tendremos
+        // $body_c disponible). Es un fallback best-effort.
+        if ( isset( $currs[ $alt_from ] ) || ( isset( $body_c ) && isset( $body_c[ $alt_from ] ) ) ) {
+          $from_alias = $alt_from;
+        }
+      }
+      if ( $to_alias === 'VES' || $to_alias === 'VEF' ) {
+        $alt_to   = $to_alias === 'VES' ? 'VEF' : 'VES';
+        if ( isset( $currs[ $alt_to ] ) || ( isset( $body_c ) && isset( $body_c[ $alt_to ] ) ) ) {
+          $to_alias = $alt_to;
+        }
+      }
+      $url = home_url( sprintf( '/wp-json/fox-rate/v1/convert?amount=%s&from=%s&to=%s', $amount, urlencode( $from_alias ), urlencode( $to_alias ) ) );
+      $resp = wp_remote_get( $url, array( 'timeout' => 10, 'sslverify' => true ) );
+      if ( ! is_wp_error( $resp ) && wp_remote_retrieve_response_code( $resp ) == 200 ) {
+        $body = json_decode( wp_remote_retrieve_body( $resp ), true );
+        if ( is_array( $body ) && isset( $body['converted'] ) && floatval( $body['converted'] ) > 0 ) {
+          $rate = floatval( $body['converted'] );
+        }
+      }
+    }
+  }
   return array('mode'=>'fox','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>0,'updated'=>$updated,'source'=>'fox');
 }
 
