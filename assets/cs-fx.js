@@ -1059,21 +1059,17 @@
     fetch(url, { cache: 'no-store', credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
-            if (j && Number(j.rate) > 0) {
+        // Si la respuesta es válida y tiene una tasa > 0, actualizamos; de lo contrario mantenemos la última tasa conocida.
+        if (j && Number(j.rate) > 0) {
           FX.rate = Number(j.rate);
           FX.mode = j.mode || '';
           FX.updated = j.updated || '';
-        } else {
-          FX.rate = 0;
-          csfxClearLegacyStores();
         }
-   
         ensureBadge();
         cb && cb();
       })
       .catch(function () {
-        FX.rate = 0;
-        csfxClearLegacyStores();
+        // En caso de error de red, no reiniciamos la tasa: conservamos la existente.
         ensureBadge();
         cb && cb();
       });
@@ -1110,6 +1106,14 @@
         } catch(e){}
         // Tras refrescar la tasa, refrescamos el descuento y luego ejecutamos decoradores
         refreshDiscount(function(){ runAll(); });
+        // Fallback: si después de la primera carga aún no hay tasa, intenta otra carga
+        setTimeout(function(){
+          if (!FX.rate) {
+            refreshRate(function(){
+              refreshDiscount(function(){ schedule(runAll); });
+            });
+          }
+        }, 10000);
       });    } catch(e){}
   });
 
