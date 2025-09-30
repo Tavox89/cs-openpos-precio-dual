@@ -304,7 +304,8 @@ function csfx_get_rate(){
   $sslv = !! get_option('csfx_api_sslverify', 1);
   $fbfx = !! get_option('csfx_api_fallback_fox', 0);
   $ua   = 'CSFX/2.1 (+'.home_url('/').')';
-  $args = array('timeout'=>10, 'sslverify'=>$sslv, 'redirection'=>3, 'headers'=>array('Accept'=>'application/json', 'User-Agent'=>$ua), 'reject_unsafe_urls'=>true, 'decompress'=>true);
+  // POS-friendly: respuestas rápidas y sin múltiples redirecciones
+  $args = array('timeout'=>3, 'sslverify'=>$sslv, 'redirection'=>1, 'headers'=>array('Accept'=>'application/json', 'User-Agent'=>$ua), 'reject_unsafe_urls'=>true, 'decompress'=>true);
 
   if ($mode === 'api') {
     $cache = get_transient('csfx_rate_cache');
@@ -318,6 +319,31 @@ function csfx_get_rate(){
       $updated = current_time('c');
       $data = array('mode'=>'api','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>$updated,'source'=>'api','upstream_url'=>$url,'http_code'=>$probe['http_code'] ?? 200);
       if ($ttl>0) set_transient('csfx_rate_cache', $data, $ttl);
+      // Persistimos el último valor válido para servirlo como stale si la API falla
+      update_option('csfx_last_good_rate', $data, false);
+      return apply_filters('csfx_rate', $data);
+    }
+    // Falla la API: intentar servir último valor bueno si es reciente (<=24h)
+    $stale = get_option('csfx_last_good_rate');
+    if (is_array($stale) && isset($stale['rate'])) {
+      $updated_ts = null;
+      if (isset($stale['updated'])) {
+        if (is_numeric($stale['updated'])) {
+          $updated_ts = intval($stale['updated']);
+        } else {
+          $parsed = strtotime((string)$stale['updated']);
+          if ($parsed !== false) {
+            $updated_ts = intval($parsed);
+          }
+        }
+      }
+      if ($updated_ts === null) {
+        $updated_ts = 0;
+      }
+      if (abs(time() - $updated_ts) <= DAY_IN_SECONDS) {
+        $stale['_stale'] = true;
+        return apply_filters('csfx_rate', $stale);
+      }
     }
     $data = array('mode'=>'api','rate'=>0.0,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>current_time('c'),'source'=>'api','error'=>$probe['error'] ?? 'unknown','upstream_url'=>$url);
     if (isset($probe['http_code'])) $data['http_code'] = $probe['http_code'];
@@ -362,7 +388,7 @@ function csfx_get_rate_from_fox($from,$to){
      */
     // Construimos la URL del listado de monedas.
     $curr_url = home_url( '/wp-json/fox-rate/v1/currencies' );
-    $resp_c   = wp_remote_get( $curr_url, array( 'timeout' => 10, 'sslverify' => true ) );
+    $resp_c   = wp_remote_get( $curr_url, array( 'timeout' => 3, 'sslverify' => true, 'redirection' => 0 ) );
     $computed = false;
     if ( ! is_wp_error( $resp_c ) && wp_remote_retrieve_response_code( $resp_c ) == 200 ) {
       $body_c = json_decode( wp_remote_retrieve_body( $resp_c ), true );
@@ -404,7 +430,7 @@ function csfx_get_rate_from_fox($from,$to){
         }
       }
       $url = home_url( sprintf( '/wp-json/fox-rate/v1/convert?amount=%s&from=%s&to=%s', $amount, urlencode( $from_alias ), urlencode( $to_alias ) ) );
-      $resp = wp_remote_get( $url, array( 'timeout' => 10, 'sslverify' => true ) );
+      $resp = wp_remote_get( $url, array( 'timeout' => 3, 'sslverify' => true, 'redirection' => 0 ) );
       if ( ! is_wp_error( $resp ) && wp_remote_retrieve_response_code( $resp ) == 200 ) {
         $body = json_decode( wp_remote_retrieve_body( $resp ), true );
         if ( is_array( $body ) && isset( $body['converted'] ) && floatval( $body['converted'] ) > 0 ) {
@@ -414,6 +440,17 @@ function csfx_get_rate_from_fox($from,$to){
     }
   }
   return array('mode'=>'fox','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>0,'updated'=>$updated,'source'=>'fox');
+}
+
+// === AJAX ultra-rápido para OpenPOS (cache-first, sin bloquear) ===
+if (!function_exists('csfx_ajax_rate')) {
+  add_action('wp_ajax_cs_fx_rate',        'csfx_ajax_rate');
+  add_action('wp_ajax_nopriv_cs_fx_rate', 'csfx_ajax_rate');
+  function csfx_ajax_rate(){
+    $cache = get_transient('csfx_rate_cache');
+    $data  = (is_array($cache) && isset($cache['rate'])) ? $cache : csfx_get_rate();
+    wp_send_json($data);
+  }
 }
 
 // ================== REST API ==================
