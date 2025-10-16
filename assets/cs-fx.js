@@ -94,6 +94,53 @@
   // si vienen opciones desde PHP, las respetamos; si no, default true
   if (window.CSFX_OPTS && typeof window.CSFX_OPTS.hideTax !== 'undefined') FX.hideTax = !!window.CSFX_OPTS.hideTax;
 
+  var FX_STATE_STORAGE_KEY = 'csfx_state_v1';
+  var fxOfflineState = (function(){
+    try {
+      var raw = localStorage.getItem(FX_STATE_STORAGE_KEY);
+      if (!raw) return {};
+      var parsed = JSON.parse(raw);
+      return (parsed && typeof parsed === 'object') ? parsed : {};
+    } catch (_err) {
+      return {};
+    }
+  })();
+
+  function persistFxOfflineState(partial){
+    if (!partial || typeof partial !== 'object') return;
+    fxOfflineState = fxOfflineState && typeof fxOfflineState === 'object' ? fxOfflineState : {};
+    Object.keys(partial).forEach(function(k){
+      fxOfflineState[k] = partial[k];
+    });
+    try {
+      localStorage.setItem(FX_STATE_STORAGE_KEY, JSON.stringify(fxOfflineState));
+    } catch (_err) { /* storage lleno/offline */ }
+  }
+
+  function hydrateFxRateFromOffline(){
+    if (!fxOfflineState || typeof fxOfflineState !== 'object') return;
+    var rate = Number(fxOfflineState.rate || 0);
+    if (rate > 0 && (!FX.rate || FX.rate <= 0)) {
+      FX.rate = rate;
+      if (fxOfflineState.updated) FX.updated = fxOfflineState.updated;
+    }
+  }
+
+  function hydrateFxDiscountFromOffline(){
+    if (!fxOfflineState || typeof fxOfflineState !== 'object' || !fxOfflineState.disc) return;
+    var storedDisc = fxOfflineState.disc;
+    var pct = Number(storedDisc.percent || storedDisc.percentDecimal || 0);
+    if (pct > 0 && (!FX.disc || !FX.disc.active || !FX.disc.percent)) {
+      FX.disc = {
+        active: !!storedDisc.active,
+        percent: storedDisc.percent || (pct <= 1 ? pct * 100 : pct)
+      };
+    }
+  }
+
+  hydrateFxRateFromOffline();
+  hydrateFxDiscountFromOffline();
+
     function csfxClearLegacyStores(){
     try { localStorage.removeItem('YU_BCV_RATE'); } catch(_){ }
     try { localStorage.removeItem('CSFX_RATE'); } catch(_){ }
@@ -180,6 +227,21 @@
       '.csfx-info{margin-top:6px;font-size:11px;opacity:.8;}',
       '.csfx-pay-header-row{display:flex;gap:.8rem;margin-top:2px;}',
       '.csfx-chip--modal{font-size:16px;font-weight:700;padding:.2rem .6rem}',
+      '.csfx-dual-box{margin-top:12px;padding:10px;border:1px solid rgba(15,23,42,.12);border-radius:8px;background:#f8fafc;}',
+      '.csfx-dual-box h4{margin:0 0 6px;font-size:14px;font-weight:700;color:#1f2937;}',
+      '.csfx-dual-grid{display:grid;grid-template-columns:auto auto;column-gap:8px;row-gap:4px;font-size:12px;}',
+      '.csfx-dual-grid strong{color:#111827;}',
+      '.csfx-dual-input{margin-top:8px;display:flex;flex-direction:column;gap:4px;font-size:12px;}',
+      '.csfx-dual-input input{padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:14px;font-weight:600;color:#111827;}',
+      '.csfx-dual-input input:focus{outline:2px solid rgba(14,116,144,.25);border-color:#0ea5e9;}',
+      '.csfx-dual-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}',
+      '.csfx-chip-pill{background:rgba(15,23,42,.08);color:#0f172a;}',
+      '.csfx-chip-pill--ok{background:rgba(16,185,129,.16);color:#065f46;}',
+      '.csfx-chip-pill--warn{background:rgba(249,115,22,.16);color:#9a3412;}',
+      '.csfx-chip-pill--alert{background:rgba(239,68,68,.16);color:#991b1b;}',
+      '.csfx-dual-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;}',
+      '.csfx-dual-note{margin-top:6px;font-size:11px;color:#4b5563;line-height:1.4;}',
+      '.csfx-dual-note strong{font-weight:700;}',
       // compactar el hueco de impuestos si se decide ocultar
        '.csfx-hide-tax{display:none!important;line-height:0!important;height:0!important;overflow:hidden!important;margin:0!important;padding:0!important;border:0!important;}',
       // badge colapsable para mostrar la tasa y hora
@@ -856,12 +918,512 @@
    * el campo de importe a pagar y los botones de sugerencia de importes. Se basa en la
    * presencia de role="dialog" o clases de Angular Material.
    */
-  function decoratePaymentModal() {
-   if (!FX.rate || !FX.payChips) {
-      document.querySelectorAll('.csfx-pay-header-row,[data-csfxpay],.mat-dialog-container .csfx-chip').forEach(function(n){ n.remove(); });
+
+  // csfx: inicio descuento dual
+  var CSFX_DUAL_SELECTOR = '[data-csfx="dual-discount"]';
+  var dualCalcCache = (typeof WeakMap === 'function') ? new WeakMap() : new Map();
+
+  function csfxDiscountDecimal() {
+    var pct = Number(FX && FX.disc && FX.disc.percent ? FX.disc.percent : 0);
+    if (!isFinite(pct)) pct = 0;
+    if (pct > 1) pct = pct / 100;
+    if (pct < 0) pct = 0;
+    if (pct >= 0.995) pct = 0.995;
+    return pct;
+  }
+
+  function csfxToNumber(val) {
+    if (val === null || val === undefined || val === '') return NaN;
+    if (typeof val === 'number') {
+      return val;
+    }
+    if (typeof val === 'string') {
+      var parsed = parsePrice(val);
+      if (!isNaN(parsed)) return parsed;
+      var sanitized = parseFloat(val.replace(/[^0-9\-\.,]/g, '').replace(/,/g, '.'));
+      return isNaN(sanitized) ? NaN : sanitized;
+    }
+    if (typeof val === 'object') {
+      if (typeof val.value !== 'undefined') return csfxToNumber(val.value);
+    }
+    return NaN;
+  }
+
+  function csfxLocateCart() {
+    var candidates = [
+      window.OpenPOSApp && window.OpenPOSApp.cart,
+      window.OpenPOSApp && window.OpenPOSApp.cartService && window.OpenPOSApp.cartService.cart,
+      window.OpenPOSApp && window.OpenPOSApp.activeCart,
+      window.pos_cart && (window.pos_cart.cart || window.pos_cart),
+      window.OPCart,
+      window.OPENPOS_CART
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      if (candidates[i]) return candidates[i];
+    }
+    var storageKeys = ['op_cart', 'op_cache_cart', 'op_local_cart'];
+    for (var j = 0; j < storageKeys.length; j++) {
+      try {
+        var raw = localStorage.getItem(storageKeys[j]);
+        if (!raw) continue;
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      } catch (_err) {}
+    }
+    return null;
+  }
+
+  function csfxExtractMetaMap(cart) {
+    var meta = {};
+    function ingest(list) {
+      if (!list || typeof list.forEach !== 'function') return;
+      list.forEach(function (item) {
+        if (!item) return;
+        var key = item.key || item.name || item.code;
+        if (!key) return;
+        var value = typeof item.value !== 'undefined' ? item.value : (typeof item.val !== 'undefined' ? item.val : null);
+        meta[key] = value;
+      });
+    }
+    if (cart) {
+      ingest(cart.meta_data);
+      ingest(cart.metaData);
+      ['csfx_usd_paid', 'csfx_discount_pct', 'csfx_discount_value', 'csfx_discount_note', 'csfx_base_total'].forEach(function (k) {
+        if (typeof cart[k] !== 'undefined') meta[k] = cart[k];
+      });
+    }
+    return meta;
+  }
+
+  function csfxGetCartSnapshot(context) {
+    context = context || {};
+    var cart = csfxLocateCart();
+    var meta = csfxExtractMetaMap(cart);
+    var totalCandidates = [];
+    if (cart) {
+      totalCandidates.push(cart.base_grand_total);
+      totalCandidates.push(cart.baseGrandTotal);
+      totalCandidates.push(cart.grand_total);
+      totalCandidates.push(cart.grandTotal);
+      totalCandidates.push(cart.total_due);
+      totalCandidates.push(cart.totalDue);
+      totalCandidates.push(cart.total);
+    }
+    if (typeof context.totalUSD !== 'undefined') {
+      totalCandidates.push(context.totalUSD);
+    }
+    var total = NaN;
+    for (var i = 0; i < totalCandidates.length; i++) {
+      var candidate = csfxToNumber(totalCandidates[i]);
+      if (!isNaN(candidate) && candidate >= 0) {
+        total = candidate;
+        break;
+      }
+    }
+    var discountAmount = 0;
+    if (cart) {
+      var discountCandidate = typeof cart.final_discount_amount !== 'undefined' ? cart.final_discount_amount : (typeof cart.discount_amount !== 'undefined' ? cart.discount_amount : cart.discount);
+      var discParsed = csfxToNumber(discountCandidate);
+      if (!isNaN(discParsed)) discountAmount = discParsed;
+    }
+    var discountValueMeta = csfxToNumber(meta.csfx_discount_value);
+    if (!isNaN(discountValueMeta) && discountValueMeta > 0) {
+      discountAmount = -Math.abs(discountValueMeta);
+    }
+    var baseTotal = NaN;
+    var metaBase = csfxToNumber(meta.csfx_base_total);
+    if (!isNaN(metaBase) && metaBase > 0) {
+      baseTotal = metaBase;
+    } else if (!isNaN(total)) {
+      baseTotal = total - discountAmount;
+    }
+    if ((isNaN(baseTotal) || baseTotal <= 0) && !isNaN(total)) {
+      baseTotal = total;
+    }
+    var usdPaid = csfxToNumber(meta.csfx_usd_paid);
+    var discountPctMeta = meta.csfx_discount_pct != null ? Number(meta.csfx_discount_pct) : null;
+    var applied = Math.abs(discountAmount) > 0.0001;
+    return {
+      cart: cart,
+      meta: meta,
+      totalUSD: isNaN(total) ? NaN : total,
+      baseTotalUSD: isNaN(baseTotal) ? NaN : baseTotal,
+      discountAmount: discountAmount,
+      usdPaid: isNaN(usdPaid) ? 0 : usdPaid,
+      discountPct: discountPctMeta,
+      applied: applied
+    };
+  }
+
+  function csfxComputeDual(baseTotal, usdNet, pct) {
+    pct = pct || 0;
+    if (!isFinite(baseTotal) || baseTotal <= 0) {
+      return {
+        netRequested: usdNet,
+        netEffective: 0,
+        grossCovered: 0,
+        discount: 0,
+        remainderUsd: 0,
+        remainderBs: 0,
+        trimmed: false,
+        finalTotal: 0
+      };
+    }
+    if (!isFinite(usdNet) || usdNet < 0) usdNet = 0;
+    if (pct < 0) pct = 0;
+    if (pct >= 0.995) pct = 0.995;
+    var maxNet = baseTotal * (1 - pct);
+    if (!isFinite(maxNet) || maxNet < 0) maxNet = 0;
+    var effectiveNet = usdNet;
+    if (effectiveNet > maxNet) effectiveNet = maxNet;
+    var grossCovered = pct >= 0.999 ? effectiveNet : (effectiveNet === 0 ? 0 : effectiveNet / (1 - pct));
+    if (!isFinite(grossCovered)) grossCovered = 0;
+    if (grossCovered > baseTotal) grossCovered = baseTotal;
+    var discount = grossCovered - effectiveNet;
+    if (!isFinite(discount) || discount < 0) discount = 0;
+    var remainderUsd = baseTotal - grossCovered;
+    if (!isFinite(remainderUsd) || remainderUsd < 0) remainderUsd = 0;
+    var finalTotal = baseTotal - discount;
+    if (!isFinite(finalTotal) || finalTotal < 0) finalTotal = 0;
+    return {
+      netRequested: usdNet,
+      netEffective: effectiveNet,
+      grossCovered: grossCovered,
+      discount: discount,
+      remainderUsd: remainderUsd,
+      remainderBs: usd2bs(remainderUsd),
+      trimmed: usdNet > effectiveNet + 0.009,
+      finalTotal: finalTotal
+    };
+  }
+
+  function csfxBuildDualBlock() {
+    var box = document.createElement('div');
+    box.className = 'csfx-dual-box';
+    box.dataset.csfx = 'dual-discount';
+    var title = document.createElement('h4');
+    title.textContent = 'Precio dual en divisas';
+    box.appendChild(title);
+    var grid = document.createElement('div');
+    grid.className = 'csfx-dual-grid';
+    var lblBase = document.createElement('span');
+    lblBase.textContent = 'Total sin descuento';
+    var valBase = document.createElement('strong');
+    valBase.dataset.csfxField = 'total-base';
+    valBase.textContent = fmtUsd(0);
+    var lblFull = document.createElement('span');
+    lblFull.textContent = 'Total con descuento (100% divisas)';
+    var valFull = document.createElement('strong');
+    valFull.dataset.csfxField = 'total-full';
+    valFull.textContent = fmtUsd(0);
+    grid.appendChild(lblBase);
+    grid.appendChild(valBase);
+    grid.appendChild(lblFull);
+    grid.appendChild(valFull);
+    box.appendChild(grid);
+    var inputWrap = document.createElement('div');
+    inputWrap.className = 'csfx-dual-input';
+    var spanLabel = document.createElement('span');
+    spanLabel.textContent = 'Pago en divisas (USD neto)';
+    var input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.step = '0.01';
+    input.placeholder = '0.00';
+    input.dataset.csfx = 'usd-net';
+    inputWrap.appendChild(spanLabel);
+    inputWrap.appendChild(input);
+    box.appendChild(inputWrap);
+    var chips = document.createElement('div');
+    chips.className = 'csfx-dual-chips';
+    var chipKeys = ['gross', 'discount', 'remaining-usd', 'remaining-bs'];
+    for (var i = 0; i < chipKeys.length; i++) {
+      var chip = document.createElement('span');
+      chip.className = 'csfx-chip csfx-chip-pill';
+      chip.dataset.csfxChip = chipKeys[i];
+      chip.textContent = '—';
+      chips.appendChild(chip);
+    }
+    box.appendChild(chips);
+    var actions = document.createElement('div');
+    actions.className = 'csfx-dual-actions';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-primary btn-sm';
+    btn.dataset.csfxButton = 'confirm';
+    btn.textContent = 'Confirmar descuento';
+    actions.appendChild(btn);
+    var status = document.createElement('span');
+    status.className = 'csfx-chip csfx-chip-pill';
+    status.dataset.csfx = 'status';
+    status.style.display = 'none';
+    actions.appendChild(status);
+    box.appendChild(actions);
+    var note = document.createElement('div');
+    note.className = 'csfx-dual-note';
+    note.dataset.csfx = 'note';
+    note.textContent = 'Introduce el monto neto que recibe la tienda en divisas.';
+    box.appendChild(note);
+    return box;
+  }
+
+  function csfxEnsureDualBlock(modal, snapshot) {
+    var pct = csfxDiscountDecimal();
+    if (!FX.disc || !FX.disc.active || !pct) {
+      var stale = modal.querySelectorAll(CSFX_DUAL_SELECTOR);
+      Array.prototype.forEach.call(stale, function (node) { node.parentNode && node.parentNode.removeChild(node); });
       return;
-    }    var modals = document.querySelectorAll('.mat-dialog-container,[role="dialog"]');
+    }
+    var block = modal.querySelector(CSFX_DUAL_SELECTOR);
+    if (!block) {
+      block = csfxBuildDualBlock();
+      var headerRow = modal.querySelector('.csfx-pay-header-row');
+      if (headerRow && headerRow.parentNode) {
+        headerRow.insertAdjacentElement('afterend', block);
+      } else {
+        modal.appendChild(block);
+      }
+      var input = block.querySelector('input[data-csfx="usd-net"]');
+      if (input) {
+        input.addEventListener('input', function () {
+          block.dataset.csfxDirty = '1';
+          csfxUpdateDualBlock(modal);
+        });
+      }
+      var confirmBtn = block.querySelector('button[data-csfx-button="confirm"]');
+      if (confirmBtn) {
+        confirmBtn.addEventListener('click', function (evt) {
+          evt.preventDefault();
+          csfxHandleDualConfirm(modal);
+        });
+      }
+    }
+    csfxUpdateDualBlock(modal, snapshot);
+  }
+
+  function csfxUpdateDualBlock(modal, snapshot) {
+    var block = modal.querySelector(CSFX_DUAL_SELECTOR);
+    if (!block) return;
+    snapshot = snapshot || csfxGetCartSnapshot({});
+    var pct = csfxDiscountDecimal();
+    var base = snapshot.baseTotalUSD;
+    if (block) {
+      block.dataset.csfxBase = isFinite(base) ? String(base) : '';
+      block.dataset.csfxPct = isFinite(pct) ? String(pct) : '';
+      block.dataset.csfxTotal = isFinite(snapshot.totalUSD) ? String(snapshot.totalUSD) : '';
+    }
+    if (!base || !isFinite(base) || base <= 0) {
+      block.style.display = 'none';
+      return;
+    }
+    block.style.display = '';
+    var input = block.querySelector('input[data-csfx="usd-net"]');
+    if (input && !block.dataset.csfxDirty && snapshot.usdPaid) {
+      input.value = round(snapshot.usdPaid, FX.decimals).toFixed(FX.decimals);
+    }
+    var usdNet = input ? Number(input.value || 0) : 0;
+    if (!isFinite(usdNet) || usdNet < 0) usdNet = 0;
+    var calc = csfxComputeDual(base, usdNet, pct);
+    dualCalcCache.set(block, { snapshot: snapshot, calc: calc });
+    var baseEl = block.querySelector('[data-csfx-field="total-base"]');
+    if (baseEl) baseEl.textContent = fmtUsd(base);
+    var fullEl = block.querySelector('[data-csfx-field="total-full"]');
+    if (fullEl) fullEl.textContent = fmtUsd(base * (1 - pct));
+    var chipsMap = {
+      'gross': 'Parte bruta: ' + fmtUsd(calc.grossCovered),
+      'discount': 'Descuento: ' + fmtUsd(calc.discount),
+      'remaining-usd': 'Resta USD: ' + fmtUsd(calc.remainderUsd),
+      'remaining-bs': 'Resta Bs: ' + fmtBs(calc.remainderBs)
+    };
+    Object.keys(chipsMap).forEach(function (key) {
+      var el = block.querySelector('[data-csfx-chip="' + key + '"]');
+      if (!el) return;
+      el.textContent = chipsMap[key];
+      el.classList.remove('csfx-chip-pill--alert', 'csfx-chip-pill--warn', 'csfx-chip-pill--ok');
+      if (key === 'discount' && calc.discount > 0.009) {
+        el.classList.add('csfx-chip-pill--ok');
+      }
+      if ((key === 'remaining-usd' || key === 'remaining-bs') && calc.remainderUsd > 0.009) {
+        el.classList.add('csfx-chip-pill--warn');
+      }
+    });
+    var note = block.querySelector('[data-csfx="note"]');
+    if (note) {
+      var methods = [];
+      if (window.CSFX_OPTS && Object.prototype.toString.call(window.CSFX_OPTS.divisaMethods) === '[object Array]') {
+        for (var i = 0; i < window.CSFX_OPTS.divisaMethods.length; i++) {
+          if (window.CSFX_OPTS.divisaMethods[i]) methods.push(window.CSFX_OPTS.divisaMethods[i]);
+        }
+      }
+      var baseMsg = 'Aplica el descuento sobre pagos en divisas.';
+      if (methods.length) {
+        baseMsg += ' Métodos configurados: ' + methods.join(', ') + '.';
+      }
+      if (calc.trimmed) {
+        baseMsg += ' El monto ingresado excede el máximo bonificable; se usa ' + fmtUsd(calc.netEffective) + '.';
+      } else if (calc.discount > 0.009) {
+        baseMsg += ' Descuento estimado: ' + fmtUsd(calc.discount) + '.';
+      } else {
+        baseMsg += ' Escribe un monto neto para calcular.';
+      }
+      note.textContent = baseMsg;
+    }
+    var status = block.querySelector('[data-csfx="status"]');
+    if (status) {
+      status.style.display = 'none';
+      status.classList.remove('csfx-chip-pill--alert', 'csfx-chip-pill--warn', 'csfx-chip-pill--ok');
+      if (snapshot.applied && !block.dataset.csfxDirty) {
+        status.textContent = 'Descuento actual: ' + fmtUsd(Math.abs(snapshot.discountAmount));
+        status.classList.add('csfx-chip-pill--ok');
+        status.style.display = 'inline-flex';
+      }
+    }
+  }
+
+  function csfxHandleDualConfirm(modal) {
+    var block = modal.querySelector(CSFX_DUAL_SELECTOR);
+    if (!block) return;
+    var stored = dualCalcCache.get(block) || {};
+    var snapshot = stored.snapshot || csfxGetCartSnapshot({});
+    var calc = stored.calc;
+    if (!calc) {
+      var input = block.querySelector('input[data-csfx="usd-net"]');
+      var usdNet = input ? Number(input.value || 0) : 0;
+      calc = csfxComputeDual(snapshot.baseTotalUSD, usdNet, csfxDiscountDecimal());
+    }
+    var statusEl = block.querySelector('[data-csfx="status"]');
+    if (!snapshot || !snapshot.cart) {
+      if (statusEl) {
+        statusEl.textContent = 'No se encontró el carrito para aplicar el descuento.';
+        statusEl.classList.remove('csfx-chip-pill--ok', 'csfx-chip-pill--warn');
+        statusEl.classList.add('csfx-chip-pill--alert');
+        statusEl.style.display = 'inline-flex';
+      }
+      return;
+    }
+    var success = csfxApplyDualDiscount(snapshot, calc);
+    if (statusEl) {
+      statusEl.style.display = 'inline-flex';
+      statusEl.classList.remove('csfx-chip-pill--alert', 'csfx-chip-pill--warn', 'csfx-chip-pill--ok');
+      if (success) {
+        statusEl.textContent = 'Descuento aplicado: ' + fmtUsd(calc.discount);
+        statusEl.classList.add('csfx-chip-pill--ok');
+        block.dataset.csfxDirty = '';
+      } else {
+        statusEl.textContent = 'No se pudo aplicar el descuento.';
+        statusEl.classList.add('csfx-chip-pill--alert');
+      }
+    }
+    schedule(decorateTotals);
+    schedule(decoratePaymentModal);
+  }
+
+  function csfxSanitizeMetaList(list) {
+    if (!list || typeof list.filter !== 'function') return [];
+    return list.filter(function (item) {
+      if (!item) return false;
+      var key = item.key || item.name || item.code;
+      return key ? key.indexOf('csfx_') !== 0 : true;
+    });
+  }
+
+  function csfxApplyDualDiscount(snapshot, calc) {
+    var cart = snapshot.cart;
+    if (!cart) return false;
+    var baseTotal = round(snapshot.baseTotalUSD, FX.decimals);
+    if (!baseTotal || !isFinite(baseTotal)) return false;
+    var discountValue = round(calc.discount, FX.decimals);
+    var negativeDiscount = -Math.abs(discountValue);
+    var newGrand = round(baseTotal - discountValue, FX.decimals);
+    if (newGrand < 0) newGrand = 0;
+    cart.discount_amount = negativeDiscount;
+    cart.final_discount_amount = negativeDiscount;
+    if (typeof cart.base_discount_amount !== 'undefined') cart.base_discount_amount = negativeDiscount;
+    cart.grand_total = newGrand;
+    if (typeof cart.base_grand_total !== 'undefined') cart.base_grand_total = newGrand;
+    if (typeof cart.total !== 'undefined') cart.total = newGrand;
+    if (typeof cart.total_due !== 'undefined') cart.total_due = newGrand;
+    if (cart.totals && typeof cart.totals === 'object') {
+      cart.totals.discount_amount = negativeDiscount;
+      if (typeof cart.totals.grand_total !== 'undefined') cart.totals.grand_total = newGrand;
+      if (typeof cart.totals.base_grand_total !== 'undefined') cart.totals.base_grand_total = newGrand;
+      if (typeof cart.totals.total_due !== 'undefined') cart.totals.total_due = newGrand;
+    }
+    var metaList = csfxSanitizeMetaList(cart.meta_data || cart.metaData);
+    metaList.push({ key: 'csfx_usd_paid', value: round(calc.netEffective, FX.decimals) });
+    metaList.push({ key: 'csfx_discount_pct', value: Number(FX.disc.percent) });
+    metaList.push({ key: 'csfx_discount_value', value: discountValue });
+    metaList.push({ key: 'csfx_base_total', value: baseTotal });
+    cart.meta_data = metaList;
+    cart.metaData = metaList;
+    cart.csfx_usd_paid = round(calc.netEffective, FX.decimals);
+    cart.csfx_discount_pct = Number(FX.disc.percent);
+    cart.csfx_discount_value = discountValue;
+    cart.csfx_base_total = baseTotal;
+    cart.csfx_discount_note = 'Descuento de precio dual (' + Number(FX.disc.percent).toFixed(2) + '%) sobre ' + fmtUsd(calc.grossCovered) + '.';
+    csfxPersistCart(cart);
+    try {
+      document.dispatchEvent(new CustomEvent('csfx:dual-discount-applied', {
+        detail: {
+          usdNet: calc.netEffective,
+          discount: discountValue,
+          pct: Number(FX.disc.percent),
+          remainderUsd: calc.remainderUsd
+        }
+      }));
+    } catch (_err) {}
+    return true;
+  }
+
+  function csfxPersistCart(cart) {
+    var snapshot = {
+      discount_amount: cart.discount_amount,
+      final_discount_amount: cart.final_discount_amount,
+      grand_total: cart.grand_total,
+      base_grand_total: cart.base_grand_total,
+      total: cart.total,
+      total_due: cart.total_due,
+      meta_data: cart.meta_data,
+      csfx_usd_paid: cart.csfx_usd_paid,
+      csfx_discount_pct: cart.csfx_discount_pct,
+      csfx_discount_value: cart.csfx_discount_value,
+      csfx_base_total: cart.csfx_base_total
+    };
+    var keys = ['op_cart', 'op_cache_cart', 'op_local_cart'];
+    for (var k = 0; k < keys.length; k++) {
+      try {
+        var raw = localStorage.getItem(keys[k]);
+        if (!raw) continue;
+        var stored = JSON.parse(raw);
+        if (!stored || typeof stored !== 'object') continue;
+        Object.keys(snapshot).forEach(function (prop) {
+          if (typeof snapshot[prop] !== 'undefined') stored[prop] = snapshot[prop];
+        });
+        localStorage.setItem(keys[k], JSON.stringify(stored));
+      } catch (_err) {}
+    }
+    persistFxOfflineState({
+      rate: FX.rate,
+      updated: FX.updated,
+      disc: FX.disc
+    });
+  }
+  // csfx: fin descuento dual
+
+  function decoratePaymentModal() {
+    var modals = document.querySelectorAll('.mat-dialog-container,[role="dialog"]');
     modals.forEach(function (modal) {
+      var allowChips = !!(FX.rate && FX.payChips);
+      var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
+      if (!allowChips) {
+        modal.querySelectorAll('.csfx-pay-header-row,[data-csfxpay],.mat-dialog-container .csfx-chip').forEach(function (n) {
+          if (n && n.parentNode) n.parentNode.removeChild(n);
+        });
+      }
+      csfxEnsureDualBlock(modal, snapshot);
+      if (!allowChips) {
+        return;
+      }
       var headerFound = false;
       // buscar encabezado "pagado/total" dentro del modal
       var headers = modal.querySelectorAll('h1,h2,h3,h4,div,span,p,strong,b');
@@ -883,6 +1445,7 @@
         var diff = (u2 - u1);
         var vals = [u1, u2];
           var labels = ['Pagado', 'Faltante'];
+        snapshot = csfxGetCartSnapshot({ totalUSD: u2 });
         for (var k = 0; k < vals.length; k++) {
           var child = chipRow.children[k];
           var bsVal = vals[k];
@@ -905,6 +1468,7 @@
         headerFound = true;
         break;
       }
+      csfxEnsureDualBlock(modal, snapshot);
       // si no hay encabezado, no procesamos esta caja
       if (!headerFound) return;
       // Importe a pagar: busca inputs y actualiza chips
@@ -1064,12 +1628,15 @@
           FX.rate = Number(j.rate);
           FX.mode = j.mode || '';
           FX.updated = j.updated || '';
+          persistFxOfflineState({ rate: FX.rate, updated: FX.updated });
         }
+        if (!FX.rate || FX.rate <= 0) hydrateFxRateFromOffline();
         ensureBadge();
         cb && cb();
       })
       .catch(function () {
         // En caso de error de red, no reiniciamos la tasa: conservamos la existente.
+        hydrateFxRateFromOffline();
         ensureBadge();
         cb && cb();
       });
@@ -1085,11 +1652,12 @@
           active: !!(j && j.active && Number(j.percent) > 0),
           percent: Number(j && j.percent || 0)
         };
+        persistFxOfflineState({ disc: FX.disc });
         ensureBadge();
         cb && cb();
       })
       .catch(function(){
-        FX.disc = { active:false, percent:0 };
+        hydrateFxDiscountFromOffline();
         cb && cb();
       });
   }

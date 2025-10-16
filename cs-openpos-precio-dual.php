@@ -34,6 +34,8 @@ if ( get_option('csfx_rate_from') === false )        update_option('csfx_rate_fr
 if ( get_option('csfx_rate_to') === false )          update_option('csfx_rate_to', 'VES');
 if ( get_option('csfx_discount_enabled') === false ) update_option('csfx_discount_enabled', 1);
 if ( get_option('csfx_discount_percent') === false ) update_option('csfx_discount_percent', 31.0);
+if ( get_option('csfx_divisa_methods') === false )   update_option('csfx_divisa_methods', '');
+if ( get_option('csfx_asset_version') === false )    update_option('csfx_asset_version', '2.3.3');
 if ( get_option('csfx_api_sslverify') === false )    update_option('csfx_api_sslverify', 1);
 if ( get_option('csfx_api_fallback_fox') === false ) update_option('csfx_api_fallback_fox', 0);
 
@@ -111,6 +113,20 @@ function csfx_render_admin_page() {
     update_option('csfx_rate_to', $to_post);
     update_option('csfx_discount_enabled', isset($_POST['csfx_discount_enabled']) ? 1 : 0);
     update_option('csfx_discount_percent', floatval(str_replace(',', '.', $_POST['csfx_discount_percent'] ?? '31')));
+    $divisa_raw = isset($_POST['csfx_divisa_methods']) ? wp_unslash((string)$_POST['csfx_divisa_methods']) : '';
+    $divisa_list = array();
+    foreach (preg_split('/[\r\n,]+/', $divisa_raw) as $token) {
+      $token = sanitize_text_field(trim($token));
+      if ($token !== '') {
+        $divisa_list[] = $token;
+      }
+    }
+    update_option('csfx_divisa_methods', implode("\n", $divisa_list));
+    $asset_ver = isset($_POST['csfx_asset_version']) ? sanitize_text_field(wp_unslash((string) $_POST['csfx_asset_version'])) : '';
+    if ($asset_ver === '') {
+      $asset_ver = '2.3.3';
+    }
+    update_option('csfx_asset_version', $asset_ver);
     $sslv = isset($_POST['csfx_api_sslverify']) ? 1 : 0;
     update_option('csfx_api_sslverify', $sslv);
     $fbfox = isset($_POST['csfx_api_fallback_fox']) ? 1 : 0;
@@ -145,6 +161,8 @@ function csfx_render_admin_page() {
   $d_on  = get_option('csfx_discount_enabled', 1);
   $d_pct = floatval(get_option('csfx_discount_percent', 31.0));
   $sslv  = get_option('csfx_api_sslverify', 1);
+  $divisa_text = (string) get_option('csfx_divisa_methods', '');
+  $asset_ver = esc_attr(get_option('csfx_asset_version', '2.3.3'));
 
   $fbfox = get_option('csfx_api_fallback_fox', 0);
   $health = get_option('csfx_last_api_ok');
@@ -187,6 +205,18 @@ function csfx_render_admin_page() {
             <label><input type="checkbox" name="csfx_discount_enabled" <?php checked($d_on, 1); ?>> Activar</label>
             &nbsp;&nbsp;<input type="number" step="0.01" min="0" max="100" name="csfx_discount_percent" value="<?php echo esc_attr($d_pct); ?>" class="small-text"> %
             <p class="description">Por defecto 31%. Si está desactivado, los endpoints devolverán 0.</p>
+          </td>
+        </tr>
+        <tr><th scope="row">Versión de assets</th>
+          <td>
+            <input type="text" name="csfx_asset_version" value="<?php echo $asset_ver; ?>" class="regular-text" pattern="[\w\.\-]+" />
+            <p class="description">Se usa para versionar el JS principal y controlar la caché. Ingresa un valor como 2.3.0; escribe “auto” si prefieres usar el filemtime del archivo.</p>
+          </td>
+        </tr>
+        <tr><th scope="row">Métodos de pago en divisas</th>
+          <td>
+            <textarea name="csfx_divisa_methods" rows="3" class="large-text code" placeholder="cash_usd&#10;zelle&#10;binance"><?php echo esc_textarea($divisa_text); ?></textarea>
+            <p class="description">IDs o nombres de métodos de pago OpenPOS que se consideran divisas. Uno por línea o separados por comas.</p>
           </td>
         </tr>
       </table>
@@ -239,6 +269,160 @@ function csfx_get_discount(){
   $out    = array('active'=>$active, 'percent'=>$pct);
   return apply_filters('csfx_discount', $out);
 }
+
+function csfx_get_divisa_methods(){
+  $raw = get_option('csfx_divisa_methods', '');
+  if (!is_string($raw)) $raw = '';
+  $parts = preg_split('/[\r\n,]+/', $raw);
+  $out = array();
+  if (is_array($parts)) {
+    foreach ($parts as $part) {
+      $part = trim(wp_strip_all_tags((string)$part));
+      if ($part !== '') $out[] = $part;
+    }
+  }
+  return $out;
+}
+
+// csfx: inicio descuento dual (backend)
+function csfx_extract_request_meta_pairs($prefix = 'csfx_'){
+  $out = array();
+  foreach ($_REQUEST as $key => $value) { // phpcs:ignore WordPress.Security.NonceVerification
+    if (!is_string($key) || strpos($key, $prefix) !== 0) continue;
+    $out[$key] = is_array($value) ? reset($value) : $value;
+  }
+  foreach (array('meta_data','meta','order_meta','order_meta_data') as $group_key) {
+    if (empty($_REQUEST[ $group_key ]) || !is_array($_REQUEST[ $group_key ])) continue; // phpcs:ignore WordPress.Security.NonceVerification
+    foreach ((array) $_REQUEST[ $group_key ] as $item) { // phpcs:ignore WordPress.Security.NonceVerification
+      if (!is_array($item)) continue;
+      $name = '';
+      if (isset($item['key'])) {
+        $name = $item['key'];
+      } elseif (isset($item['name'])) {
+        $name = $item['name'];
+      } elseif (isset($item['code'])) {
+        $name = $item['code'];
+      }
+      if (!is_string($name) || strpos($name, $prefix) !== 0) continue;
+      $out[$name] = isset($item['value']) ? $item['value'] : (isset($item['val']) ? $item['val'] : '');
+    }
+  }
+  return $out;
+}
+
+function csfx_parse_decimal($value){
+  if ($value === null || $value === '') return null;
+  if (is_array($value)) $value = reset($value);
+  $value = str_replace(',', '.', (string) $value);
+  $value = preg_replace('/[^0-9\.\-]/', '', $value);
+  if ($value === '' || !is_numeric($value)) return null;
+  return (float) $value;
+}
+
+function csfx_collect_dual_discount_request(){
+  $pairs = csfx_extract_request_meta_pairs('csfx_');
+  if (empty($pairs)) return null;
+  $meta_out = array();
+  foreach ($pairs as $key => $value) {
+    $meta_out[$key] = is_scalar($value) ? wc_clean((string) $value) : '';
+  }
+  $usd_paid = isset($meta_out['csfx_usd_paid']) ? csfx_parse_decimal($meta_out['csfx_usd_paid']) : null;
+  $pct_raw = isset($meta_out['csfx_discount_pct']) ? csfx_parse_decimal($meta_out['csfx_discount_pct']) : null;
+  $disc_val = isset($meta_out['csfx_discount_value']) ? csfx_parse_decimal($meta_out['csfx_discount_value']) : null;
+  $base_total = isset($meta_out['csfx_base_total']) ? csfx_parse_decimal($meta_out['csfx_base_total']) : null;
+
+  if ($usd_paid !== null) {
+    $meta_out['csfx_usd_paid'] = wc_format_decimal($usd_paid, 4);
+  } else {
+    unset($meta_out['csfx_usd_paid']);
+  }
+  $pct_display = null;
+  $pct_decimal = null;
+  if ($pct_raw !== null) {
+    $pct_display = $pct_raw;
+    if ($pct_display > 1) {
+      $pct_decimal = $pct_display / 100;
+    } else {
+      $pct_decimal = $pct_display;
+      $pct_display = $pct_decimal * 100;
+    }
+    $meta_out['csfx_discount_pct'] = wc_format_decimal($pct_display, 4);
+  } else {
+    unset($meta_out['csfx_discount_pct']);
+  }
+  if ($disc_val !== null) {
+    $meta_out['csfx_discount_value'] = wc_format_decimal($disc_val, 4);
+  } else {
+    unset($meta_out['csfx_discount_value']);
+  }
+  if ($base_total !== null) {
+    $meta_out['csfx_base_total'] = wc_format_decimal($base_total, 4);
+  } else {
+    unset($meta_out['csfx_base_total']);
+  }
+
+  $note = '';
+  if ($usd_paid !== null && $disc_val !== null && $pct_display !== null) {
+    $gross = $usd_paid + $disc_val;
+    $note = sprintf(
+      'Descuento de precio dual: %s %% sobre %s USD, cliente pagó %s USD en divisas.',
+      wc_format_decimal($pct_display, 2),
+      wc_format_decimal($gross, 2),
+      wc_format_decimal($usd_paid, 2)
+    );
+  }
+
+  $warning = '';
+  if ($usd_paid !== null && $pct_decimal !== null && $disc_val !== null && $pct_decimal > 0 && $pct_decimal < 1) {
+    $expected = ($usd_paid / (1 - $pct_decimal)) - $usd_paid;
+    if (abs($expected - $disc_val) > 0.5) {
+      $warning = sprintf(
+        'CSFX dual discount mismatch: expected %.4f vs received %.4f (pct %.4f, paid %.4f)',
+        $expected,
+        $disc_val,
+        $pct_display,
+        $usd_paid
+      );
+    }
+  }
+
+  return array(
+    'meta' => $meta_out,
+    'note' => $note,
+    'warning' => $warning
+  );
+}
+
+function csfx_checkout_store_dual_discount_meta( $order, $data = null ){
+  if ( ! is_a( $order, 'WC_Order' ) ) {
+    return;
+  }
+  $collected = csfx_collect_dual_discount_request();
+  if ( ! $collected ) {
+    return;
+  }
+  foreach ( $collected['meta'] as $key => $value ) {
+    $order->update_meta_data( $key, $value );
+  }
+  if ( ! empty( $collected['note'] ) ) {
+    $order->add_order_note( $collected['note'], false, true );
+  }
+  if ( ! empty( $collected['warning'] ) ) {
+    $logger = function_exists( 'wc_get_logger' ) ? wc_get_logger() : null;
+    if ( $logger ) {
+      $logger->warning(
+        $collected['warning'],
+        array(
+          'source'   => 'csfx-dual-discount',
+          'order_id' => $order->get_id(),
+        )
+      );
+    }
+  }
+}
+add_action( 'woocommerce_checkout_create_order', 'csfx_checkout_store_dual_discount_meta', 21, 2 );
+// csfx: fin descuento dual (backend)
+
 function csfx_is_self_url($url){
   $host = wp_parse_url(home_url('/'), PHP_URL_HOST);
   $u    = wp_parse_url($url, PHP_URL_HOST);
@@ -499,6 +683,7 @@ add_action('rest_api_init', function () {
         'from'   => get_option('csfx_rate_from','USD'),
         'to'     => get_option('csfx_rate_to','VES'),
         'discount'=> csfx_get_discount(),
+        'divisa_methods' => csfx_get_divisa_methods(),
       ));
     },
   ));
@@ -653,6 +838,7 @@ add_filter('op_get_login_cashdrawer_data', function($session){
         'payChips'   => (bool)CS_FX_PAY_CHIPS,
                'addonsBs'   => (bool)CS_FX_ADDONS_BS,
         'debug'      => (bool)CS_FX_DEBUG,
+        'divisaMethods' => csfx_get_divisa_methods(),
         'style'      => [
             'bsColor'       => '#0057b7',
             'discountColor' => '#28a745',
@@ -675,18 +861,15 @@ add_filter('openpos_pos_footer_js', function($handles){
     wp_script_add_data('cs-openpos-compat', 'defer', true);
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
-    // Actualizamos la versión del script principal. Este número se incrementa al añadir
-    // nuevas funcionalidades (por ejemplo: soporte para descuento) sin afectar la
-    // compatibilidad del plugin. El filemtime() sigue sumándose al final para bust de caché.
-    $ver = '2.2.4';
-
-    if ( file_exists( $asset_path ) ) {
-        $ver .= '.' . filemtime( $asset_path );
+    $asset_version_opt = trim((string) get_option('csfx_asset_version', '1.0.0'));
+    if ($asset_version_opt === '') {
+        $asset_version_opt = '1.0.0';
+    }
+    $ver = $asset_version_opt;
+    if (in_array($asset_version_opt, array('auto', 'mtime'), true) && file_exists($asset_path)) {
+        $ver = (string) filemtime($asset_path);
     }
     $asset = plugins_url('assets/cs-fx.js', __FILE__);
-    // JS principal
-    wp_register_script('cs-fx', $asset, [], $ver, true);
-        wp_script_add_data('cs-fx', 'defer', true);
     // JS principal dependiente de compat
     wp_register_script('cs-fx', $asset, ['cs-openpos-compat'], $ver, true);
     wp_script_add_data('cs-fx', 'defer', true);
@@ -712,6 +895,7 @@ add_filter('openpos_pos_footer_js', function($handles){
         'payChips'  => (bool)CS_FX_PAY_CHIPS,
              'addonsBs'  => (bool)CS_FX_ADDONS_BS,
         'debug'     => (bool)CS_FX_DEBUG,
+        'divisaMethods' => csfx_get_divisa_methods(),
         'style'     => [
             'bsColor'       => '#0057b7',
             'discountColor' => '#28a745',
@@ -723,13 +907,17 @@ add_filter('openpos_pos_footer_js', function($handles){
       // Inyectar los endpoints utilizados por el front. Se define siempre un
       // endpoint de tasa y un endpoint de descuento para permitir refrescos
       // independientes. También exportamos opciones como hideTax.
-      $hide_tax = defined('CS_FX_HIDE_TAX') ? (CS_FX_HIDE_TAX ? 'true' : 'false') : 'true';
+      $hide_tax = defined('CS_FX_HIDE_TAX') ? (bool) CS_FX_HIDE_TAX : true;
       $rate_url = esc_js( rest_url('csfx/v1/rate') );
       $disc_url = esc_js( rest_url('csfx/v1/discount') );
+      $opts = array(
+        'hideTax' => $hide_tax,
+        'divisaMethods' => csfx_get_divisa_methods(),
+      );
       echo "<script>\n";
       echo "  window.CSFX_RATE_ENDPOINT = '" . $rate_url . "';\n";
       echo "  window.CSFX_DISCOUNT_ENDPOINT = '" . $disc_url . "';\n";
-      echo "  window.CSFX_OPTS = { hideTax: " . $hide_tax . " };\n";
+      echo "  window.CSFX_OPTS = " . wp_json_encode($opts) . ";\n";
       echo "</script>";
     }, 99);
 
