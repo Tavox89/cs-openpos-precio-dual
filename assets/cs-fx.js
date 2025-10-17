@@ -1188,21 +1188,22 @@
     if (!cart) return false;
     var baseTotal = round(snapshot.baseTotalUSD, FX.decimals);
     if (!baseTotal || !isFinite(baseTotal)) return false;
-   var discountValue = round(calc.discount, FX.decimals);
-   var negativeDiscount = -Math.abs(discountValue);
-   var newGrand = round(baseTotal - discountValue, FX.decimals);
-   if (newGrand < 0) newGrand = 0;
-   cart.discount_amount = negativeDiscount;
-   cart.final_discount_amount = negativeDiscount;
+    var discountValue = round(calc.discount, FX.decimals);
+    var negativeDiscount = -Math.abs(discountValue);
+    var newGrand = round(baseTotal - discountValue, FX.decimals);
+    if (newGrand < 0) newGrand = 0;
+    cart.discount_amount = negativeDiscount;
+    cart.final_discount_amount = negativeDiscount;
+    // csfx: compatibilidad con estructuras de OpenPOS (valores positivos en formato moneda)
     cart.discount_amount_currency_formatted = fmtUsd(discountValue);
     cart.final_discount_amount_currency_formatted = fmtUsd(discountValue);
     cart.cart_discount_amount = discountValue;
     cart.discount_final_amount = discountValue;
-   if (typeof cart.base_discount_amount !== 'undefined') cart.base_discount_amount = negativeDiscount;
-   cart.grand_total = newGrand;
-   if (typeof cart.base_grand_total !== 'undefined') cart.base_grand_total = newGrand;
-   if (typeof cart.total !== 'undefined') cart.total = newGrand;
-   if (typeof cart.total_due !== 'undefined') cart.total_due = newGrand;
+    if (typeof cart.base_discount_amount !== 'undefined') cart.base_discount_amount = negativeDiscount;
+    cart.grand_total = newGrand;
+    if (typeof cart.base_grand_total !== 'undefined') cart.base_grand_total = newGrand;
+    if (typeof cart.total !== 'undefined') cart.total = newGrand;
+    if (typeof cart.total_due !== 'undefined') cart.total_due = newGrand;
     if (cart.totals && typeof cart.totals === 'object') {
       cart.totals.discount_amount = negativeDiscount;
       if (typeof cart.totals.grand_total !== 'undefined') cart.totals.grand_total = newGrand;
@@ -1210,18 +1211,31 @@
       if (typeof cart.totals.total_due !== 'undefined') cart.totals.total_due = newGrand;
     }
     var metaList = csfxSanitizeMetaList(cart.meta_data || cart.metaData);
-    metaList.push({ key: 'csfx_usd_paid', value: round(calc.netEffective, FX.decimals) });
-    metaList.push({ key: 'csfx_discount_pct', value: Number(FX.disc.percent) });
+    var usdPaidRounded = round(calc.netEffective, FX.decimals);
+    var pctRounded = Number(FX.disc.percent);
+    var note = 'Descuento dual del ' + pctRounded.toFixed(2) + '% aplicado sobre ' + fmtUsd(calc.grossCovered) + ', cliente pagó ' + fmtUsd(calc.netEffective) + ' en divisas.';
+    metaList.push({ key: 'csfx_usd_paid', value: usdPaidRounded });
+    metaList.push({ key: 'csfx_discount_pct', value: pctRounded });
     metaList.push({ key: 'csfx_discount_value', value: discountValue });
     metaList.push({ key: 'csfx_base_total', value: baseTotal });
+    metaList.push({ key: 'csfx_discount_note', value: note });
     cart.meta_data = metaList;
     cart.metaData = metaList;
-    cart.csfx_usd_paid = round(calc.netEffective, FX.decimals);
-    cart.csfx_discount_pct = Number(FX.disc.percent);
+    cart.csfx_usd_paid = usdPaidRounded;
+    cart.csfx_discount_pct = pctRounded;
     cart.csfx_discount_value = discountValue;
     cart.csfx_base_total = baseTotal;
-    cart.csfx_discount_note = 'Descuento de precio dual (' + Number(FX.disc.percent).toFixed(2) + '%) sobre ' + fmtUsd(calc.grossCovered) + '.';
+    cart.csfx_discount_note = note;
     csfxPersistCart(cart);
+    // csfx: sincroniza con el servicio de OpenPOS para refrescar UI y modo offline
+    try {
+      if (window.OpenPOSApp && OpenPOSApp.cartService) {
+        var svc = OpenPOSApp.cartService;
+        if (typeof svc.setCart === 'function') svc.setCart(cart);
+        if (typeof svc.updateTotals === 'function') svc.updateTotals();
+        if (typeof svc.saveCart === 'function') svc.saveCart();
+      }
+    } catch (_err) {}
     try {
       document.dispatchEvent(new CustomEvent('csfx:dual-discount-applied', {
         detail: {
@@ -1519,12 +1533,10 @@
       panel.dataset.csfxDirty = '';
       input.dataset.csfxTouched = '';
       csfxRenderBadgeContent(document.querySelector('.csfx-badge'));
-      schedule(function(){
-        decorateCart();
-        decorateTotals();
-        decoratePaymentModal();
-        decorateBill();
-      });
+      schedule(decorateCart);
+      schedule(decorateTotals);
+      schedule(decoratePaymentModal);
+      schedule(decorateBill);
       var badge = document.querySelector('.csfx-badge');
       if (badge && badge.classList && badge.classList.contains('open')) {
         badge.classList.remove('open');
