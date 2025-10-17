@@ -94,6 +94,30 @@
   // si vienen opciones desde PHP, las respetamos; si no, default true
   if (window.CSFX_OPTS && typeof window.CSFX_OPTS.hideTax !== 'undefined') FX.hideTax = !!window.CSFX_OPTS.hideTax;
 
+  function decodeSymbol(sym, fallback) {
+    if (!sym) return fallback || '';
+    if (typeof sym !== 'string') return sym;
+    if (sym.indexOf('&') === -1) return sym;
+    return sym
+      .replace(/&amp;/gi, '&')
+      .replace(/&#(\d+);/g, function (_, code) {
+        var n = parseInt(code, 10);
+        return isFinite(n) ? String.fromCharCode(n) : _;
+      })
+      .replace(/&(#x[0-9a-f]+);/gi, function (_, hex) {
+        var n = parseInt(hex.slice(2), 16);
+        return isFinite(n) ? String.fromCharCode(n) : _;
+      })
+      .replace(/&quot;/gi, '"')
+      .replace(/&apos;/gi, '\'')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>');
+  }
+
+  FX.symbolUSD = decodeSymbol(FX.symbolUSD, '$');
+  FX.symbol = decodeSymbol(FX.symbol, 'Bs.');
+  FX.symbolVES = decodeSymbol(FX.symbolVES, 'Bs.');
+
   var FX_STATE_STORAGE_KEY = 'csfx_state_v1';
   var fxOfflineState = (function(){
     try {
@@ -227,7 +251,7 @@
       '.csfx-info{margin-top:6px;font-size:11px;opacity:.8;}',
       '.csfx-pay-header-row{display:flex;gap:.8rem;margin-top:2px;}',
       '.csfx-chip--modal{font-size:16px;font-weight:700;padding:.2rem .6rem}',
-      '.csfx-dual-box{margin-top:12px;padding:10px;border:1px solid rgba(15,23,42,.12);border-radius:8px;background:#f8fafc;}',
+      '.csfx-dual-box{margin-top:12px;padding:10px;border:1px solid rgba(15,23,42,.12);border-radius:8px;background:#f8fafc;max-width:280px;}',
       '.csfx-dual-box h4{margin:0 0 6px;font-size:14px;font-weight:700;color:#1f2937;}',
       '.csfx-dual-grid{display:grid;grid-template-columns:auto auto;column-gap:8px;row-gap:4px;font-size:12px;}',
       '.csfx-dual-grid strong{color:#111827;}',
@@ -240,7 +264,13 @@
       '.csfx-chip-pill--warn{background:rgba(249,115,22,.16);color:#9a3412;}',
       '.csfx-chip-pill--alert{background:rgba(239,68,68,.16);color:#991b1b;}',
       '.csfx-dual-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;}',
+      '.csfx-dual-status{margin-top:8px;font-size:12px;color:#1f2937;}',
+      '.csfx-dual-status--info{color:#0f766e;}',
+      '.csfx-dual-status--warn{color:#9a3412;}',
+      '.csfx-dual-status--error{color:#991b1b;}',
+      '.csfx-dual-status--ok{color:#065f46;font-weight:700;}',
       '.csfx-dual-note{margin-top:6px;font-size:11px;color:#4b5563;line-height:1.4;}',
+      '.csfx-badge-info{margin-bottom:6px;font-size:12px;line-height:1.4;}',
       '.csfx-dual-note strong{font-weight:700;}',
       // compactar el hueco de impuestos si se decide ocultar
        '.csfx-hide-tax{display:none!important;line-height:0!important;height:0!important;overflow:hidden!important;margin:0!important;padding:0!important;border:0!important;}',
@@ -843,6 +873,12 @@
              if (totSp && !isNaN(usdFinal)) totSp.textContent = fmtBs(usd2bs(usdFinal));
 
     }
+    if (!isNaN(usdS)) window.__CSFX_SUBTOTAL_USD = usdS;
+    if (!isNaN(usdT)) window.__CSFX_TOTAL_USD = usdT;
+    if (!isNaN(usdS) && isNaN(usdT)) window.__CSFX_TOTAL_USD = usdS - usdD + (isNaN(usdI) ? 0 : usdI);
+    if (typeof window.__CSFX_TOTAL_USD === 'undefined' && !isNaN(readCheckoutUSD())) {
+      window.__CSFX_TOTAL_USD = readCheckoutUSD();
+    }
     positionBadge();
 
   }
@@ -904,12 +940,14 @@
       badge.appendChild(content);
       handle.addEventListener('click', function (e) {
         badge.classList.toggle('open');
+        if (badge.classList.contains('open')) {
+          csfxRenderBadgeContent(badge);
+        }
         e.stopPropagation();
       });
       document.body.appendChild(badge);
     }
-    var contentDiv = badge.querySelector('.csfx-badge-content');
-     if (contentDiv) contentDiv.innerHTML = buildInfoText();
+    csfxRenderBadgeContent(badge);
   }
 
 
@@ -920,9 +958,6 @@
    */
 
   // csfx: inicio descuento dual
-  var CSFX_DUAL_SELECTOR = '[data-csfx="dual-discount"]';
-  var dualCalcCache = (typeof WeakMap === 'function') ? new WeakMap() : new Map();
-
   function csfxDiscountDecimal() {
     var pct = Number(FX && FX.disc && FX.disc.percent ? FX.disc.percent : 0);
     if (!isFinite(pct)) pct = 0;
@@ -934,16 +969,14 @@
 
   function csfxToNumber(val) {
     if (val === null || val === undefined || val === '') return NaN;
-    if (typeof val === 'number') {
-      return val;
-    }
+    if (typeof val === 'number') return val;
     if (typeof val === 'string') {
       var parsed = parsePrice(val);
       if (!isNaN(parsed)) return parsed;
       var sanitized = parseFloat(val.replace(/[^0-9\-\.,]/g, '').replace(/,/g, '.'));
       return isNaN(sanitized) ? NaN : sanitized;
     }
-    if (typeof val === 'object') {
+    if (typeof val === 'object' && val) {
       if (typeof val.value !== 'undefined') return csfxToNumber(val.value);
     }
     return NaN;
@@ -1020,9 +1053,15 @@
         break;
       }
     }
+    if (isNaN(total) && typeof window.__CSFX_TOTAL_USD !== 'undefined') {
+      var gTotal = csfxToNumber(window.__CSFX_TOTAL_USD);
+      if (!isNaN(gTotal)) total = gTotal;
+    }
     var discountAmount = 0;
     if (cart) {
-      var discountCandidate = typeof cart.final_discount_amount !== 'undefined' ? cart.final_discount_amount : (typeof cart.discount_amount !== 'undefined' ? cart.discount_amount : cart.discount);
+      var discountCandidate = typeof cart.final_discount_amount !== 'undefined'
+        ? cart.final_discount_amount
+        : (typeof cart.discount_amount !== 'undefined' ? cart.discount_amount : cart.discount);
       var discParsed = csfxToNumber(discountCandidate);
       if (!isNaN(discParsed)) discountAmount = discParsed;
     }
@@ -1036,6 +1075,10 @@
       baseTotal = metaBase;
     } else if (!isNaN(total)) {
       baseTotal = total - discountAmount;
+    }
+    if ((isNaN(baseTotal) || baseTotal <= 0) && typeof window.__CSFX_SUBTOTAL_USD !== 'undefined') {
+      var gBase = csfxToNumber(window.__CSFX_SUBTOTAL_USD);
+      if (!isNaN(gBase) && gBase > 0) baseTotal = gBase;
     }
     if ((isNaN(baseTotal) || baseTotal <= 0) && !isNaN(total)) {
       baseTotal = total;
@@ -1097,227 +1140,6 @@
     };
   }
 
-  function csfxBuildDualBlock() {
-    var box = document.createElement('div');
-    box.className = 'csfx-dual-box';
-    box.dataset.csfx = 'dual-discount';
-    var title = document.createElement('h4');
-    title.textContent = 'Precio dual en divisas';
-    box.appendChild(title);
-    var grid = document.createElement('div');
-    grid.className = 'csfx-dual-grid';
-    var lblBase = document.createElement('span');
-    lblBase.textContent = 'Total sin descuento';
-    var valBase = document.createElement('strong');
-    valBase.dataset.csfxField = 'total-base';
-    valBase.textContent = fmtUsd(0);
-    var lblFull = document.createElement('span');
-    lblFull.textContent = 'Total con descuento (100% divisas)';
-    var valFull = document.createElement('strong');
-    valFull.dataset.csfxField = 'total-full';
-    valFull.textContent = fmtUsd(0);
-    grid.appendChild(lblBase);
-    grid.appendChild(valBase);
-    grid.appendChild(lblFull);
-    grid.appendChild(valFull);
-    box.appendChild(grid);
-    var inputWrap = document.createElement('div');
-    inputWrap.className = 'csfx-dual-input';
-    var spanLabel = document.createElement('span');
-    spanLabel.textContent = 'Pago en divisas (USD neto)';
-    var input = document.createElement('input');
-    input.type = 'number';
-    input.min = '0';
-    input.step = '0.01';
-    input.placeholder = '0.00';
-    input.dataset.csfx = 'usd-net';
-    inputWrap.appendChild(spanLabel);
-    inputWrap.appendChild(input);
-    box.appendChild(inputWrap);
-    var chips = document.createElement('div');
-    chips.className = 'csfx-dual-chips';
-    var chipKeys = ['gross', 'discount', 'remaining-usd', 'remaining-bs'];
-    for (var i = 0; i < chipKeys.length; i++) {
-      var chip = document.createElement('span');
-      chip.className = 'csfx-chip csfx-chip-pill';
-      chip.dataset.csfxChip = chipKeys[i];
-      chip.textContent = '—';
-      chips.appendChild(chip);
-    }
-    box.appendChild(chips);
-    var actions = document.createElement('div');
-    actions.className = 'csfx-dual-actions';
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn btn-primary btn-sm';
-    btn.dataset.csfxButton = 'confirm';
-    btn.textContent = 'Confirmar descuento';
-    actions.appendChild(btn);
-    var status = document.createElement('span');
-    status.className = 'csfx-chip csfx-chip-pill';
-    status.dataset.csfx = 'status';
-    status.style.display = 'none';
-    actions.appendChild(status);
-    box.appendChild(actions);
-    var note = document.createElement('div');
-    note.className = 'csfx-dual-note';
-    note.dataset.csfx = 'note';
-    note.textContent = 'Introduce el monto neto que recibe la tienda en divisas.';
-    box.appendChild(note);
-    return box;
-  }
-
-  function csfxEnsureDualBlock(modal, snapshot) {
-    var pct = csfxDiscountDecimal();
-    if (!FX.disc || !FX.disc.active || !pct) {
-      var stale = modal.querySelectorAll(CSFX_DUAL_SELECTOR);
-      Array.prototype.forEach.call(stale, function (node) { node.parentNode && node.parentNode.removeChild(node); });
-      return;
-    }
-    var block = modal.querySelector(CSFX_DUAL_SELECTOR);
-    if (!block) {
-      block = csfxBuildDualBlock();
-      var headerRow = modal.querySelector('.csfx-pay-header-row');
-      if (headerRow && headerRow.parentNode) {
-        headerRow.insertAdjacentElement('afterend', block);
-      } else {
-        modal.appendChild(block);
-      }
-      var input = block.querySelector('input[data-csfx="usd-net"]');
-      if (input) {
-        input.addEventListener('input', function () {
-          block.dataset.csfxDirty = '1';
-          csfxUpdateDualBlock(modal);
-        });
-      }
-      var confirmBtn = block.querySelector('button[data-csfx-button="confirm"]');
-      if (confirmBtn) {
-        confirmBtn.addEventListener('click', function (evt) {
-          evt.preventDefault();
-          csfxHandleDualConfirm(modal);
-        });
-      }
-    }
-    csfxUpdateDualBlock(modal, snapshot);
-  }
-
-  function csfxUpdateDualBlock(modal, snapshot) {
-    var block = modal.querySelector(CSFX_DUAL_SELECTOR);
-    if (!block) return;
-    snapshot = snapshot || csfxGetCartSnapshot({});
-    var pct = csfxDiscountDecimal();
-    var base = snapshot.baseTotalUSD;
-    if (block) {
-      block.dataset.csfxBase = isFinite(base) ? String(base) : '';
-      block.dataset.csfxPct = isFinite(pct) ? String(pct) : '';
-      block.dataset.csfxTotal = isFinite(snapshot.totalUSD) ? String(snapshot.totalUSD) : '';
-    }
-    if (!base || !isFinite(base) || base <= 0) {
-      block.style.display = 'none';
-      return;
-    }
-    block.style.display = '';
-    var input = block.querySelector('input[data-csfx="usd-net"]');
-    if (input && !block.dataset.csfxDirty && snapshot.usdPaid) {
-      input.value = round(snapshot.usdPaid, FX.decimals).toFixed(FX.decimals);
-    }
-    var usdNet = input ? Number(input.value || 0) : 0;
-    if (!isFinite(usdNet) || usdNet < 0) usdNet = 0;
-    var calc = csfxComputeDual(base, usdNet, pct);
-    dualCalcCache.set(block, { snapshot: snapshot, calc: calc });
-    var baseEl = block.querySelector('[data-csfx-field="total-base"]');
-    if (baseEl) baseEl.textContent = fmtUsd(base);
-    var fullEl = block.querySelector('[data-csfx-field="total-full"]');
-    if (fullEl) fullEl.textContent = fmtUsd(base * (1 - pct));
-    var chipsMap = {
-      'gross': 'Parte bruta: ' + fmtUsd(calc.grossCovered),
-      'discount': 'Descuento: ' + fmtUsd(calc.discount),
-      'remaining-usd': 'Resta USD: ' + fmtUsd(calc.remainderUsd),
-      'remaining-bs': 'Resta Bs: ' + fmtBs(calc.remainderBs)
-    };
-    Object.keys(chipsMap).forEach(function (key) {
-      var el = block.querySelector('[data-csfx-chip="' + key + '"]');
-      if (!el) return;
-      el.textContent = chipsMap[key];
-      el.classList.remove('csfx-chip-pill--alert', 'csfx-chip-pill--warn', 'csfx-chip-pill--ok');
-      if (key === 'discount' && calc.discount > 0.009) {
-        el.classList.add('csfx-chip-pill--ok');
-      }
-      if ((key === 'remaining-usd' || key === 'remaining-bs') && calc.remainderUsd > 0.009) {
-        el.classList.add('csfx-chip-pill--warn');
-      }
-    });
-    var note = block.querySelector('[data-csfx="note"]');
-    if (note) {
-      var methods = [];
-      if (window.CSFX_OPTS && Object.prototype.toString.call(window.CSFX_OPTS.divisaMethods) === '[object Array]') {
-        for (var i = 0; i < window.CSFX_OPTS.divisaMethods.length; i++) {
-          if (window.CSFX_OPTS.divisaMethods[i]) methods.push(window.CSFX_OPTS.divisaMethods[i]);
-        }
-      }
-      var baseMsg = 'Aplica el descuento sobre pagos en divisas.';
-      if (methods.length) {
-        baseMsg += ' Métodos configurados: ' + methods.join(', ') + '.';
-      }
-      if (calc.trimmed) {
-        baseMsg += ' El monto ingresado excede el máximo bonificable; se usa ' + fmtUsd(calc.netEffective) + '.';
-      } else if (calc.discount > 0.009) {
-        baseMsg += ' Descuento estimado: ' + fmtUsd(calc.discount) + '.';
-      } else {
-        baseMsg += ' Escribe un monto neto para calcular.';
-      }
-      note.textContent = baseMsg;
-    }
-    var status = block.querySelector('[data-csfx="status"]');
-    if (status) {
-      status.style.display = 'none';
-      status.classList.remove('csfx-chip-pill--alert', 'csfx-chip-pill--warn', 'csfx-chip-pill--ok');
-      if (snapshot.applied && !block.dataset.csfxDirty) {
-        status.textContent = 'Descuento actual: ' + fmtUsd(Math.abs(snapshot.discountAmount));
-        status.classList.add('csfx-chip-pill--ok');
-        status.style.display = 'inline-flex';
-      }
-    }
-  }
-
-  function csfxHandleDualConfirm(modal) {
-    var block = modal.querySelector(CSFX_DUAL_SELECTOR);
-    if (!block) return;
-    var stored = dualCalcCache.get(block) || {};
-    var snapshot = stored.snapshot || csfxGetCartSnapshot({});
-    var calc = stored.calc;
-    if (!calc) {
-      var input = block.querySelector('input[data-csfx="usd-net"]');
-      var usdNet = input ? Number(input.value || 0) : 0;
-      calc = csfxComputeDual(snapshot.baseTotalUSD, usdNet, csfxDiscountDecimal());
-    }
-    var statusEl = block.querySelector('[data-csfx="status"]');
-    if (!snapshot || !snapshot.cart) {
-      if (statusEl) {
-        statusEl.textContent = 'No se encontró el carrito para aplicar el descuento.';
-        statusEl.classList.remove('csfx-chip-pill--ok', 'csfx-chip-pill--warn');
-        statusEl.classList.add('csfx-chip-pill--alert');
-        statusEl.style.display = 'inline-flex';
-      }
-      return;
-    }
-    var success = csfxApplyDualDiscount(snapshot, calc);
-    if (statusEl) {
-      statusEl.style.display = 'inline-flex';
-      statusEl.classList.remove('csfx-chip-pill--alert', 'csfx-chip-pill--warn', 'csfx-chip-pill--ok');
-      if (success) {
-        statusEl.textContent = 'Descuento aplicado: ' + fmtUsd(calc.discount);
-        statusEl.classList.add('csfx-chip-pill--ok');
-        block.dataset.csfxDirty = '';
-      } else {
-        statusEl.textContent = 'No se pudo aplicar el descuento.';
-        statusEl.classList.add('csfx-chip-pill--alert');
-      }
-    }
-    schedule(decorateTotals);
-    schedule(decoratePaymentModal);
-  }
-
   function csfxSanitizeMetaList(list) {
     if (!list || typeof list.filter !== 'function') return [];
     return list.filter(function (item) {
@@ -1325,54 +1147,6 @@
       var key = item.key || item.name || item.code;
       return key ? key.indexOf('csfx_') !== 0 : true;
     });
-  }
-
-  function csfxApplyDualDiscount(snapshot, calc) {
-    var cart = snapshot.cart;
-    if (!cart) return false;
-    var baseTotal = round(snapshot.baseTotalUSD, FX.decimals);
-    if (!baseTotal || !isFinite(baseTotal)) return false;
-    var discountValue = round(calc.discount, FX.decimals);
-    var negativeDiscount = -Math.abs(discountValue);
-    var newGrand = round(baseTotal - discountValue, FX.decimals);
-    if (newGrand < 0) newGrand = 0;
-    cart.discount_amount = negativeDiscount;
-    cart.final_discount_amount = negativeDiscount;
-    if (typeof cart.base_discount_amount !== 'undefined') cart.base_discount_amount = negativeDiscount;
-    cart.grand_total = newGrand;
-    if (typeof cart.base_grand_total !== 'undefined') cart.base_grand_total = newGrand;
-    if (typeof cart.total !== 'undefined') cart.total = newGrand;
-    if (typeof cart.total_due !== 'undefined') cart.total_due = newGrand;
-    if (cart.totals && typeof cart.totals === 'object') {
-      cart.totals.discount_amount = negativeDiscount;
-      if (typeof cart.totals.grand_total !== 'undefined') cart.totals.grand_total = newGrand;
-      if (typeof cart.totals.base_grand_total !== 'undefined') cart.totals.base_grand_total = newGrand;
-      if (typeof cart.totals.total_due !== 'undefined') cart.totals.total_due = newGrand;
-    }
-    var metaList = csfxSanitizeMetaList(cart.meta_data || cart.metaData);
-    metaList.push({ key: 'csfx_usd_paid', value: round(calc.netEffective, FX.decimals) });
-    metaList.push({ key: 'csfx_discount_pct', value: Number(FX.disc.percent) });
-    metaList.push({ key: 'csfx_discount_value', value: discountValue });
-    metaList.push({ key: 'csfx_base_total', value: baseTotal });
-    cart.meta_data = metaList;
-    cart.metaData = metaList;
-    cart.csfx_usd_paid = round(calc.netEffective, FX.decimals);
-    cart.csfx_discount_pct = Number(FX.disc.percent);
-    cart.csfx_discount_value = discountValue;
-    cart.csfx_base_total = baseTotal;
-    cart.csfx_discount_note = 'Descuento de precio dual (' + Number(FX.disc.percent).toFixed(2) + '%) sobre ' + fmtUsd(calc.grossCovered) + '.';
-    csfxPersistCart(cart);
-    try {
-      document.dispatchEvent(new CustomEvent('csfx:dual-discount-applied', {
-        detail: {
-          usdNet: calc.netEffective,
-          discount: discountValue,
-          pct: Number(FX.disc.percent),
-          remainderUsd: calc.remainderUsd
-        }
-      }));
-    } catch (_err) {}
-    return true;
   }
 
   function csfxPersistCart(cart) {
@@ -1408,22 +1182,363 @@
       disc: FX.disc
     });
   }
+
+  function csfxApplyDualDiscount(snapshot, calc) {
+    var cart = snapshot.cart;
+    if (!cart) return false;
+    var baseTotal = round(snapshot.baseTotalUSD, FX.decimals);
+    if (!baseTotal || !isFinite(baseTotal)) return false;
+   var discountValue = round(calc.discount, FX.decimals);
+   var negativeDiscount = -Math.abs(discountValue);
+   var newGrand = round(baseTotal - discountValue, FX.decimals);
+   if (newGrand < 0) newGrand = 0;
+   cart.discount_amount = negativeDiscount;
+   cart.final_discount_amount = negativeDiscount;
+    cart.discount_amount_currency_formatted = fmtUsd(discountValue);
+    cart.final_discount_amount_currency_formatted = fmtUsd(discountValue);
+    cart.cart_discount_amount = discountValue;
+    cart.discount_final_amount = discountValue;
+   if (typeof cart.base_discount_amount !== 'undefined') cart.base_discount_amount = negativeDiscount;
+   cart.grand_total = newGrand;
+   if (typeof cart.base_grand_total !== 'undefined') cart.base_grand_total = newGrand;
+   if (typeof cart.total !== 'undefined') cart.total = newGrand;
+   if (typeof cart.total_due !== 'undefined') cart.total_due = newGrand;
+    if (cart.totals && typeof cart.totals === 'object') {
+      cart.totals.discount_amount = negativeDiscount;
+      if (typeof cart.totals.grand_total !== 'undefined') cart.totals.grand_total = newGrand;
+      if (typeof cart.totals.base_grand_total !== 'undefined') cart.totals.base_grand_total = newGrand;
+      if (typeof cart.totals.total_due !== 'undefined') cart.totals.total_due = newGrand;
+    }
+    var metaList = csfxSanitizeMetaList(cart.meta_data || cart.metaData);
+    metaList.push({ key: 'csfx_usd_paid', value: round(calc.netEffective, FX.decimals) });
+    metaList.push({ key: 'csfx_discount_pct', value: Number(FX.disc.percent) });
+    metaList.push({ key: 'csfx_discount_value', value: discountValue });
+    metaList.push({ key: 'csfx_base_total', value: baseTotal });
+    cart.meta_data = metaList;
+    cart.metaData = metaList;
+    cart.csfx_usd_paid = round(calc.netEffective, FX.decimals);
+    cart.csfx_discount_pct = Number(FX.disc.percent);
+    cart.csfx_discount_value = discountValue;
+    cart.csfx_base_total = baseTotal;
+    cart.csfx_discount_note = 'Descuento de precio dual (' + Number(FX.disc.percent).toFixed(2) + '%) sobre ' + fmtUsd(calc.grossCovered) + '.';
+    csfxPersistCart(cart);
+    try {
+      document.dispatchEvent(new CustomEvent('csfx:dual-discount-applied', {
+        detail: {
+          usdNet: calc.netEffective,
+          discount: discountValue,
+          pct: Number(FX.disc.percent),
+          remainderUsd: calc.remainderUsd
+        }
+      }));
+      document.dispatchEvent(new CustomEvent('csfx:cart-updated'));
+    } catch (_err) {}
+    return true;
+  }
+
+  function csfxRenderBadgeContent(badge) {
+    if (!badge) return;
+    var contentDiv = badge.querySelector('.csfx-badge-content');
+    if (!contentDiv) return;
+    var infoRow = contentDiv.querySelector('.csfx-badge-info');
+    if (!infoRow) {
+      infoRow = document.createElement('div');
+      infoRow.className = 'csfx-badge-info';
+      contentDiv.appendChild(infoRow);
+    }
+    infoRow.innerHTML = buildInfoText();
+    var panel = contentDiv.querySelector('[data-csfx="dual-panel"]');
+    var justCreated = false;
+    if (!panel) {
+      panel = csfxRenderDualPanel(contentDiv);
+      justCreated = !!panel;
+    } else {
+      csfxUpdateDualPanel(panel);
+    }
+    if (justCreated && panel) {
+      setTimeout(function(){
+        var firstInput = panel.querySelector('input[data-csfx="usd-net"]');
+        if (firstInput) {
+          try {
+            firstInput.focus();
+            firstInput.select();
+          } catch (_err) {}
+        }
+      }, 80);
+    }
+  }
+
+  function csfxRenderDualPanel(container) {
+    if (!container) return null;
+    var existingPanel = container.querySelector('[data-csfx="dual-panel"]');
+    if (existingPanel) {
+      csfxUpdateDualPanel(existingPanel);
+      return existingPanel;
+    }
+    container.querySelectorAll('[data-csfx="dual-panel"]').forEach(function (node) {
+      if (node && node.parentNode) node.parentNode.removeChild(node);
+    });
+    container.querySelectorAll('.csfx-dual-note').forEach(function (node) {
+      if (node && node.parentNode) node.parentNode.removeChild(node);
+    });
+    var pct = csfxDiscountDecimal();
+    if (!FX.disc || !FX.disc.active || !pct) {
+      var note = document.createElement('div');
+      note.className = 'csfx-dual-note';
+      note.textContent = 'Descuento inactivo. Configura un porcentaje en Conf Tavox.';
+      container.appendChild(note);
+      return null;
+    }
+    var panel = document.createElement('div');
+    panel.className = 'csfx-dual-box';
+    panel.dataset.csfx = 'dual-panel';
+    container.appendChild(panel);
+
+    var title = document.createElement('h4');
+    title.textContent = 'Descuento precio dual';
+    panel.appendChild(title);
+
+    var grid = document.createElement('div');
+    grid.className = 'csfx-dual-grid';
+    grid.innerHTML = ''
+      + '<span>Total sin descuento</span><strong data-csfx="total-base">—</strong>'
+      + '<span>Total con descuento</span><strong data-csfx="total-full">—</strong>';
+    panel.appendChild(grid);
+
+    var inputWrap = document.createElement('div');
+    inputWrap.className = 'csfx-dual-input';
+    var label = document.createElement('span');
+    label.textContent = 'Pago en divisas (USD neto)';
+    var input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.step = '0.01';
+    input.placeholder = '0.00';
+    input.dataset.csfx = 'usd-net';
+    inputWrap.appendChild(label);
+    inputWrap.appendChild(input);
+    panel.appendChild(inputWrap);
+    input.value = '';
+    input.autocomplete = 'off';
+    input.inputMode = 'decimal';
+    input.pattern = '[0-9]*[.,]?[0-9]*';
+    input.disabled = false;
+    input.removeAttribute('disabled');
+    input.readOnly = false;
+    input.removeAttribute('readonly');
+    input.tabIndex = 0;
+    ['keydown','keypress','keyup','wheel','focus','blur','mousedown','mouseup','click','touchstart'].forEach(function(evt){
+      input.addEventListener(evt, function(e){ e.stopPropagation(); }, true);
+      input.addEventListener(evt, function(e){ e.stopPropagation(); });
+    });
+
+    var chipsWrap = document.createElement('div');
+    chipsWrap.className = 'csfx-dual-chips';
+    [
+      { key: 'gross', label: 'Parte bruta' },
+      { key: 'discount', label: 'Descuento' },
+      { key: 'remaining-usd', label: 'Resta USD' },
+      { key: 'remaining-bs', label: 'Resta Bs.' }
+    ].forEach(function (info) {
+      var chip = document.createElement('span');
+      chip.className = 'csfx-chip csfx-chip-pill';
+      chip.dataset.csfxChip = info.key;
+      chip.textContent = info.label + ': —';
+      chipsWrap.appendChild(chip);
+    });
+    panel.appendChild(chipsWrap);
+
+    var actions = document.createElement('div');
+    actions.className = 'csfx-dual-actions';
+    var confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.className = 'btn btn-primary btn-sm';
+    confirm.dataset.csfx = 'confirm';
+    confirm.textContent = 'Confirmar descuento';
+    actions.appendChild(confirm);
+    panel.appendChild(actions);
+
+    var status = document.createElement('div');
+    status.className = 'csfx-dual-status';
+    status.dataset.csfx = 'status';
+    panel.appendChild(status);
+
+    input.addEventListener('input', function (ev) {
+      if (this.value && typeof this.value === 'string' && this.value.indexOf(',') > -1) {
+        var pos = this.selectionStart;
+        this.value = this.value.replace(',', '.');
+        if (typeof pos === 'number') {
+          this.setSelectionRange(pos, pos);
+        }
+      }
+      ev.stopPropagation();
+      panel.dataset.csfxDirty = '1';
+      input.dataset.csfxTouched = '1';
+      csfxUpdateDualPanel(panel);
+    });
+    confirm.addEventListener('click', function () { csfxHandleDualConfirm(panel); });
+
+    csfxUpdateDualPanel(panel);
+    return panel;
+  }
+
+  function csfxResetDualChips(panel) {
+    panel.querySelectorAll('[data-csfx-chip]').forEach(function (chip) {
+      var label = chip.textContent.split(':')[0];
+      chip.textContent = label + ': —';
+      chip.classList.remove('csfx-chip-pill--ok', 'csfx-chip-pill--warn', 'csfx-chip-pill--alert');
+    });
+  }
+
+  function csfxUpdateDualPanel(panel) {
+    if (!panel) return;
+    var pct = csfxDiscountDecimal();
+    var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
+    var baseTotal = snapshot.baseTotalUSD;
+    panel.dataset.csfxPct = pct ? String(pct) : '';
+    panel.dataset.csfxBase = isFinite(baseTotal) ? String(baseTotal) : '';
+    panel.dataset.csfxTotal = isFinite(snapshot.totalUSD) ? String(snapshot.totalUSD) : '';
+
+    var baseEl = panel.querySelector('[data-csfx="total-base"]');
+    var fullEl = panel.querySelector('[data-csfx="total-full"]');
+    if (baseEl) baseEl.textContent = isFinite(baseTotal) ? fmtUsd(baseTotal) : '—';
+    if (fullEl) fullEl.textContent = (isFinite(baseTotal) && pct)
+      ? fmtUsd(baseTotal * (1 - pct))
+      : '—';
+
+    var input = panel.querySelector('input[data-csfx="usd-net"]');
+    var status = panel.querySelector('[data-csfx="status"]');
+    if (input && !panel.dataset.csfxDirty) {
+      if (snapshot.usdPaid) {
+        input.value = round(snapshot.usdPaid, FX.decimals).toFixed(FX.decimals);
+      } else if (!input.dataset.csfxTouched) {
+        input.value = '';
+      }
+    }
+
+    if (!isFinite(baseTotal) || baseTotal <= 0) {
+      if (status) {
+        status.textContent = 'Sin total disponible para calcular descuento.';
+        status.className = 'csfx-dual-status csfx-dual-status--warn';
+      }
+      csfxResetDualChips(panel);
+    return;
+    }
+
+    var rawValue = input ? String(input.value || '').replace(',', '.') : '0';
+    var usdNet = parseFloat(rawValue);
+    if (!isFinite(usdNet) || usdNet <= 0) {
+      csfxResetDualChips(panel);
+      if (status) {
+        status.textContent = 'Introduce el pago neto en divisas para estimar.';
+        status.className = 'csfx-dual-status';
+      }
+      return;
+    }
+
+    var calc = csfxComputeDual(baseTotal, usdNet, pct);
+    panel.dataset.csfxCalcNet = calc.netEffective || '';
+    panel.dataset.csfxCalcDiscount = calc.discount || '';
+    panel.dataset.csfxCalcGross = calc.grossCovered || '';
+    panel.dataset.csfxCalcRemainder = calc.remainderUsd || '';
+
+    var chipsText = {
+      'gross': 'Parte bruta: ' + fmtUsd(calc.grossCovered),
+      'discount': 'Descuento: ' + fmtUsd(calc.discount),
+      'remaining-usd': 'Resta USD: ' + fmtUsd(calc.remainderUsd),
+      'remaining-bs': 'Resta Bs: ' + fmtBs(calc.remainderBs)
+    };
+
+    panel.querySelectorAll('[data-csfx-chip]').forEach(function (chip) {
+      var key = chip.dataset.csfxChip;
+      if (chipsText[key]) chip.textContent = chipsText[key];
+      chip.classList.remove('csfx-chip-pill--ok', 'csfx-chip-pill--warn', 'csfx-chip-pill--alert');
+      if (key === 'discount' && calc.discount > 0.009) {
+        chip.classList.add('csfx-chip-pill--ok');
+      }
+      if ((key === 'remaining-usd' || key === 'remaining-bs') && calc.remainderUsd > 0.009) {
+        chip.classList.add('csfx-chip-pill--warn');
+      }
+    });
+
+    if (status) {
+      if (calc.discount > 0.009) {
+        status.textContent = 'Descuento estimado: ' + fmtUsd(calc.discount);
+        status.className = 'csfx-dual-status csfx-dual-status--info';
+      } else {
+        status.textContent = 'Con este monto no se genera descuento.';
+        status.className = 'csfx-dual-status csfx-dual-status--warn';
+      }
+    }
+    return panel;
+  }
+
+  function csfxHandleDualConfirm(panel) {
+    if (!panel) return;
+    var input = panel.querySelector('input[data-csfx="usd-net"]');
+    var status = panel.querySelector('[data-csfx="status"]');
+    if (!input) return;
+    var usdNet = parseFloat(String(input.value || '').replace(',', '.'));
+    if (!isFinite(usdNet) || usdNet <= 0) {
+      if (status) {
+        status.textContent = 'Ingresa un monto válido.';
+        status.className = 'csfx-dual-status csfx-dual-status--error';
+      }
+      return;
+    }
+    var pct = csfxDiscountDecimal();
+    var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
+    var baseTotal = snapshot.baseTotalUSD;
+    if (!isFinite(baseTotal) || baseTotal <= 0) {
+      if (status) {
+        status.textContent = 'No hay total disponible para aplicar el descuento.';
+        status.className = 'csfx-dual-status csfx-dual-status--error';
+      }
+      return;
+    }
+    var calc = csfxComputeDual(baseTotal, usdNet, pct);
+    if (!calc || calc.discount <= 0) {
+      if (status) {
+        status.textContent = 'Con este monto no se genera descuento.';
+        status.className = 'csfx-dual-status csfx-dual-status--warn';
+      }
+      return;
+    }
+    var success = csfxApplyDualDiscount(snapshot, calc);
+    if (status) {
+      status.classList.remove('csfx-dual-status--warn', 'csfx-dual-status--info', 'csfx-dual-status--error', 'csfx-dual-status--ok');
+      if (success) {
+        status.textContent = 'Descuento aplicado: ' + fmtUsd(calc.discount);
+        status.classList.add('csfx-dual-status', 'csfx-dual-status--ok');
+      } else {
+        status.textContent = 'No se pudo aplicar el descuento.';
+        status.classList.add('csfx-dual-status', 'csfx-dual-status--error');
+      }
+    }
+    if (success) {
+      panel.dataset.csfxDirty = '';
+      input.dataset.csfxTouched = '';
+      csfxRenderBadgeContent(document.querySelector('.csfx-badge'));
+      schedule(function(){
+        decorateCart();
+        decorateTotals();
+        decoratePaymentModal();
+        decorateBill();
+      });
+      var badge = document.querySelector('.csfx-badge');
+      if (badge && badge.classList && badge.classList.contains('open')) {
+        badge.classList.remove('open');
+      }
+    }
+  }
   // csfx: fin descuento dual
 
   function decoratePaymentModal() {
-    var modals = document.querySelectorAll('.mat-dialog-container,[role="dialog"]');
+   if (!FX.rate || !FX.payChips) {
+      document.querySelectorAll('.csfx-pay-header-row,[data-csfxpay],.mat-dialog-container .csfx-chip').forEach(function(n){ n.remove(); });
+      return;
+    }    var modals = document.querySelectorAll('.mat-dialog-container,[role="dialog"]');
     modals.forEach(function (modal) {
-      var allowChips = !!(FX.rate && FX.payChips);
-      var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
-      if (!allowChips) {
-        modal.querySelectorAll('.csfx-pay-header-row,[data-csfxpay],.mat-dialog-container .csfx-chip').forEach(function (n) {
-          if (n && n.parentNode) n.parentNode.removeChild(n);
-        });
-      }
-      csfxEnsureDualBlock(modal, snapshot);
-      if (!allowChips) {
-        return;
-      }
       var headerFound = false;
       // buscar encabezado "pagado/total" dentro del modal
       var headers = modal.querySelectorAll('h1,h2,h3,h4,div,span,p,strong,b');
@@ -1445,7 +1560,6 @@
         var diff = (u2 - u1);
         var vals = [u1, u2];
           var labels = ['Pagado', 'Faltante'];
-        snapshot = csfxGetCartSnapshot({ totalUSD: u2 });
         for (var k = 0; k < vals.length; k++) {
           var child = chipRow.children[k];
           var bsVal = vals[k];
@@ -1468,7 +1582,6 @@
         headerFound = true;
         break;
       }
-      csfxEnsureDualBlock(modal, snapshot);
       // si no hay encabezado, no procesamos esta caja
       if (!headerFound) return;
       // Importe a pagar: busca inputs y actualiza chips
@@ -1658,6 +1771,7 @@
       })
       .catch(function(){
         hydrateFxDiscountFromOffline();
+        ensureBadge();
         cb && cb();
       });
   }

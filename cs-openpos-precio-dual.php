@@ -35,7 +35,7 @@ if ( get_option('csfx_rate_to') === false )          update_option('csfx_rate_to
 if ( get_option('csfx_discount_enabled') === false ) update_option('csfx_discount_enabled', 1);
 if ( get_option('csfx_discount_percent') === false ) update_option('csfx_discount_percent', 31.0);
 if ( get_option('csfx_divisa_methods') === false )   update_option('csfx_divisa_methods', '');
-if ( get_option('csfx_asset_version') === false )    update_option('csfx_asset_version', '2.3.3');
+if ( get_option('csfx_asset_version') === false )    update_option('csfx_asset_version', '2.3.4');
 if ( get_option('csfx_api_sslverify') === false )    update_option('csfx_api_sslverify', 1);
 if ( get_option('csfx_api_fallback_fox') === false ) update_option('csfx_api_fallback_fox', 0);
 
@@ -124,7 +124,7 @@ function csfx_render_admin_page() {
     update_option('csfx_divisa_methods', implode("\n", $divisa_list));
     $asset_ver = isset($_POST['csfx_asset_version']) ? sanitize_text_field(wp_unslash((string) $_POST['csfx_asset_version'])) : '';
     if ($asset_ver === '') {
-      $asset_ver = '2.3.3';
+      $asset_ver = '2.3.4';
     }
     update_option('csfx_asset_version', $asset_ver);
     $sslv = isset($_POST['csfx_api_sslverify']) ? 1 : 0;
@@ -162,7 +162,7 @@ function csfx_render_admin_page() {
   $d_pct = floatval(get_option('csfx_discount_percent', 31.0));
   $sslv  = get_option('csfx_api_sslverify', 1);
   $divisa_text = (string) get_option('csfx_divisa_methods', '');
-  $asset_ver = esc_attr(get_option('csfx_asset_version', '2.3.3'));
+  $asset_ver = esc_attr(get_option('csfx_asset_version', '2.3.4'));
 
   $fbfox = get_option('csfx_api_fallback_fox', 0);
   $health = get_option('csfx_last_api_ok');
@@ -917,7 +917,7 @@ add_filter('openpos_pos_footer_js', function($handles){
       echo "<script>\n";
       echo "  window.CSFX_RATE_ENDPOINT = '" . $rate_url . "';\n";
       echo "  window.CSFX_DISCOUNT_ENDPOINT = '" . $disc_url . "';\n";
-      echo "  window.CSFX_OPTS = " . wp_json_encode($opts) . ";\n";
+      echo "  window.CSFX_OPTS = " . wp_json_encode($opts, JSON_UNESCAPED_UNICODE) . ";\n";
       echo "</script>";
     }, 99);
 
