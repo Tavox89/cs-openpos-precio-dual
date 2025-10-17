@@ -1189,6 +1189,8 @@
     var baseTotal = round(snapshot.baseTotalUSD, FX.decimals);
     if (!baseTotal || !isFinite(baseTotal)) return false;
     var discountValue = round(calc.discount, FX.decimals);
+    var couponDiscount = round(Number(cart.discount_code_amount || 0), FX.decimals);
+    var itemDiscount = round(Number(cart.final_items_discount_amount || 0), FX.decimals);
     var metaList = csfxSanitizeMetaList(cart.meta_data || cart.metaData);
     var usdPaidRounded = round(calc.netEffective, FX.decimals);
     var pctRounded = Number(FX.disc.percent);
@@ -1196,7 +1198,18 @@
     cart.discount_source = 'csfx';
     cart.discount_type = 'fixed';
     cart.discount_amount = discountValue;
+    cart.discount_final_amount = discountValue;
+    cart.discount_excl_tax = discountValue;
+    cart.discount_tax_amount = Number(cart.discount_tax_amount || 0);
+    cart.cart_discount_amount = discountValue;
+    cart.discount_final_amount_currency_formatted = fmtUsd(discountValue);
+    cart.discount_amount_currency_formatted = fmtUsd(discountValue);
     cart.add_discount = true;
+    cart.final_items_discount_amount = itemDiscount;
+    cart.discount_code_amount = couponDiscount;
+    var totalDiscount = round(couponDiscount + itemDiscount + discountValue, FX.decimals);
+    cart.final_discount_amount = totalDiscount;
+    cart.final_discount_amount_currency_formatted = fmtUsd(totalDiscount);
     metaList.push({ key: 'csfx_usd_paid', value: usdPaidRounded });
     metaList.push({ key: 'csfx_discount_pct', value: pctRounded });
     metaList.push({ key: 'csfx_discount_value', value: discountValue });
@@ -1209,17 +1222,16 @@
     cart.csfx_discount_value = discountValue;
     cart.csfx_base_total = baseTotal;
     cart.csfx_discount_note = note;
-    csfxPersistCart(cart);
     // csfx: sincroniza con el servicio de OpenPOS para refrescar UI y modo offline
     try {
       if (window.OpenPOSApp && OpenPOSApp.cartService) {
         var svc = OpenPOSApp.cartService;
-        if (typeof svc.setCart === 'function') svc.setCart(cart);
         if (typeof svc._initCartTotal === 'function') svc._initCartTotal();
         if (typeof svc.updateTotals === 'function') svc.updateTotals();
         if (typeof svc.saveCart === 'function') svc.saveCart();
       }
     } catch (_err) {}
+    csfxPersistCart(cart);
     try {
       document.dispatchEvent(new CustomEvent('csfx:dual-discount-applied', {
         detail: {
