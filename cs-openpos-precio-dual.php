@@ -861,12 +861,8 @@ add_filter('openpos_pos_footer_js', function($handles){
     wp_script_add_data('cs-openpos-compat', 'defer', true);
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
-    $asset_version_opt = trim((string) get_option('csfx_asset_version', '1.0.0'));
-    if ($asset_version_opt === '') {
-        $asset_version_opt = '1.0.0';
-    }
-    $ver = $asset_version_opt;
-    if (in_array($asset_version_opt, array('auto', 'mtime'), true) && file_exists($asset_path)) {
+    $ver = '1.0.0';
+    if (file_exists($asset_path)) {
         $ver = (string) filemtime($asset_path);
     }
     $asset = plugins_url('assets/cs-fx.js', __FILE__);

@@ -982,28 +982,136 @@
     return NaN;
   }
 
-  function csfxLocateCart() {
-    var candidates = [
-      window.OpenPOSApp && window.OpenPOSApp.cart,
-      window.OpenPOSApp && window.OpenPOSApp.cartService && window.OpenPOSApp.cartService.cart,
-      window.OpenPOSApp && window.OpenPOSApp.activeCart,
-      window.pos_cart && (window.pos_cart.cart || window.pos_cart),
-      window.OPCart,
-      window.OPENPOS_CART
-    ];
-    for (var i = 0; i < candidates.length; i++) {
-      if (candidates[i]) return candidates[i];
+  function csfxNormalizeCartCandidate(candidate) {
+    if (!candidate) return null;
+    if (typeof candidate === 'string') {
+      try {
+        var parsed = JSON.parse(candidate);
+        if (parsed && typeof parsed === 'object') return csfxNormalizeCartCandidate(parsed);
+      } catch (_err) {}
+      return null;
     }
-    var storageKeys = ['op_cart', 'op_cache_cart', 'op_local_cart'];
+    if (typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+    if (candidate.cart && typeof candidate.cart === 'object') return candidate.cart;
+    if (candidate.cart_data && typeof candidate.cart_data === 'object') return candidate.cart_data;
+    if (candidate.data && typeof candidate.data === 'object') return candidate.data;
+    return candidate;
+  }
+
+  function csfxLocateCartDetailed() {
+    var debug = { tried: [] };
+    var svcRef = null;
+    function attempt(value, source, serviceOverride) {
+      var normalized = csfxNormalizeCartCandidate(value);
+      debug.tried.push({
+        source: source,
+        hit: !!normalized,
+        type: value == null ? String(value) : typeof value
+      });
+      if (normalized) {
+        return {
+          cart: normalized,
+          source: source,
+          debug: debug,
+          cartService: serviceOverride || svcRef || null
+        };
+      }
+      return null;
+    }
+
+    var svc = csfxGetCartService(debug);
+    svcRef = svc;
+    if (svc && typeof svc === 'object') {
+      var svcCandidates = [];
+      try {
+        if (typeof svc.getCurrentCart === 'function') {
+          var current = svc.getCurrentCart();
+          if (current && typeof current.then === 'function') {
+            debug.tried.push({ source: 'cartService.getCurrentCart()', hit: false, async: true });
+          } else {
+            svcCandidates.push({ value: current, source: 'cartService.getCurrentCart()' });
+          }
+        }
+      } catch (errCurrent) {
+        debug.tried.push({ source: 'cartService.getCurrentCart()', error: String(errCurrent) });
+      }
+      try {
+        if (typeof svc.getCart === 'function') {
+          var legacy = svc.getCart();
+          if (legacy && typeof legacy.then === 'function') {
+            debug.tried.push({ source: 'cartService.getCart()', hit: false, async: true });
+          } else {
+            svcCandidates.push({ value: legacy, source: 'cartService.getCart()' });
+          }
+        }
+      } catch (errLegacy) {
+        debug.tried.push({ source: 'cartService.getCart()', error: String(errLegacy) });
+      }
+      svcCandidates.push({ value: svc.cart, source: 'cartService.cart' });
+      svcCandidates.push({ value: svc._cart, source: 'cartService._cart' });
+      svcCandidates.push({ value: svc.cart_data, source: 'cartService.cart_data' });
+      svcCandidates.push({ value: svc.cartData, source: 'cartService.cartData' });
+      for (var c = 0; c < svcCandidates.length; c++) {
+        var candidate = svcCandidates[c];
+        if (!candidate) continue;
+        var value = candidate.value;
+        var source = candidate.source;
+        var normalized = csfxNormalizeCartCandidate(value);
+        debug.tried.push({
+          source: source,
+          hit: !!normalized,
+          type: value == null ? String(value) : typeof value
+        });
+        if (normalized) {
+          return {
+            cart: normalized,
+            source: source,
+            debug: debug,
+            cartService: svc
+          };
+        }
+      }
+    }
+
+    var globalCandidates = [
+      { value: window.OpenPOSApp && window.OpenPOSApp.cart, source: 'OpenPOSApp.cart', service: window.OpenPOSApp && window.OpenPOSApp.cartService },
+      { value: window.OpenPOSApp && window.OpenPOSApp.activeCart, source: 'OpenPOSApp.activeCart', service: window.OpenPOSApp && window.OpenPOSApp.cartService },
+      {
+        value: window.OpenPOSApp && window.OpenPOSApp.cartService && window.OpenPOSApp.cartService.cart,
+        source: 'OpenPOSApp.cartService.cart',
+        service: window.OpenPOSApp && window.OpenPOSApp.cartService
+      },
+      { value: window.pos_cart && (window.pos_cart.cart || window.pos_cart), source: 'window.pos_cart', service: window.pos_cart && window.pos_cart.cartService },
+      { value: window.OPCart, source: 'window.OPCart' },
+      { value: window.OPENPOS_CART, source: 'window.OPENPOS_CART' }
+    ];
+    for (var i = 0; i < globalCandidates.length; i++) {
+      var gc = globalCandidates[i];
+      var gcHit = attempt(gc.value, gc.source, gc.service);
+      if (gcHit) return gcHit;
+    }
+
+    var storageKeys = ['op_cart', 'op_cache_cart', 'op_local_cart', '_op_cart_data'];
     for (var j = 0; j < storageKeys.length; j++) {
       try {
         var raw = localStorage.getItem(storageKeys[j]);
-        if (!raw) continue;
+        if (!raw) {
+          debug.tried.push({ source: 'localStorage.' + storageKeys[j], hit: false, empty: true });
+          continue;
+        }
         var parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') return parsed;
-      } catch (_err) {}
+        var storageHit = attempt(parsed, 'localStorage.' + storageKeys[j]);
+        if (storageHit) return storageHit;
+      } catch (err) {
+        debug.tried.push({ source: 'localStorage.' + storageKeys[j], error: String(err) });
+      }
     }
-    return null;
+
+    return { cart: null, source: null, debug: debug, cartService: svcRef };
+  }
+
+  function csfxLocateCart() {
+    return csfxLocateCartDetailed().cart;
   }
 
   function csfxExtractMetaMap(cart) {
@@ -1030,7 +1138,11 @@
 
   function csfxGetCartSnapshot(context) {
     context = context || {};
-    var cart = csfxLocateCart();
+    var located = csfxLocateCartDetailed();
+    var cart = located.cart;
+    var cartSource = located.source;
+    var cartDebug = located.debug;
+    var cartService = located.cartService;
     var meta = csfxExtractMetaMap(cart);
     var totalCandidates = [];
     if (cart) {
@@ -1088,6 +1200,9 @@
     var applied = Math.abs(discountAmount) > 0.0001;
     return {
       cart: cart,
+      cartService: cartService,
+      cartSource: cartSource,
+      cartDebug: cartDebug,
       meta: meta,
       totalUSD: isNaN(total) ? NaN : total,
       baseTotalUSD: isNaN(baseTotal) ? NaN : baseTotal,
@@ -1149,6 +1264,230 @@
     });
   }
 
+  var csfxCachedCartService = null;
+
+  function csfxLooksLikeCartService(obj) {
+    if (!obj || typeof obj !== 'object') return false;
+    if (obj === window || obj === document) return false;
+    var hasStoreName = obj.storeName === 'cart';
+    var fnCount = 0;
+    ['saveCart', 'updateTotals', 'clearCart', 'getCurrentCart'].forEach(function (fn) {
+      if (typeof obj[fn] === 'function') fnCount++;
+    });
+    return hasStoreName || fnCount >= 2;
+  }
+
+  function csfxFindCartServiceViaNg(debugSvc) {
+    var roots = [];
+    var appRoot = document.querySelector('app-root');
+    if (appRoot) roots.push(appRoot);
+    document.querySelectorAll('[ng-version]').forEach(function (node) {
+      if (roots.indexOf(node) === -1) roots.push(node);
+    });
+    var visited = new Set();
+    var queue = [];
+    roots.forEach(function (node) {
+      if (node && node.__ngContext__) {
+        queue.push({ ctx: node.__ngContext__, node: node });
+      }
+    });
+    var iterations = 0;
+    while (queue.length && iterations < 1200) {
+      iterations++;
+      var entry = queue.shift();
+      var ctx = entry && entry.ctx;
+      if (!ctx || visited.has(ctx)) continue;
+      visited.add(ctx);
+      for (var i = 0; i < ctx.length; i++) {
+        var slot = ctx[i];
+        if (!slot || typeof slot !== 'object') continue;
+        if (typeof Node !== 'undefined' && slot instanceof Node) continue;
+        if (csfxLooksLikeCartService(slot)) {
+          if (debugSvc) {
+            debugSvc.ngHit = {
+              via: 'context',
+              node: entry.node && entry.node.tagName,
+              ctxIndex: i,
+              className: slot.constructor && slot.constructor.name
+            };
+          }
+          return slot;
+        }
+        if (slot.cartService && csfxLooksLikeCartService(slot.cartService)) {
+          if (debugSvc) {
+            debugSvc.ngHit = {
+              via: 'component.cartService',
+              node: entry.node && entry.node.tagName,
+              ctxIndex: i,
+              className: slot.constructor && slot.constructor.name
+            };
+          }
+          return slot.cartService;
+        }
+        if (slot.__ngContext__ && !visited.has(slot.__ngContext__)) {
+          queue.push({ ctx: slot.__ngContext__, node: entry.node });
+        }
+      }
+      var tail = ctx[ctx.length - 1];
+      if (Array.isArray(tail) && !visited.has(tail)) {
+        queue.push({ ctx: tail, node: entry.node });
+      }
+      if (ctx.length > 8 && Array.isArray(ctx[8]) && !visited.has(ctx[8])) {
+        queue.push({ ctx: ctx[8], node: entry.node });
+      }
+    }
+    if (debugSvc) {
+      debugSvc.ngScan = {
+        visited: visited.size,
+        iterations: iterations,
+        queueLength: queue.length
+      };
+    }
+    return null;
+  }
+
+  function csfxGetCartService(debug) {
+    var svcDebug = debug.cartService = { attempts: [] };
+    function record(source, svc, ok) {
+      svcDebug.attempts.push({
+        source: source,
+        ok: !!ok,
+        type: svc == null ? String(svc) : typeof svc
+      });
+    }
+    function consider(svc, source) {
+      if (!svc) {
+        record(source, svc, false);
+        return null;
+      }
+      if (csfxLooksLikeCartService(svc)) {
+        csfxCachedCartService = svc;
+        try { if (typeof window !== 'undefined') window.__CSFX_CART_SERVICE__ = svc; } catch (_err) {}
+        record(source, svc, true);
+        return svc;
+      }
+      record(source, svc, false);
+      return null;
+    }
+
+    if (csfxCachedCartService && csfxLooksLikeCartService(csfxCachedCartService)) {
+      record('cache', csfxCachedCartService, true);
+      return csfxCachedCartService;
+    }
+
+    try {
+      if (typeof window !== 'undefined' && window.__CSFX_CART_SERVICE__) {
+        var cached = consider(window.__CSFX_CART_SERVICE__, 'window.__CSFX_CART_SERVICE__');
+        if (cached) return cached;
+      }
+    } catch (_err2) {}
+
+    var globalNames = [
+      'OpenPOSApp', 'OpenposApp', 'openposApp', 'POSApp', 'posApp', 'pos_app',
+      'OPApp', 'openposapp', 'openposAppService', 'OpenPosApp'
+    ];
+    for (var g = 0; g < globalNames.length; g++) {
+      var name = globalNames[g];
+      var host = null;
+      try { host = typeof window !== 'undefined' ? window[name] : null; } catch (_errHost) { host = null; }
+      if (!host) continue;
+      var svcHost = consider(host, 'window.' + name);
+      if (svcHost) return svcHost;
+      if (typeof host.cartService !== 'undefined') {
+        var svcChild = consider(host.cartService, 'window.' + name + '.cartService');
+        if (svcChild) return svcChild;
+      }
+    }
+
+    try {
+      if (typeof window !== 'undefined' && window.global && typeof window.global === 'object') {
+        var globalSvc = consider(window.global.cartService, 'global.cartService');
+        if (globalSvc) return globalSvc;
+      }
+    } catch (_err3) {}
+
+    var viaNg = csfxFindCartServiceViaNg(svcDebug);
+    if (viaNg) {
+      return consider(viaNg, 'ngContext');
+    }
+    return null;
+  }
+
+  function csfxDualLog(stage, detail) {
+    var payload = detail && typeof detail === 'object' ? Object.assign({}, detail) : {};
+    payload.stage = stage;
+    payload.time = new Date().toISOString();
+    try {
+      if (window.console) {
+        var label = '[csfx][dual] ' + stage;
+        if (typeof console.groupCollapsed === 'function') {
+          console.groupCollapsed(label);
+          if (payload) console.log(payload);
+          console.groupEnd();
+        } else if (typeof console.info === 'function') {
+          console.info(label, payload);
+        } else if (typeof console.log === 'function') {
+          console.log(label, payload);
+        }
+      }
+    } catch (_err) {}
+    try {
+      document.dispatchEvent(new CustomEvent('csfx:dual-debug', {
+        detail: payload
+      }));
+    } catch (_err2) {}
+  }
+
+  function csfxUpsertMeta(list, key, value) {
+    if (!key) return Array.isArray(list) ? list : [];
+    var arr = Array.isArray(list) ? list : [];
+    var found = false;
+    for (var i = 0; i < arr.length; i++) {
+      var item = arr[i];
+      if (!item) continue;
+      var itemKey = item.key || item.name || item.code;
+      if (itemKey === key) {
+        arr[i] = Object.assign({}, item, { key: key, value: value });
+        found = true;
+        break;
+      }
+    }
+    if (!found) arr.push({ key: key, value: value });
+    return arr;
+  }
+
+  // csfx: aplica descuento manual nativo OpenPOS sobre el cart
+  function csfxApplyManualCartDiscount(cart, discountValue) {
+    var d = round(Math.max(0, Number(discountValue) || 0), FX.decimals);
+    if (!isFinite(d) || d <= 0) return { ok: false };
+
+    if (!cart || typeof cart !== 'object') cart = {};
+    if (!cart.totals || typeof cart.totals !== 'object') cart.totals = {};
+
+    var codeAmt = round(Math.max(0, Number(cart.discount_code_amount || 0)), FX.decimals);
+    var itemsAmt = round(Math.max(0, Number(cart.final_items_discount_amount || 0)), FX.decimals);
+
+    cart.discount_source = 'csfx';
+    cart.discount_type = 'fixed';
+    cart.discount_amount = d;
+    cart.discount_final_amount = d;
+    cart.discount_tax_amount = 0; // after-tax
+    cart.discount_excl_tax = d; // after-tax
+    cart.add_discount = true;
+    cart.discount_code_amount = codeAmt;
+    cart.final_items_discount_amount = itemsAmt;
+    cart.cart_discount_amount = d;
+    cart.final_discount_amount = round(codeAmt + itemsAmt + d, FX.decimals);
+
+    if (typeof fmtUsd === 'function') {
+      cart.discount_amount_currency_formatted = fmtUsd(d);
+      cart.discount_final_amount_currency_formatted = fmtUsd(d);
+      cart.final_discount_amount_currency_formatted = fmtUsd(cart.final_discount_amount);
+    }
+
+    return { ok: true, amount: d };
+  }
+
   function csfxPersistCart(cart) {
     var snapshot = {
       discount_amount: cart.discount_amount,
@@ -1185,53 +1524,125 @@
 
   function csfxApplyDualDiscount(snapshot, calc) {
     var cart = snapshot.cart;
-    if (!cart) return false;
+    if (!cart) {
+      csfxDualLog('apply:no-cart', {
+        cartSource: snapshot.cartSource,
+        cartDebug: snapshot.cartDebug
+      });
+      return false;
+    }
     var baseTotal = round(snapshot.baseTotalUSD, FX.decimals);
-    if (!baseTotal || !isFinite(baseTotal)) return false;
-    var discountValue = round(calc.discount, FX.decimals);
-    var couponDiscount = round(Number(cart.discount_code_amount || 0), FX.decimals);
-    var itemDiscount = round(Number(cart.final_items_discount_amount || 0), FX.decimals);
-    var metaList = csfxSanitizeMetaList(cart.meta_data || cart.metaData);
+    if (!baseTotal || !isFinite(baseTotal)) {
+      csfxDualLog('apply:no-base-total', {
+        baseTotal: snapshot.baseTotalUSD,
+        totalUSD: snapshot.totalUSD,
+        discountAmount: snapshot.discountAmount
+      });
+      return false;
+    }
+    csfxDualLog('apply:start', {
+      baseTotal: baseTotal,
+      calc: calc,
+      snapshotTotal: snapshot.totalUSD,
+      existingDiscount: cart.discount_amount,
+      existingFinalDiscount: cart.final_discount_amount,
+      hasService: !!snapshot.cartService
+    });
+    var manualRes = csfxApplyManualCartDiscount(cart, calc && calc.discount);
+    if (!manualRes.ok) {
+      csfxDualLog('apply:manual-failed', {
+        requestedDiscount: calc && calc.discount,
+        cartDiscountAmount: cart && cart.discount_amount
+      });
+      return false;
+    }
+    var discountValue = manualRes.amount;
+    csfxDualLog('apply:manual', {
+      manual: manualRes,
+      cartDiscountAmount: cart.discount_amount,
+      cartFinalDiscountAmount: cart.final_discount_amount
+    });
+    var metaListBase = cart.meta_data || cart.metaData;
+    var metaList = csfxSanitizeMetaList(metaListBase && metaListBase.slice ? metaListBase.slice() : metaListBase);
     var usdPaidRounded = round(calc.netEffective, FX.decimals);
-    var pctRounded = Number(FX.disc.percent);
+    var pctStored = Number(FX && FX.disc && FX.disc.percent ? FX.disc.percent : 0);
+    var pctDisplay = pctStored;
+    if (pctDisplay > 0 && pctDisplay < 1) pctDisplay = pctDisplay * 100;
+    var pctRounded = round(pctDisplay, 2);
     var note = 'Descuento dual del ' + pctRounded.toFixed(2) + '% aplicado sobre ' + fmtUsd(calc.grossCovered) + ', cliente pagó ' + fmtUsd(calc.netEffective) + ' en divisas.';
-    cart.discount_source = 'csfx';
-    cart.discount_type = 'fixed';
-    cart.discount_amount = discountValue;
-    cart.discount_final_amount = discountValue;
-    cart.discount_excl_tax = discountValue;
-    cart.discount_tax_amount = Number(cart.discount_tax_amount || 0);
-    cart.cart_discount_amount = discountValue;
-    cart.discount_final_amount_currency_formatted = fmtUsd(discountValue);
-    cart.discount_amount_currency_formatted = fmtUsd(discountValue);
-    cart.add_discount = true;
-    cart.final_items_discount_amount = itemDiscount;
-    cart.discount_code_amount = couponDiscount;
-    var totalDiscount = round(couponDiscount + itemDiscount + discountValue, FX.decimals);
-    cart.final_discount_amount = totalDiscount;
-    cart.final_discount_amount_currency_formatted = fmtUsd(totalDiscount);
-    metaList.push({ key: 'csfx_usd_paid', value: usdPaidRounded });
-    metaList.push({ key: 'csfx_discount_pct', value: pctRounded });
-    metaList.push({ key: 'csfx_discount_value', value: discountValue });
-    metaList.push({ key: 'csfx_base_total', value: baseTotal });
-    metaList.push({ key: 'csfx_discount_note', value: note });
+    metaList = csfxUpsertMeta(metaList, 'csfx_usd_paid', usdPaidRounded);
+    metaList = csfxUpsertMeta(metaList, 'csfx_discount_pct', pctStored);
+    metaList = csfxUpsertMeta(metaList, 'csfx_discount_value', discountValue);
+    metaList = csfxUpsertMeta(metaList, 'csfx_base_total', baseTotal);
+    metaList = csfxUpsertMeta(metaList, 'csfx_discount_note', note);
     cart.meta_data = metaList;
     cart.metaData = metaList;
     cart.csfx_usd_paid = usdPaidRounded;
-    cart.csfx_discount_pct = pctRounded;
+    cart.csfx_discount_pct = pctStored;
     cart.csfx_discount_value = discountValue;
     cart.csfx_base_total = baseTotal;
     cart.csfx_discount_note = note;
+    csfxDualLog('apply:meta', {
+      discountValue: discountValue,
+      pctStored: pctStored,
+      meta: metaList,
+      cartSummary: {
+        discount_amount: cart.discount_amount,
+        final_discount_amount: cart.final_discount_amount,
+        grand_total: cart.grand_total,
+        total: cart.total,
+        total_due: cart.total_due,
+        add_discount: cart.add_discount
+      }
+    });
     // csfx: sincroniza con el servicio de OpenPOS para refrescar UI y modo offline
     try {
-      if (window.OpenPOSApp && OpenPOSApp.cartService) {
-        var svc = OpenPOSApp.cartService;
+      var svc = snapshot.cartService;
+      if ((!svc || typeof svc !== 'object') && typeof csfxCachedCartService !== 'undefined' && csfxCachedCartService) {
+        svc = csfxCachedCartService;
+      }
+      if ((!svc || typeof svc !== 'object') && window.OpenPOSApp && OpenPOSApp.cartService) {
+        svc = OpenPOSApp.cartService;
+      }
+      if (svc && typeof svc === 'object') {
+        var usedNative = false;
+        if (typeof svc.addDiscount === 'function') {
+          try {
+            svc.addDiscount({ amount: discountValue, type: 'fixed', source: 'csfx' });
+            usedNative = true;
+          } catch (_err) {
+            usedNative = false;
+          }
+        }
+        if (!usedNative && typeof svc.setCart === 'function') {
+          try { svc.setCart(cart); } catch (_err) {}
+        }
+        if (svc.cart) {
+          svc.cart.meta_data = metaList;
+          svc.cart.metaData = metaList;
+          svc.cart.csfx_usd_paid = usdPaidRounded;
+          svc.cart.csfx_discount_pct = pctStored;
+          svc.cart.csfx_discount_value = discountValue;
+          svc.cart.csfx_base_total = baseTotal;
+          svc.cart.csfx_discount_note = note;
+        }
         if (typeof svc._initCartTotal === 'function') svc._initCartTotal();
         if (typeof svc.updateTotals === 'function') svc.updateTotals();
         if (typeof svc.saveCart === 'function') svc.saveCart();
+        csfxDualLog('apply:service', {
+          usedNative: usedNative,
+          hasSetCart: typeof svc.setCart === 'function',
+          hasUpdateTotals: typeof svc.updateTotals === 'function',
+          hasSaveCart: typeof svc.saveCart === 'function',
+          serviceDetected: !!svc
+        });
       }
     } catch (_err) {}
     csfxPersistCart(cart);
+    csfxDualLog('apply:finished', {
+      discountValue: discountValue,
+      finalDiscountAmount: cart.final_discount_amount
+    });
     try {
       document.dispatchEvent(new CustomEvent('csfx:dual-discount-applied', {
         detail: {
@@ -1490,6 +1901,7 @@
     if (!input) return;
     var usdNet = parseFloat(String(input.value || '').replace(',', '.'));
     if (!isFinite(usdNet) || usdNet <= 0) {
+      csfxDualLog('confirm:invalid-input', { rawValue: input.value });
       if (status) {
         status.textContent = 'Ingresa un monto válido.';
         status.className = 'csfx-dual-status csfx-dual-status--error';
@@ -1500,6 +1912,7 @@
     var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
     var baseTotal = snapshot.baseTotalUSD;
     if (!isFinite(baseTotal) || baseTotal <= 0) {
+      csfxDualLog('confirm:no-base-total', { snapshot: snapshot, usdNet: usdNet });
       if (status) {
         status.textContent = 'No hay total disponible para aplicar el descuento.';
         status.className = 'csfx-dual-status csfx-dual-status--error';
@@ -1507,7 +1920,18 @@
       return;
     }
     var calc = csfxComputeDual(baseTotal, usdNet, pct);
+    csfxDualLog('confirm:calc', {
+      baseTotal: baseTotal,
+      usdNet: usdNet,
+      pct: pct,
+      cartFound: !!snapshot.cart,
+      cartSource: snapshot.cartSource,
+      hasService: !!snapshot.cartService,
+      cartDebug: snapshot.cartDebug,
+      calc: calc
+    });
     if (!calc || calc.discount <= 0) {
+      csfxDualLog('confirm:no-discount', { calc: calc });
       if (status) {
         status.textContent = 'Con este monto no se genera descuento.';
         status.className = 'csfx-dual-status csfx-dual-status--warn';
@@ -1515,6 +1939,12 @@
       return;
     }
     var success = csfxApplyDualDiscount(snapshot, calc);
+    csfxDualLog('confirm:apply-result', {
+      success: success,
+      discount: calc.discount,
+      cartFound: !!snapshot.cart,
+      remainderUsd: calc.remainderUsd
+    });
     if (status) {
       status.classList.remove('csfx-dual-status--warn', 'csfx-dual-status--info', 'csfx-dual-status--error', 'csfx-dual-status--ok');
       if (success) {
