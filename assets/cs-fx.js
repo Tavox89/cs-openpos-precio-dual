@@ -94,6 +94,14 @@
   // si vienen opciones desde PHP, las respetamos; si no, default true
   if (window.CSFX_OPTS && typeof window.CSFX_OPTS.hideTax !== 'undefined') FX.hideTax = !!window.CSFX_OPTS.hideTax;
 
+  var csfxCustomModalUI = null;
+  var csfxExplainModalUI = null;
+  var csfxCustomModalState = {
+    open: false,
+    authorized: false,
+    pin: ''
+  };
+
   function decodeSymbol(sym, fallback) {
     if (!sym) return fallback || '';
     if (typeof sym !== 'string') return sym;
@@ -261,34 +269,105 @@
       '.csfx-info{margin-top:6px;font-size:11px;opacity:.8;}',
       '.csfx-pay-header-row{display:flex;gap:.8rem;margin-top:2px;}',
       '.csfx-chip--modal{font-size:16px;font-weight:700;padding:.2rem .6rem}',
-      '.csfx-dual-box{margin-top:12px;padding:10px;border:1px solid rgba(15,23,42,.12);border-radius:8px;background:#f8fafc;max-width:280px;}',
-      '.csfx-dual-box h4{margin:0 0 6px;font-size:14px;font-weight:700;color:#1f2937;}',
-      '.csfx-dual-grid{display:grid;grid-template-columns:auto auto;column-gap:8px;row-gap:4px;font-size:12px;}',
-      '.csfx-dual-grid strong{color:#111827;}',
-      '.csfx-dual-input{margin-top:8px;display:flex;flex-direction:column;gap:4px;font-size:12px;}',
-      '.csfx-dual-input input{padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:14px;font-weight:600;color:#111827;}',
-      '.csfx-dual-input input:focus{outline:2px solid rgba(14,116,144,.25);border-color:#0ea5e9;}',
-      '.csfx-dual-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}',
-      '.csfx-chip-pill{background:rgba(15,23,42,.08);color:#0f172a;}',
-      '.csfx-chip-pill--ok{background:rgba(16,185,129,.16);color:#065f46;}',
-      '.csfx-chip-pill--warn{background:rgba(249,115,22,.16);color:#9a3412;}',
-      '.csfx-chip-pill--alert{background:rgba(239,68,68,.16);color:#991b1b;}',
-      '.csfx-dual-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;}',
-      '.csfx-dual-status{margin-top:8px;font-size:12px;color:#1f2937;}',
+      '.csfx-dual-box{margin-top:10px;padding:14px;border-radius:14px;background:linear-gradient(160deg,rgba(0,87,183,.13),rgba(255,255,255,.97));border:1px solid rgba(0,87,183,.22);box-shadow:0 8px 24px rgba(10,30,70,.16);max-width:320px;font-family:inherit;}',
+      '.csfx-dual-box h4{margin:0 0 10px;font-size:17px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:8px;}',
+      '.csfx-dual-heading-icon{display:inline-flex;width:30px;height:30px;border-radius:10px;background:#0c4a94;color:#fff;align-items:center;justify-content:center;font-size:18px;box-shadow:0 4px 10px rgba(12,74,148,.3);}',
+      '.csfx-dual-grid{display:grid;grid-template-columns:auto auto;column-gap:12px;row-gap:6px;font-size:14px;color:#0f172a;font-weight:600;}',
+      '.csfx-dual-grid strong{color:#0b1f3a;font-size:16px;font-weight:700;}',
+      '.csfx-dual-input{margin-top:12px;display:flex;flex-direction:column;gap:6px;font-size:13px;}',
+      '.csfx-dual-input span{font-weight:700;color:#072c59;font-size:14px;}',
+      '.csfx-dual-input input{padding:7px 10px;border:1px solid rgba(0,87,183,.26);border-radius:10px;font-size:15px;font-weight:600;color:#0f172a;background:#fff;transition:box-shadow .2s ease,border-color .2s ease;}',
+      '.csfx-dual-input input:focus{outline:none;border-color:#0057b7;box-shadow:0 0 0 2px rgba(0,87,183,.18);}',
+      '.csfx-dual-metrics{margin-top:12px;border-radius:10px;background:#f8fbff;border:1px solid rgba(7,44,89,.07);overflow:hidden;box-shadow:0 4px 12px rgba(7,44,89,.06);}',
+      '.csfx-dual-metrics-row{display:grid;grid-template-columns:1fr auto;padding:9px 12px;font-size:13px;font-weight:600;color:#0f172a;align-items:center;gap:10px;}',
+      '.csfx-dual-metrics-row:nth-child(odd){background:rgba(227,242,255,.65);}',
+      '.csfx-dual-metrics-row.is-highlight{background:rgba(16,185,129,.18)!important;color:#065f46;}',
+      '.csfx-dual-metrics-row.is-warning{background:rgba(251,191,36,.22)!important;color:#92400e;}',
+      '.csfx-dual-metrics-label{display:flex;align-items:center;gap:6px;}',
+      '.csfx-dual-metrics-help{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:#0d5ad6;color:#fff;font-size:11px;box-shadow:0 2px 4px rgba(11,106,212,.25);position:relative;cursor:help;}',
+      '.csfx-dual-metrics-help::after{content:attr(data-tooltip);position:absolute;left:50%;top:calc(100% + 8px);transform:translateX(-50%);background:#0f172a;color:#fff;font-size:11px;font-weight:500;line-height:1.35;padding:6px 8px;border-radius:6px;opacity:0;pointer-events:none;white-space:normal;width:180px;box-shadow:0 8px 16px rgba(15,23,42,.25);transition:opacity .15s ease .3s;}',
+      '.csfx-dual-metrics-help::before{content:\"\";position:absolute;left:50%;top:100%;transform:translateX(-50%);border:6px solid transparent;border-top-color:#0f172a;opacity:0;transition:opacity .15s ease .3s;}',
+      '.csfx-dual-metrics-help:hover::after,.csfx-dual-metrics-help:focus::after{opacity:1;transition-delay:.25s;}',
+      '.csfx-dual-metrics-help:hover::before,.csfx-dual-metrics-help:focus::before{opacity:1;transition-delay:.25s;}',
+      '.csfx-dual-metrics-value{font-size:16px;font-weight:700;color:#052c65;}',
+      '.csfx-dual-helper{margin-top:8px;display:flex;align-items:center;gap:8px;font-size:12px;color:#0f172a;background:rgba(0,87,183,.08);padding:6px 10px;border-radius:9px;border:1px dashed rgba(0,87,183,.2);cursor:pointer;}',
+      '.csfx-dual-helper-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:#0b6ad4;color:#fff;font-size:11px;box-shadow:0 2px 4px rgba(11,106,212,.25);position:relative;cursor:help;}',
+      '.csfx-dual-helper-icon::after{content:attr(data-tooltip);position:absolute;left:50%;top:calc(100% + 8px);transform:translateX(-50%);background:#0f172a;color:#fff;font-size:11px;font-weight:500;line-height:1.35;padding:6px 8px;border-radius:6px;opacity:0;pointer-events:none;white-space:normal;width:200px;box-shadow:0 8px 16px rgba(15,23,42,.25);transition:opacity .15s ease .3s;}',
+      '.csfx-dual-helper-icon::before{content:\"\";position:absolute;left:50%;top:100%;transform:translateX(-50%);border:6px solid transparent;border-top-color:#0f172a;opacity:0;transition:opacity .15s ease .3s;}',
+      '.csfx-dual-helper-icon:hover::after,.csfx-dual-helper-icon:focus::after{opacity:1;transition-delay:.25s;}',
+      '.csfx-dual-helper-icon:hover::before,.csfx-dual-helper-icon:focus::before{opacity:1;transition-delay:.25s;}',
+      '.csfx-dual-helper-label{font-size:12px;font-weight:600;color:#0f172a;}',
+      '.csfx-dual-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px;}',
+      '.csfx-btn{appearance:none;border:0;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:transform .2s ease,box-shadow .2s ease,background .2s ease,color .2s ease;font-family:inherit;min-width:0;}',
+      '.csfx-btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none;transform:none;}',
+      '.csfx-btn--primary{background:#0057b7;color:#fff;box-shadow:0 4px 12px rgba(0,87,183,.3);min-width:132px;}',
+      '.csfx-btn--primary:hover:not(:disabled){background:#0b6ad4;box-shadow:0 6px 16px rgba(0,87,183,.4);}',
+      '.csfx-btn--ghost{background:rgba(255,255,255,.65);color:#0f172a;border:1px solid rgba(15,23,42,.12);}',
+      '.csfx-btn--ghost:hover:not(:disabled){background:#f1f5f9;}',
+      '.csfx-btn--accent{background:#10b981;color:#fff;box-shadow:0 3px 12px rgba(16,185,129,.35);}',
+      '.csfx-btn--accent:hover:not(:disabled){background:#0d9668;}',
+      '.csfx-dual-status{margin-top:10px;font-size:13px;color:#0f172a;font-weight:600;}',
       '.csfx-dual-status--info{color:#0f766e;}',
-      '.csfx-dual-status--warn{color:#9a3412;}',
-      '.csfx-dual-status--error{color:#991b1b;}',
-      '.csfx-dual-status--ok{color:#065f46;font-weight:700;}',
+      '.csfx-dual-status--warn{color:#b45309;}',
+      '.csfx-dual-status--error{color:#b91c1c;}',
+      '.csfx-dual-status--ok{color:#047857;font-weight:700;}',
       '.csfx-dual-note{margin-top:6px;font-size:11px;color:#4b5563;line-height:1.4;}',
-      '.csfx-badge-info{margin-bottom:6px;font-size:12px;line-height:1.4;}',
+      '.csfx-badge-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;cursor:pointer;padding-bottom:6px;border-bottom:1px solid rgba(15,23,42,.08);}',
+      '.csfx-badge-top-title{font-size:15px;font-weight:700;color:#0b1f3a;display:flex;align-items:center;gap:8px;}',
+      '.csfx-badge-close{background:none;border:0;color:#334155;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;transition:background .2s ease,color .2s ease;}',
+      '.csfx-badge-close:hover{background:rgba(148,163,184,.18);color:#0f172a;}',
+      '.csfx-badge-info{margin-bottom:8px;font-size:15px;line-height:1.5;color:#0f172a;font-weight:600;}',
       '.csfx-dual-note strong{font-weight:700;}',
       // compactar el hueco de impuestos si se decide ocultar
        '.csfx-hide-tax{display:none!important;line-height:0!important;height:0!important;overflow:hidden!important;margin:0!important;padding:0!important;border:0!important;}',
       // badge colapsable para mostrar la tasa y hora
-        '.csfx-badge{position:fixed;right:12px;bottom:96px;z-index:10000;font-family:inherit;}', /* bottom se recalcula por JS */
-      '.csfx-badge-handle{background:#2f3437;color:#fff;padding:6px 8px;border-radius:4px 4px 0 0;font-size:16px;cursor:pointer;}',
-      '.csfx-badge-content{background:#eef1f5;color:#2f3437;padding:6px 8px;border-radius:0 0 4px 4px;display:none;font-size:14px;white-space:nowrap;}',
+      '.csfx-badge{position:fixed;right:12px;bottom:96px;z-index:10000;font-family:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:stretch;width:auto;}', /* bottom se recalcula por JS */
+      '.csfx-badge-handle{background:#0057b7;color:#fff;padding:10px 16px;border-radius:12px 12px 0 0;font-size:15px;display:flex;align-items:center;gap:10px;box-shadow:0 8px 18px rgba(0,87,183,.35);transition:background .2s ease,box-shadow .2s ease;width:100%;}',
+      '.csfx-badge-handle:hover{background:#0b6ad4;}',
+      '.csfx-badge-handle *{pointer-events:none;}',
+      '.csfx-badge-icon{display:inline-flex;width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,.3);align-items:center;justify-content:center;font-size:15px;box-shadow:0 4px 10px rgba(255,255,255,.2);}',
+      '.csfx-badge-label{font-size:13px;font-weight:600;}',
+      '.csfx-badge-content{background:#ffffff;color:#0f172a;padding:12px 14px;border-radius:0 0 12px 12px;display:none;font-size:13px;white-space:nowrap;box-shadow:0 16px 32px rgba(15,23,42,.25);border:1px solid rgba(15,23,42,.06);min-width:260px;}',
        '.csfx-badge.open .csfx-badge-content{display:block;}',
+      '.csfx-modal-backdrop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(15,23,42,.45);backdrop-filter:blur(3px);z-index:10001;}',
+      '.csfx-modal-backdrop[data-open=\"true\"]{display:flex;}',
+      '.csfx-modal{background:#ffffff;border-radius:16px;min-width:320px;max-width:520px;width:90%;box-shadow:0 18px 48px rgba(15,23,42,.35);overflow:hidden;font-family:inherit;}',
+      '.csfx-modal-header{background:#0057b7;color:#fff;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;}',
+      '.csfx-modal-header-title{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700;}',
+      '.csfx-modal-header-icon{display:inline-flex;width:28px;height:28px;border-radius:8px;background:rgba(255,255,255,.18);align-items:center;justify-content:center;font-size:16px;}',
+      '.csfx-modal-header-ref{font-size:12px;font-weight:600;opacity:.85;}',
+      '.csfx-modal-body{padding:18px 20px;display:flex;flex-direction:column;gap:16px;}',
+      '.csfx-auth-card{border:1px solid rgba(0,87,183,.22);background:rgba(0,87,183,.06);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;}',
+      '.csfx-auth-title{font-size:13px;font-weight:700;color:#0f172a;}',
+      '.csfx-auth-row{display:flex;gap:10px;align-items:center;}',
+      '.csfx-auth-row input{flex:1;padding:8px 12px;border-radius:8px;border:1px solid rgba(15,23,42,.12);font-size:14px;}',
+      '.csfx-auth-row input:focus{outline:none;border-color:#0057b7;box-shadow:0 0 0 2px rgba(0,87,183,.2);}',
+      '.csfx-auth-hint{font-size:12px;color:#334155;}',
+      '.csfx-auth-status{font-size:12px;font-weight:600;color:#334155;}',
+      '.csfx-auth-status--ok{color:#0f766e;}',
+      '.csfx-auth-status--error{color:#b91c1c;}',
+      '.csfx-item-list{display:flex;flex-direction:column;gap:10px;max-height:45vh;overflow:auto;padding-right:4px;}',
+      '.csfx-item-card{border:1px solid rgba(15,23,42,.1);border-radius:10px;padding:12px 14px;background:#f8fafc;display:flex;flex-direction:column;gap:6px;}',
+      '.csfx-item-header{display:flex;justify-content:space-between;gap:8px;color:#0f172a;font-weight:700;font-size:13px;}',
+      '.csfx-item-meta{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:#475569;}',
+      '.csfx-item-actions{display:flex;gap:8px;align-items:center;margin-top:4px;}',
+      '.csfx-item-actions input{width:90px;padding:6px 8px;border-radius:8px;border:1px solid rgba(15,23,42,.16);font-size:13px;text-align:right;}',
+      '.csfx-item-actions input:focus{outline:none;border-color:#0057b7;box-shadow:0 0 0 2px rgba(0,87,183,.16);}',
+      '.csfx-item-actions small{font-size:11px;color:#475569;}',
+      '.csfx-item-feedback{font-size:11px;color:#334155;margin-top:4px;}',
+      '.csfx-item-feedback--ok{color:#047857;}',
+      '.csfx-item-feedback--error{color:#b91c1c;}',
+      '.csfx-modal--info{max-width:420px;}',
+      '.csfx-modal--info .csfx-modal-body{gap:14px;}',
+      '.csfx-explain-body{display:flex;flex-direction:column;gap:12px;font-size:13px;color:#0f172a;}',
+      '.csfx-explain-head{font-weight:700;color:#0b1f3a;}',
+      '.csfx-explain-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;}',
+      '.csfx-explain-steps li{display:flex;gap:8px;line-height:1.45;}',
+      '.csfx-explain-steps strong{color:#0b6ad4;}',
+      '.csfx-explain-inline{font-weight:600;color:#072c59;}',
+      '.csfx-explain-foot{font-size:12px;color:#475569;line-height:1.4;}',
+      '.csfx-modal-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:8px;}',
+      '.csfx-empty-copy{font-size:13px;color:#475569;text-align:center;padding:18px 0;}',
       // especificidad para evitar conflictos con CSS del POS
         /* Reglas específicas para el buscador (sin romper layout nativo) */
       '.csfx-chip{font-family:inherit;font-size:16px;font-weight:700;}',
@@ -918,12 +997,25 @@
       } catch (e) {
         hh = d.getHours() + ':' + ('' + d.getMinutes()).padStart(2, '0');
       }
-      t += ' · <strong>Actualizado:</strong> ' + hh;
+      t += ' · <strong>Act.:</strong> ' + hh;
     }
     if (FX.disc && FX.disc.active && FX.disc.percent > 0) {
       t += ' · <strong>Desc:</strong> ' + FX.disc.percent + '%';
     }
     return t;
+  }
+
+  function csfxUpdateBadgeHandle(badge) {
+    if (!badge) return;
+    var handle = badge.querySelector('.csfx-badge-handle');
+    if (!handle) return;
+    var rateText = '--';
+    try {
+      if (FX.rate) {
+        rateText = Number(FX.rate).toFixed(FX.decimals);
+      }
+    } catch (_errRate) {}
+    handle.innerHTML = '<span class="csfx-badge-icon">🏷️</span><span class="csfx-badge-label">Ref ' + rateText + '</span>';
   }
 
   /**
@@ -942,22 +1034,48 @@
       badge.className = 'csfx-badge';
       var handle = document.createElement('div');
       handle.className = 'csfx-badge-handle';
-      // texto del asa: puede ser un símbolo o abreviatura
-      handle.textContent = '⚖';
+      handle.innerHTML = '';
       var content = document.createElement('div');
       content.className = 'csfx-badge-content';
       badge.appendChild(handle);
       badge.appendChild(content);
+      document.body.appendChild(badge);
+    }
+    var handle = badge.querySelector('.csfx-badge-handle');
+    if (handle && !handle.dataset.csfxBound) {
+      handle.dataset.csfxBound = '1';
       handle.addEventListener('click', function (e) {
+        e.stopPropagation();
         badge.classList.toggle('open');
         if (badge.classList.contains('open')) {
           csfxRenderBadgeContent(badge);
         }
-        e.stopPropagation();
       });
-      document.body.appendChild(badge);
     }
+    if (!badge.dataset.csfxBadgeBound) {
+      badge.dataset.csfxBadgeBound = '1';
+      badge.addEventListener('click', function (ev) {
+        if (ev.target.closest('.csfx-badge-content')) return;
+        if (!badge.classList.contains('open')) {
+          badge.classList.add('open');
+          csfxRenderBadgeContent(badge);
+        }
+        ev.stopPropagation();
+      });
+    }
+    csfxUpdateBadgeHandle(badge);
     csfxRenderBadgeContent(badge);
+  }
+
+  if (typeof window !== 'undefined' && !window.__CSFX_BADGE_OUTSIDE__) {
+    window.__CSFX_BADGE_OUTSIDE__ = true;
+    document.addEventListener('click', function (ev) {
+      var badge = document.querySelector('.csfx-badge');
+      if (!badge || !badge.classList.contains('open')) return;
+      if (badge.contains(ev.target)) return;
+      if (csfxCustomModalState && csfxCustomModalState.open) return;
+      badge.classList.remove('open');
+    });
   }
 
 
@@ -1120,6 +1238,21 @@
     }
 
     return { cart: null, source: null, debug: debug, cartService: svcRef };
+  }
+
+  function csfxLoadStoredCart() {
+    if (typeof localStorage === 'undefined') return null;
+    var storageKeys = ['op_cart', 'op_cache_cart', 'op_local_cart', '_op_cart_data', 'op_cart_data', 'op_cart_v8', 'op_v5_cart', 'op_cart_backup', 'op_cart_latest', 'op_cart_store'];
+    for (var i = 0; i < storageKeys.length; i++) {
+      try {
+        var raw = localStorage.getItem(storageKeys[i]);
+        if (!raw) continue;
+        var parsed = JSON.parse(raw);
+        var normalized = csfxNormalizeCartCandidate(parsed);
+        if (normalized && typeof normalized === 'object') return normalized;
+      } catch (_errStored) {}
+    }
+    return null;
   }
 
   function csfxLocateCart() {
@@ -1548,8 +1681,18 @@
     var payload = detail && typeof detail === 'object' ? Object.assign({}, detail) : {};
     payload.stage = stage;
     payload.time = new Date().toISOString();
+    var shouldConsole = false;
     try {
-      if (window.console) {
+      if (FX && FX.debug) shouldConsole = true;
+      if (!shouldConsole && window && typeof window.CSFX_DEBUG_LOGS !== 'undefined') {
+        shouldConsole = !!window.CSFX_DEBUG_LOGS;
+      }
+      if (!shouldConsole && typeof localStorage !== 'undefined') {
+        shouldConsole = localStorage.getItem('csfx_debug_logs') === '1';
+      }
+    } catch (_errDebugFlag) {}
+    try {
+      if (shouldConsole && window && window.console) {
         var label = '[csfx][dual] ' + stage;
         if (typeof console.groupCollapsed === 'function') {
           console.groupCollapsed(label);
@@ -1883,13 +2026,14 @@
   }
 
   function csfxApplyDualDiscount(snapshot, calc) {
-    var cart = snapshot.cart;
-    if (!cart) {
+    if (!snapshot || !calc) return false;
+    var cart = (snapshot.cart && typeof snapshot.cart === 'object') ? snapshot.cart : {};
+    if (!cart.totals || typeof cart.totals !== 'object') cart.totals = {};
+    if (!snapshot.cart) {
       csfxDualLog('apply:no-cart', {
         cartSource: snapshot.cartSource,
         cartDebug: snapshot.cartDebug
       });
-      return false;
     }
     var baseTotal = round(snapshot.baseTotalUSD, FX.decimals);
     if (!baseTotal || !isFinite(baseTotal)) {
@@ -1900,6 +2044,11 @@
       });
       return false;
     }
+    var discountValue = round(Math.max(0, calc && calc.discount ? calc.discount : 0), FX.decimals);
+    if (!isFinite(discountValue) || discountValue <= 0) {
+      csfxDualLog('apply:no-discount', { calc: calc, discountValue: discountValue });
+      return false;
+    }
     csfxDualLog('apply:start', {
       baseTotal: baseTotal,
       calc: calc,
@@ -1907,99 +2056,81 @@
       existingDiscount: cart.discount_amount,
       existingFinalDiscount: cart.final_discount_amount,
       hasService: !!snapshot.cartService,
-      cartSource: snapshot.cartSource
+      cartSource: snapshot.cartSource,
+      manualVia: 'ui'
     });
-    var manualRes = csfxApplyManualCartDiscount(cart, calc && calc.discount, snapshot.cartService);
-    if (!manualRes.ok) {
-      csfxDualLog('apply:manual-failed', {
-        requestedDiscount: calc && calc.discount,
-        cartDiscountAmount: cart && cart.discount_amount
-      });
-      return false;
-    }
-    if (manualRes.cart && typeof manualRes.cart === 'object') {
-      cart = manualRes.cart;
-    }
-    var discountValue = manualRes.amount;
     if (snapshot.cartDebug && typeof snapshot.cartDebug === 'object') {
-      snapshot.cartDebug.manualVia = manualRes.via;
+      snapshot.cartDebug.manualVia = 'ui';
     }
-    var uiFallbackUsed = false;
-    var uiPersisted = false;
-    if (manualRes.via !== 'native') {
-      uiFallbackUsed = applyDualDiscountViaUI(discountValue, {
-        after: function (snapshotAfter) {
-          if (!snapshotAfter || !snapshotAfter.cart) return;
-          var uiCart = snapshotAfter.cart;
-          if (OPCompat && typeof OPCompat.normalizeCart === 'function') {
-            try { uiCart = OPCompat.normalizeCart(uiCart); } catch (_errUiNorm) {}
-          }
-          uiCart.discount_source = '';
-          uiCart.discountSource = '';
-          uiCart.meta_data = metaList;
-          uiCart.metaData = metaList;
-          uiCart.csfx_usd_paid = usdPaidRounded;
-          uiCart.csfx_discount_pct = pctStored;
-          uiCart.csfx_discount_value = discountValue;
-          uiCart.csfx_base_total = baseTotal;
-          uiCart.csfx_discount_note = note;
-          csfxPersistCart(uiCart);
-          uiPersisted = true;
-          csfxDualLog('apply:ui-persist', { success: true });
-        },
-        onDone: function (success) {
-          csfxDualLog('apply:ui-done', { success: success });
-        }
-      });
-      csfxDualLog('apply:ui-attempt', { amount: discountValue, used: uiFallbackUsed });
-      if (uiFallbackUsed) {
-        manualRes.via = 'ui';
-        if (snapshot.cartDebug && typeof snapshot.cartDebug === 'object') {
-          snapshot.cartDebug.manualVia = manualRes.via;
-        }
-        cart = cart || {};
-        cart.discount_source = '';
-        cart.discountSource = '';
-      }
-    }
-    csfxDualLog('apply:manual', {
-      manual: {
-        via: manualRes.via,
-        nativeError: manualRes.nativeError ? (manualRes.nativeError.message || String(manualRes.nativeError)) : null
-      },
-      cartDiscountAmount: cart.discount_amount,
-      cartFinalDiscountAmount: cart.final_discount_amount,
-      manualVia: manualRes.via
-    });
-    if (OPCompat && typeof OPCompat.normalizeCart === 'function') {
-      try { OPCompat.normalizeCart(cart); } catch (_errNormAfterManual) {}
-    }
-    var metaListBase = cart.meta_data || cart.metaData;
-    var metaList = csfxSanitizeMetaList(metaListBase && metaListBase.slice ? metaListBase.slice() : metaListBase);
+
     var usdPaidRounded = round(calc.netEffective, FX.decimals);
     var pctStored = Number(FX && FX.disc && FX.disc.percent ? FX.disc.percent : 0);
     var pctDisplay = pctStored;
     if (pctDisplay > 0 && pctDisplay < 1) pctDisplay = pctDisplay * 100;
     var pctRounded = round(pctDisplay, 2);
     var note = 'Descuento dual del ' + pctRounded.toFixed(2) + '% aplicado sobre ' + fmtUsd(calc.grossCovered) + ', cliente pagó ' + fmtUsd(calc.netEffective) + ' en divisas.';
-    metaList = csfxUpsertMeta(metaList, 'csfx_usd_paid', usdPaidRounded);
-    metaList = csfxUpsertMeta(metaList, 'csfx_discount_pct', pctStored);
-    metaList = csfxUpsertMeta(metaList, 'csfx_discount_value', discountValue);
-    metaList = csfxUpsertMeta(metaList, 'csfx_base_total', baseTotal);
-    metaList = csfxUpsertMeta(metaList, 'csfx_discount_note', note);
-    cart.discount_source = '';
-    cart.discountSource = '';
-    cart.meta_data = metaList;
-    cart.metaData = metaList;
-    cart.csfx_usd_paid = usdPaidRounded;
-    cart.csfx_discount_pct = pctStored;
-    cart.csfx_discount_value = discountValue;
-    cart.csfx_base_total = baseTotal;
-    cart.csfx_discount_note = note;
+
+    var syncDiscountFields = function (targetCart) {
+      if (!targetCart || typeof targetCart !== 'object') return;
+      if (!targetCart.totals || typeof targetCart.totals !== 'object') targetCart.totals = {};
+      var codeAmt = round(Math.max(0, Number(targetCart.discount_code_amount || 0)), FX.decimals);
+      var itemsAmt = round(Math.max(0, Number(targetCart.final_items_discount_amount || 0)), FX.decimals);
+      var combined = round(codeAmt + itemsAmt + discountValue, FX.decimals);
+      targetCart.discount_source = '';
+      targetCart.discountSource = '';
+      targetCart.discount_type = 'fixed';
+      targetCart.discountType = 'fixed';
+      targetCart.discount_amount = discountValue;
+      targetCart.discountAmount = discountValue;
+      targetCart.discount_final_amount = discountValue;
+      targetCart.discountFinalAmount = discountValue;
+      targetCart.discount_tax_amount = 0;
+      targetCart.discountTaxAmount = 0;
+      targetCart.discount_excl_tax = discountValue;
+      targetCart.discountExclTax = discountValue;
+      targetCart.cart_discount_amount = discountValue;
+      targetCart.cartDiscountAmount = discountValue;
+      targetCart.discount_code_amount = codeAmt;
+      targetCart.discountCodeAmount = codeAmt;
+      targetCart.final_items_discount_amount = itemsAmt;
+      targetCart.finalItemsDiscountAmount = itemsAmt;
+      targetCart.final_discount_amount = combined;
+      targetCart.finalDiscountAmount = combined;
+      targetCart.final_discount_amount_incl_tax = combined;
+      targetCart.finalDiscountAmountInclTax = combined;
+      targetCart.add_discount = true;
+      targetCart.addDiscount = true;
+      targetCart.totals.discount = combined;
+      targetCart.totals.discountAmount = combined;
+      targetCart.totals.final_discount_amount = combined;
+      targetCart.totals.finalDiscountAmount = combined;
+    };
+
+    var applyMetaToCart = function (targetCart) {
+      if (!targetCart || typeof targetCart !== 'object') return;
+      syncDiscountFields(targetCart);
+      var targetMetaBase = targetCart.meta_data || targetCart.metaData;
+      var targetMeta = csfxSanitizeMetaList(targetMetaBase && targetMetaBase.slice ? targetMetaBase.slice() : targetMetaBase);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_usd_paid', usdPaidRounded);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_discount_pct', pctStored);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_discount_value', discountValue);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_base_total', baseTotal);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_discount_note', note);
+      targetCart.meta_data = targetMeta;
+      targetCart.metaData = targetMeta;
+      targetCart.csfx_usd_paid = usdPaidRounded;
+      targetCart.csfx_discount_pct = pctStored;
+      targetCart.csfx_discount_value = discountValue;
+      targetCart.csfx_base_total = baseTotal;
+      targetCart.csfx_discount_note = note;
+    };
+
+    applyMetaToCart(cart);
+    csfxPersistCart(cart);
     csfxDualLog('apply:meta', {
       discountValue: discountValue,
       pctStored: pctStored,
-      meta: metaList,
+      meta: cart.meta_data,
       cartSummary: {
         discount_amount: cart.discount_amount,
         final_discount_amount: cart.final_discount_amount,
@@ -2009,79 +2140,57 @@
         add_discount: cart.add_discount
       }
     });
-    // csfx: sincroniza con el servicio de OpenPOS para refrescar UI y modo offline
-    try {
-      var svc = manualRes.service || snapshot.cartService;
-      if ((!svc || typeof svc !== 'object') && typeof csfxCachedCartService !== 'undefined' && csfxCachedCartService) {
-        svc = csfxCachedCartService;
-      }
-      if ((!svc || typeof svc !== 'object') && window.OpenPOSApp && OpenPOSApp.cartService) {
-        svc = OpenPOSApp.cartService;
-      }
-      if (svc && typeof window !== 'undefined') {
-        try { window.__CSFX_CART_SERVICE__ = svc; } catch (_errExposeSvc) {}
-      }
-      if (svc && typeof svc === 'object') {
-        var usedNative = manualRes.via === 'native';
-        var nativeError = manualRes.nativeError ? (manualRes.nativeError.message || String(manualRes.nativeError)) : null;
-        if (!usedNative && typeof svc.setCart === 'function') {
-          try { svc.setCart(cart); } catch (_errSet) {}
+
+    var uiPersisted = false;
+    var uiDoneSuccess = null;
+
+    var uiTriggered = applyDualDiscountViaUI(discountValue, {
+      after: function (snapshotAfter) {
+        if (!snapshotAfter || !snapshotAfter.cart) return;
+        var uiCart = snapshotAfter.cart;
+        if (OPCompat && typeof OPCompat.normalizeCart === 'function') {
+          try { uiCart = OPCompat.normalizeCart(uiCart) || uiCart; } catch (_errUiNorm) {}
         }
-        if (svc.cart) {
-          svc.cart.meta_data = metaList;
-          svc.cart.metaData = metaList;
-          svc.cart.csfx_usd_paid = usdPaidRounded;
-          svc.cart.csfx_discount_pct = pctStored;
-          svc.cart.csfx_discount_value = discountValue;
-          svc.cart.csfx_base_total = baseTotal;
-          svc.cart.csfx_discount_note = note;
-          svc.cart.final_discount_amount_incl_tax = cart.final_discount_amount_incl_tax;
-          svc.cart.finalDiscountAmountInclTax = cart.final_discount_amount_incl_tax;
-          if (usedNative) {
-            svc.cart.discount_source = '';
-            svc.cart.discountSource = '';
-          }
-        }
-        if (!usedNative && typeof svc._initCartTotal === 'function') {
-          try { svc._initCartTotal(); } catch (_errInitFinal) {}
-        }
-        if (typeof svc.updateTotals === 'function') svc.updateTotals();
-        if (typeof svc.saveCart === 'function') svc.saveCart();
-        csfxDualLog('apply:service', {
-          usedNative: usedNative,
-          nativeError: nativeError ? (nativeError.message || true) : null,
-          hasSetCart: typeof svc.setCart === 'function',
-          hasUpdateTotals: typeof svc.updateTotals === 'function',
-          hasSaveCart: typeof svc.saveCart === 'function',
-          serviceDetected: !!svc,
-          cartSource: snapshot.cartSource,
-          manualVia: manualRes.via
-        });
-      } else {
-        csfxDualLog('apply:service', {
-          usedNative: false,
-          serviceDetected: false,
-          cartSource: snapshot.cartSource,
-          manualVia: manualRes.via
-        });
+        applyMetaToCart(uiCart);
+        csfxPersistCart(uiCart);
+        uiPersisted = true;
+        csfxDualLog('apply:ui-persist', { success: true });
+      },
+      onDone: function (success) {
+        uiDoneSuccess = !!success;
+        csfxDualLog('apply:ui-done', { success: success });
       }
-    } catch (_err) {}
-    if (uiFallbackUsed) {
-      setTimeout(function () {
-        if (!uiPersisted) {
-          csfxPersistCart(cart);
-          csfxDualLog('apply:ui-persist-fallback', { amount: discountValue });
-        }
-      }, 900);
-    } else {
-      csfxPersistCart(cart);
-    }
-    csfxDualLog('apply:finished', {
-      discountValue: discountValue,
-      finalDiscountAmount: cart.final_discount_amount,
-      finalDiscountAmountInclTax: cart.final_discount_amount_incl_tax,
-      manualVia: manualRes.via
     });
+
+    if (!uiTriggered) {
+      csfxDualLog('apply:ui-not-triggered', { amount: discountValue });
+      return false;
+    }
+
+    if (!uiPersisted) {
+      setTimeout(function () {
+        if (uiPersisted) return;
+        try {
+          var snapshotAfter = csfxGetCartSnapshot();
+          if (snapshotAfter && snapshotAfter.cart) {
+            applyMetaToCart(snapshotAfter.cart);
+            csfxPersistCart(snapshotAfter.cart);
+            csfxDualLog('apply:ui-persist-fallback', { amount: discountValue });
+          } else {
+            csfxPersistCart(cart);
+          }
+        } catch (persistErr) {
+          csfxDualLog('apply:ui-persist-error', { error: String(persistErr) });
+        }
+      }, 800);
+    }
+
+    csfxDualLog('apply:ui', {
+      manualVia: 'ui',
+      cartDiscountAmount: cart.discount_amount,
+      cartFinalDiscountAmount: cart.final_discount_amount
+    });
+
     try {
       document.dispatchEvent(new CustomEvent('csfx:dual-discount-applied', {
         detail: {
@@ -2093,13 +2202,54 @@
       }));
       document.dispatchEvent(new CustomEvent('csfx:cart-updated'));
     } catch (_err) {}
+
+    csfxDualLog('apply:finished', {
+      discountValue: discountValue,
+      finalDiscountAmount: cart.final_discount_amount,
+      finalDiscountAmountInclTax: cart.final_discount_amount_incl_tax,
+      manualVia: 'ui',
+      uiTriggered: true,
+      uiDoneSuccess: uiDoneSuccess
+    });
+
     return true;
   }
 
   function csfxRenderBadgeContent(badge) {
     if (!badge) return;
+    csfxUpdateBadgeHandle(badge);
     var contentDiv = badge.querySelector('.csfx-badge-content');
     if (!contentDiv) return;
+    if (!contentDiv.dataset.csfxBound) {
+      contentDiv.dataset.csfxBound = '1';
+      contentDiv.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+      });
+    }
+    var topBar = contentDiv.querySelector('.csfx-badge-top');
+    if (!topBar) {
+      topBar = document.createElement('div');
+      topBar.className = 'csfx-badge-top';
+      var topTitle = document.createElement('span');
+      topTitle.className = 'csfx-badge-top-title';
+      topTitle.innerHTML = '<span class="csfx-badge-icon">🏷️</span><span>Referencia de tasa y descuento</span>';
+      var closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'csfx-badge-close';
+      closeBtn.setAttribute('aria-label', 'Cerrar panel');
+      closeBtn.innerHTML = '&times;';
+      topBar.appendChild(topTitle);
+      topBar.appendChild(closeBtn);
+      contentDiv.insertBefore(topBar, contentDiv.firstChild);
+      topBar.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        badge.classList.remove('open');
+      });
+      closeBtn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        badge.classList.remove('open');
+      });
+    }
     var infoRow = contentDiv.querySelector('.csfx-badge-info');
     if (!infoRow) {
       infoRow = document.createElement('div');
@@ -2155,7 +2305,13 @@
     container.appendChild(panel);
 
     var title = document.createElement('h4');
-    title.textContent = 'Descuento precio dual';
+    var titleIcon = document.createElement('span');
+    titleIcon.className = 'csfx-dual-heading-icon';
+    titleIcon.textContent = '🏷️';
+    var titleText = document.createElement('span');
+    titleText.textContent = 'Descuento precio dual';
+    title.appendChild(titleIcon);
+    title.appendChild(titleText);
     panel.appendChild(title);
 
     var grid = document.createElement('div');
@@ -2192,30 +2348,76 @@
       input.addEventListener(evt, function(e){ e.stopPropagation(); });
     });
 
-    var chipsWrap = document.createElement('div');
-    chipsWrap.className = 'csfx-dual-chips';
-    [
-      { key: 'gross', label: 'Parte bruta' },
-      { key: 'discount', label: 'Descuento' },
-      { key: 'remaining-usd', label: 'Resta USD' },
-      { key: 'remaining-bs', label: 'Resta Bs.' }
-    ].forEach(function (info) {
-      var chip = document.createElement('span');
-      chip.className = 'csfx-chip csfx-chip-pill';
-      chip.dataset.csfxChip = info.key;
-      chip.textContent = info.label + ': —';
-      chipsWrap.appendChild(chip);
+    var metrics = document.createElement('div');
+    metrics.className = 'csfx-dual-metrics';
+    var metricDefs = [
+      { key: 'gross', label: 'Parte bruta', tip: 'Monto cubierto por el pago en divisas antes de descuentos.' },
+      { key: 'discount', label: 'Descuento', tip: 'Descuento aplicado según la política de precio dual.' },
+      { key: 'remaining-usd', label: 'Resta USD', tip: 'Saldo que queda por pagar en divisas luego del descuento.' },
+      { key: 'remaining-bs', label: 'Resta Bs.', tip: 'Saldo restante en bolívares calculado con la tasa vigente.' }
+    ];
+    metricDefs.forEach(function (def) {
+      var row = document.createElement('div');
+      row.className = 'csfx-dual-metrics-row';
+      row.dataset.csfxMetric = def.key;
+      var labelWrap = document.createElement('span');
+      labelWrap.className = 'csfx-dual-metrics-label';
+      var helpIcon = document.createElement('span');
+      helpIcon.className = 'csfx-dual-metrics-help';
+      helpIcon.dataset.tooltip = def.tip;
+      helpIcon.textContent = 'i';
+      labelWrap.appendChild(helpIcon);
+      labelWrap.appendChild(document.createTextNode(def.label));
+      var value = document.createElement('span');
+      value.className = 'csfx-dual-metrics-value';
+      value.dataset.csfxMetricValue = def.key;
+      value.textContent = '—';
+      row.appendChild(labelWrap);
+      row.appendChild(value);
+      metrics.appendChild(row);
     });
-    panel.appendChild(chipsWrap);
+    panel.appendChild(metrics);
+
+    var helper = document.createElement('div');
+    helper.className = 'csfx-dual-helper';
+    var helperIcon = document.createElement('span');
+    helperIcon.className = 'csfx-dual-helper-icon';
+    helperIcon.dataset.tooltip = 'Haz clic para ver cómo explicar el descuento al cliente.';
+    helperIcon.textContent = 'i';
+    var helperLabel = document.createElement('span');
+    helperLabel.className = 'csfx-dual-helper-label';
+    helperLabel.textContent = 'Cómo explicar el descuento';
+    helper.appendChild(helperIcon);
+    helper.appendChild(helperLabel);
+    helper.setAttribute('role', 'button');
+    helper.tabIndex = 0;
+    var explainHandler = function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      csfxOpenDualExplainModal(panel);
+    };
+    helper.addEventListener('click', explainHandler);
+    helper.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        explainHandler(ev);
+      }
+    });
+    panel.appendChild(helper);
 
     var actions = document.createElement('div');
     actions.className = 'csfx-dual-actions';
     var confirm = document.createElement('button');
     confirm.type = 'button';
-    confirm.className = 'btn btn-primary btn-sm';
+    confirm.className = 'csfx-btn csfx-btn--primary';
     confirm.dataset.csfx = 'confirm';
-    confirm.textContent = 'Confirmar descuento';
+    confirm.textContent = 'Aplicar descuento dual';
     actions.appendChild(confirm);
+    var customBtn = document.createElement('button');
+    customBtn.type = 'button';
+    customBtn.className = 'csfx-btn csfx-btn--ghost';
+    customBtn.dataset.csfx = 'custom-discount';
+    customBtn.textContent = 'Descuento personalizado';
+    actions.appendChild(customBtn);
     panel.appendChild(actions);
 
     var status = document.createElement('div');
@@ -2237,16 +2439,18 @@
       csfxUpdateDualPanel(panel);
     });
     confirm.addEventListener('click', function () { csfxHandleDualConfirm(panel); });
+    customBtn.addEventListener('click', function () { csfxOpenCustomDiscountModal(); });
 
     csfxUpdateDualPanel(panel);
     return panel;
   }
 
   function csfxResetDualChips(panel) {
-    panel.querySelectorAll('[data-csfx-chip]').forEach(function (chip) {
-      var label = chip.textContent.split(':')[0];
-      chip.textContent = label + ': —';
-      chip.classList.remove('csfx-chip-pill--ok', 'csfx-chip-pill--warn', 'csfx-chip-pill--alert');
+    panel.querySelectorAll('[data-csfx-metric-value]').forEach(function (node) {
+      node.textContent = '—';
+    });
+    panel.querySelectorAll('.csfx-dual-metrics-row').forEach(function (row) {
+      row.classList.remove('is-highlight', 'is-warning');
     });
   }
 
@@ -2302,24 +2506,41 @@
     panel.dataset.csfxCalcGross = calc.grossCovered || '';
     panel.dataset.csfxCalcRemainder = calc.remainderUsd || '';
 
-    var chipsText = {
-      'gross': 'Parte bruta: ' + fmtUsd(calc.grossCovered),
-      'discount': 'Descuento: ' + fmtUsd(calc.discount),
-      'remaining-usd': 'Resta USD: ' + fmtUsd(calc.remainderUsd),
-      'remaining-bs': 'Resta Bs: ' + fmtBs(calc.remainderBs)
+    var metricsMap = {
+      'gross': fmtUsd(calc.grossCovered),
+      'discount': fmtUsd(calc.discount),
+      'remaining-usd': fmtUsd(calc.remainderUsd),
+      'remaining-bs': fmtBs(calc.remainderBs)
     };
 
-    panel.querySelectorAll('[data-csfx-chip]').forEach(function (chip) {
-      var key = chip.dataset.csfxChip;
-      if (chipsText[key]) chip.textContent = chipsText[key];
-      chip.classList.remove('csfx-chip-pill--ok', 'csfx-chip-pill--warn', 'csfx-chip-pill--alert');
-      if (key === 'discount' && calc.discount > 0.009) {
-        chip.classList.add('csfx-chip-pill--ok');
-      }
-      if ((key === 'remaining-usd' || key === 'remaining-bs') && calc.remainderUsd > 0.009) {
-        chip.classList.add('csfx-chip-pill--warn');
-      }
+    Object.keys(metricsMap).forEach(function (key) {
+      var node = panel.querySelector('[data-csfx-metric-value="' + key + '"]');
+      if (node) node.textContent = metricsMap[key];
     });
+    var discountRow = panel.querySelector('[data-csfx-metric="discount"]');
+    if (discountRow) {
+      if (calc.discount > 0.009) {
+        discountRow.classList.add('is-highlight');
+      } else {
+        discountRow.classList.remove('is-highlight');
+      }
+    }
+    var remainingUsdRow = panel.querySelector('[data-csfx-metric="remaining-usd"]');
+    if (remainingUsdRow) {
+      if (calc.remainderUsd > 0.009) {
+        remainingUsdRow.classList.add('is-warning');
+      } else {
+        remainingUsdRow.classList.remove('is-warning');
+      }
+    }
+    var remainingBsRow = panel.querySelector('[data-csfx-metric="remaining-bs"]');
+    if (remainingBsRow) {
+      if (calc.remainderBs > 0.009) {
+        remainingBsRow.classList.add('is-warning');
+      } else {
+        remainingBsRow.classList.remove('is-warning');
+      }
+    }
 
     if (status) {
       if (calc.discount > 0.009) {
@@ -2409,6 +2630,682 @@
       }
     }
   }
+
+  function csfxEnsureExplainModal() {
+    if (csfxExplainModalUI && csfxExplainModalUI.backdrop && document.body.contains(csfxExplainModalUI.backdrop)) {
+      return csfxExplainModalUI;
+    }
+    var backdrop = document.createElement('div');
+    backdrop.className = 'csfx-modal-backdrop';
+    var modal = document.createElement('div');
+    modal.className = 'csfx-modal csfx-modal--info';
+    var header = document.createElement('div');
+    header.className = 'csfx-modal-header';
+    var headerTitle = document.createElement('div');
+    headerTitle.className = 'csfx-modal-header-title';
+    var icon = document.createElement('span');
+    icon.className = 'csfx-modal-header-icon';
+    icon.textContent = 'ℹ️';
+    var titleText = document.createElement('span');
+    titleText.textContent = 'Detalle del descuento';
+    headerTitle.appendChild(icon);
+    headerTitle.appendChild(titleText);
+    var headerRef = document.createElement('span');
+    headerRef.className = 'csfx-modal-header-ref';
+    headerRef.textContent = 'Explicación';
+    header.appendChild(headerTitle);
+    header.appendChild(headerRef);
+    var body = document.createElement('div');
+    body.className = 'csfx-modal-body';
+    var footer = document.createElement('div');
+    footer.className = 'csfx-modal-footer';
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'csfx-btn csfx-btn--ghost';
+    closeBtn.textContent = 'Cerrar';
+    footer.appendChild(closeBtn);
+    modal.appendChild(header);
+    modal.appendChild(body);
+    modal.appendChild(footer);
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+
+    var close = function () { csfxCloseExplainModal(); };
+    closeBtn.addEventListener('click', close);
+    header.addEventListener('click', close);
+    backdrop.addEventListener('click', function (ev) {
+      if (ev.target === backdrop) close();
+    });
+    modal.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+    });
+
+    csfxExplainModalUI = {
+      backdrop: backdrop,
+      modal: modal,
+      header: header,
+      body: body,
+      footer: footer,
+      closeBtn: closeBtn,
+      open: false
+    };
+    return csfxExplainModalUI;
+  }
+
+  function csfxCloseExplainModal() {
+    if (!csfxExplainModalUI || !csfxExplainModalUI.backdrop) return;
+    csfxExplainModalUI.backdrop.removeAttribute('data-open');
+    csfxExplainModalUI.open = false;
+  }
+
+  function csfxOpenDualExplainModal(panel) {
+    var ui = csfxEnsureExplainModal();
+    if (!ui) return;
+    var base = Number(panel && panel.dataset ? panel.dataset.csfxBase : 0) || 0;
+    var discount = Number(panel && panel.dataset ? panel.dataset.csfxCalcDiscount : 0) || 0;
+    var pctStored = Number(panel && panel.dataset ? panel.dataset.csfxPct : 0) || 0;
+    var pctDisplay = pctStored;
+    if (pctDisplay > 0 && pctDisplay < 1) pctDisplay = pctDisplay * 100;
+    var net = Number(panel && panel.dataset ? panel.dataset.csfxCalcNet : 0) || 0;
+    var grossCovered = Number(panel && panel.dataset ? panel.dataset.csfxCalcGross : 0) || 0;
+    var remainderUsd = Number(panel && panel.dataset ? panel.dataset.csfxCalcRemainder : 0) || 0;
+    var total = base && discount ? base - discount : 0;
+
+    if (!isFinite(base) || base <= 0 || !isFinite(discount) || discount <= 0) {
+      ui.body.innerHTML = '<div class="csfx-explain-body"><p>No hay datos suficientes. Introduce el pago en divisas y calcula el descuento primero.</p></div>';
+      ui.backdrop.setAttribute('data-open', 'true');
+      ui.open = true;
+      return;
+    }
+
+    var remainderBs = usd2bs(remainderUsd);
+    var pctText = isFinite(pctDisplay) ? pctDisplay.toFixed(2) + '%' : '—';
+    var explainHtml = '' +
+      '<div class="csfx-explain-body">' +
+        '<div class="csfx-explain-head">¿Cómo se calcula este descuento?</div>' +
+        '<ul class="csfx-explain-steps">' +
+          '<li><strong>1.</strong> Base sin descuento (subtotal): <span class="csfx-explain-inline">' + fmtUsd(base) + '</span></li>' +
+          '<li><strong>2.</strong> Pago neto declarado en divisas: <span class="csfx-explain-inline">' + fmtUsd(net) + '</span></li>' +
+          '<li><strong>3.</strong> Parte cubierta por las divisas: <span class="csfx-explain-inline">' + fmtUsd(grossCovered) + '</span></li>' +
+          '<li><strong>4.</strong> Porcentaje configurado: <span class="csfx-explain-inline">' + pctText + '</span></li>' +
+          '<li><strong>5.</strong> Descuento aplicado = porción cubierta × % = <span class="csfx-explain-inline">' + fmtUsd(grossCovered) + ' × ' + pctText + ' = ' + fmtUsd(discount) + '</span></li>' +
+          '<li><strong>6.</strong> Total con descuento: <span class="csfx-explain-inline">' + fmtUsd(total) + '</span></li>' +
+          '<li><strong>7.</strong> Saldo restante por cobrar: <span class="csfx-explain-inline">' + fmtUsd(remainderUsd) + ' / ' + fmtBs(remainderBs) + '</span></li>' +
+        '</ul>' +
+        '<div class="csfx-explain-foot">Comparte este detalle con el cliente para justificar el descuento dual y el saldo que queda por cancelar en bolívares.</div>' +
+      '</div>';
+
+    ui.body.innerHTML = explainHtml;
+    ui.backdrop.setAttribute('data-open', 'true');
+    ui.open = true;
+  }
+
+  function csfxEnsureCustomDiscountModal() {
+    if (csfxCustomModalUI && csfxCustomModalUI.backdrop && document.body.contains(csfxCustomModalUI.backdrop)) {
+      return csfxCustomModalUI;
+    }
+    var backdrop = document.createElement('div');
+    backdrop.className = 'csfx-modal-backdrop';
+    var modal = document.createElement('div');
+    modal.className = 'csfx-modal';
+    var header = document.createElement('div');
+    header.className = 'csfx-modal-header';
+    var headerTitle = document.createElement('div');
+    headerTitle.className = 'csfx-modal-header-title';
+    var headerIcon = document.createElement('span');
+    headerIcon.className = 'csfx-modal-header-icon';
+    headerIcon.textContent = '🛡️';
+    var headerText = document.createElement('span');
+    headerText.textContent = 'Descuentos personalizados';
+    headerTitle.appendChild(headerIcon);
+    headerTitle.appendChild(headerText);
+    var headerRef = document.createElement('span');
+    headerRef.className = 'csfx-modal-header-ref';
+    headerRef.textContent = 'Referencia POS';
+    header.appendChild(headerTitle);
+    header.appendChild(headerRef);
+    var body = document.createElement('div');
+    body.className = 'csfx-modal-body';
+
+    var authCard = document.createElement('div');
+    authCard.className = 'csfx-auth-card';
+    var authTitle = document.createElement('div');
+    authTitle.className = 'csfx-auth-title';
+    authTitle.textContent = 'Autorización requerida';
+    var authHint = document.createElement('div');
+    authHint.className = 'csfx-auth-hint';
+    authHint.textContent = 'El encargado puede escanear su QR o ingresar la contraseña para habilitar descuentos por producto.';
+    var authRow = document.createElement('div');
+    authRow.className = 'csfx-auth-row';
+    var pinInput = document.createElement('input');
+    pinInput.type = 'password';
+    pinInput.placeholder = 'Contraseña del encargado';
+    pinInput.autocomplete = 'one-time-code';
+    pinInput.inputMode = 'numeric';
+    pinInput.maxLength = 12;
+    var validateBtn = document.createElement('button');
+    validateBtn.type = 'button';
+    validateBtn.className = 'csfx-btn csfx-btn--primary';
+    validateBtn.textContent = 'Validar';
+    var scanBtn = document.createElement('button');
+    scanBtn.type = 'button';
+    scanBtn.className = 'csfx-btn csfx-btn--ghost';
+    scanBtn.textContent = 'Escanear QR';
+    authRow.appendChild(pinInput);
+    authRow.appendChild(validateBtn);
+    authRow.appendChild(scanBtn);
+    var authStatus = document.createElement('div');
+    authStatus.className = 'csfx-auth-status';
+    authStatus.textContent = 'Requiere autorización del encargado.';
+    authCard.appendChild(authTitle);
+    authCard.appendChild(authHint);
+    authCard.appendChild(authRow);
+    authCard.appendChild(authStatus);
+
+    var itemList = document.createElement('div');
+    itemList.className = 'csfx-item-list';
+    itemList.dataset.csfxList = 'items';
+
+    var footer = document.createElement('div');
+    footer.className = 'csfx-modal-footer';
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'csfx-btn csfx-btn--ghost';
+    closeBtn.textContent = 'Cerrar';
+    footer.appendChild(closeBtn);
+
+    body.appendChild(authCard);
+    body.appendChild(itemList);
+    body.appendChild(footer);
+    modal.appendChild(header);
+    modal.appendChild(body);
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+
+    csfxCustomModalUI = {
+      backdrop: backdrop,
+      modal: modal,
+      header: header,
+      pinInput: pinInput,
+      validateBtn: validateBtn,
+      scanBtn: scanBtn,
+      authStatus: authStatus,
+      itemList: itemList,
+      closeBtn: closeBtn
+    };
+
+    backdrop.addEventListener('click', function (ev) {
+      if (ev.target === backdrop) csfxCloseCustomDiscountModal();
+    });
+    modal.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+    });
+    header.addEventListener('click', function () {
+      if (csfxCustomModalState.open) csfxCloseCustomDiscountModal();
+    });
+    closeBtn.addEventListener('click', csfxCloseCustomDiscountModal);
+    validateBtn.addEventListener('click', function () {
+      csfxAttemptCustomPinValidation(pinInput.value, csfxCustomModalUI);
+    });
+    pinInput.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        csfxAttemptCustomPinValidation(pinInput.value, csfxCustomModalUI);
+      }
+    });
+    scanBtn.addEventListener('click', function () {
+      var handled = false;
+      try {
+        var detail = {
+          respond: function (pin) {
+            handled = true;
+            if (typeof pin === 'string' && pin.trim()) {
+              csfxCustomModalUI.pinInput.value = pin.trim();
+              csfxAttemptCustomPinValidation(pin, csfxCustomModalUI);
+            }
+          }
+        };
+        document.dispatchEvent(new CustomEvent('csfx:request-custom-pin-scan', { detail: detail }));
+        if (!handled) {
+          csfxShowCustomFeedback(csfxCustomModalUI.authStatus, 'Conecta un escáner para recibir la contraseña.', null);
+        }
+      } catch (_errScan) {
+        csfxShowCustomFeedback(csfxCustomModalUI.authStatus, 'No se pudo iniciar el escaneo.', false);
+      }
+    });
+
+    return csfxCustomModalUI;
+  }
+
+  function csfxCloseCustomDiscountModal() {
+    if (!csfxCustomModalUI || !csfxCustomModalUI.backdrop) return;
+    csfxCustomModalUI.backdrop.removeAttribute('data-open');
+    csfxCustomModalState.open = false;
+  }
+
+  function csfxOpenCustomDiscountModal() {
+    var ui = csfxEnsureCustomDiscountModal();
+    csfxCustomModalState.open = true;
+    csfxCustomModalState.authorized = false;
+    csfxCustomModalState.pin = '';
+    ui.pinInput.value = '';
+    ui.pinInput.disabled = false;
+    ui.validateBtn.disabled = false;
+    ui.scanBtn.disabled = false;
+    csfxShowCustomFeedback(ui.authStatus, 'Requiere autorización del encargado.', null);
+    csfxPopulateCustomDiscountItems(ui);
+    ui.backdrop.setAttribute('data-open', 'true');
+    setTimeout(function () {
+      try { ui.pinInput.focus(); } catch (_errFocus) {}
+    }, 60);
+  }
+
+  function csfxCollectCartItems(cart) {
+    var items = [];
+    if (!cart || typeof cart !== 'object') return items;
+    var rawLists = [];
+    var keys = ['items', 'cart_items', 'cartItems', 'products', 'product_items', 'lines', 'line_items'];
+    for (var i = 0; i < keys.length; i++) {
+      var value = cart[keys[i]];
+      if (!value) continue;
+      if (Array.isArray(value)) {
+        rawLists = rawLists.concat(value);
+      } else if (typeof value === 'object') {
+        Object.keys(value).forEach(function (k) {
+          rawLists.push(value[k]);
+        });
+      }
+    }
+    if (!rawLists.length && cart.items && typeof cart.items === 'object') {
+      Object.keys(cart.items).forEach(function (k) { rawLists.push(cart.items[k]); });
+    }
+    rawLists.forEach(function (entry, idx) {
+      if (!entry || typeof entry !== 'object') return;
+      var unwrapKeys = ['item', 'item_data', 'data', 'product', 'product_data', 'cart_item'];
+      for (var u = 0; u < unwrapKeys.length; u++) {
+        var candidate = unwrapKeys[u];
+        if (entry && entry[candidate] && typeof entry[candidate] === 'object' && !Array.isArray(entry[candidate])) {
+          entry = Object.assign({}, entry, entry[candidate]);
+        }
+      }
+      var name = String(entry.name || entry.title || entry.label || entry.product_name || 'Producto sin nombre');
+      var sku = entry.sku || entry.product_sku || entry.productId || entry.id || entry.item_id || '';
+      var quantity = Number(entry.qty || entry.quantity || entry.qty_ordered || entry.qtyInCart || entry.qtyOrdered || 1);
+      if (!isFinite(quantity) || quantity <= 0) quantity = 1;
+      var unit = csfxToNumber(
+        entry.price || entry.base_price || entry.regular_price || entry.unit_price ||
+        entry.final_price || entry.base_final_price || entry.price_incl_tax ||
+        entry.priceInclTax || entry.price_inc_tax || entry.price_excl_tax || entry.priceExclTax
+      );
+      var total = csfxToNumber(
+        entry.row_total || entry.total || entry.row_total_incl_tax || entry.rowTotal ||
+        entry.line_total || entry.grand_total || entry.total_price || entry.lineTotal
+      );
+      if (isNaN(unit) && !isNaN(total) && quantity) {
+        unit = total / quantity;
+      }
+      if (isNaN(unit)) unit = csfxToNumber(entry.base_row_total) / (quantity || 1);
+      if (isNaN(unit)) unit = 0;
+      if (isNaN(total)) total = round(unit * quantity, FX.decimals);
+      items.push({
+        id: entry.item_id || entry.id || entry.product_id || entry.cart_item_id || ('item-' + idx),
+        name: name,
+        sku: sku && String(sku),
+        qty: quantity,
+        unit: round(unit, FX.decimals),
+        total: round(total, FX.decimals),
+        original: entry
+      });
+    });
+    return items;
+  }
+
+  function csfxPopulateCustomDiscountItems(ui) {
+    if (!ui || !ui.itemList) return;
+    var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
+    var cartSource = snapshot.cart;
+    if (!cartSource) {
+      var located = csfxLocateCartDetailed();
+      if (located && located.cart) {
+        cartSource = located.cart;
+      } else {
+        cartSource = csfxLoadStoredCart();
+      }
+    }
+    var items = csfxCollectCartItems(cartSource);
+    if (!items.length) {
+      var storedCart = csfxLoadStoredCart();
+      if (storedCart && storedCart !== cartSource) {
+        items = csfxCollectCartItems(storedCart);
+        if (!cartSource || items.length) {
+          cartSource = storedCart;
+        }
+      }
+    }
+    ui.itemList.innerHTML = '';
+    if (!items.length) {
+      var empty = document.createElement('div');
+      empty.className = 'csfx-empty-copy';
+      empty.textContent = 'El carrito está vacío. Agrega productos para aplicar descuentos individuales.';
+      ui.itemList.appendChild(empty);
+      csfxCustomModalState.authorized = false;
+      csfxCustomModalState.pin = '';
+      csfxUpdateCustomItemsState(ui, false);
+      return;
+    }
+    items.forEach(function (item) {
+      var card = document.createElement('div');
+      card.className = 'csfx-item-card';
+      card.dataset.itemId = String(item.id || '');
+
+      var header = document.createElement('div');
+      header.className = 'csfx-item-header';
+      var title = document.createElement('span');
+      title.textContent = item.name;
+      var qty = document.createElement('span');
+      qty.textContent = 'x' + item.qty;
+      header.appendChild(title);
+      header.appendChild(qty);
+      card.appendChild(header);
+
+      var meta = document.createElement('div');
+      meta.className = 'csfx-item-meta';
+      var sku = document.createElement('span');
+      sku.textContent = 'SKU: ' + (item.sku ? String(item.sku) : '—');
+      var price = document.createElement('span');
+      price.textContent = 'Precio: ' + fmtUsd(item.unit);
+      var total = document.createElement('span');
+      total.textContent = 'Total: ' + fmtUsd(item.total);
+      meta.appendChild(sku);
+      meta.appendChild(price);
+      meta.appendChild(total);
+      card.appendChild(meta);
+
+      var actions = document.createElement('div');
+      actions.className = 'csfx-item-actions';
+      var amountInput = document.createElement('input');
+      amountInput.type = 'number';
+      amountInput.step = '0.01';
+      amountInput.min = '0';
+      amountInput.placeholder = '0,00';
+      amountInput.dataset.role = 'custom-amount';
+      amountInput.dataset.itemId = String(item.id || '');
+      var applyBtn = document.createElement('button');
+      applyBtn.type = 'button';
+      applyBtn.className = 'csfx-btn csfx-btn--accent';
+      applyBtn.dataset.role = 'custom-apply';
+      applyBtn.dataset.itemId = String(item.id || '');
+      applyBtn.textContent = 'Aplicar';
+      actions.appendChild(amountInput);
+      actions.appendChild(applyBtn);
+      var hint = document.createElement('small');
+      hint.textContent = 'Ingresa el descuento a restar en USD.';
+      actions.appendChild(hint);
+      card.appendChild(actions);
+
+      var feedback = document.createElement('div');
+      feedback.className = 'csfx-item-feedback';
+      feedback.dataset.state = 'locked';
+      feedback.textContent = 'Requiere autorización del encargado.';
+      card.appendChild(feedback);
+
+      applyBtn.addEventListener('click', function () {
+        csfxHandleCustomItemDiscount(item, amountInput.value, {
+          button: applyBtn,
+          input: amountInput,
+          feedback: feedback
+        });
+      });
+      amountInput.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          applyBtn.click();
+        }
+      });
+
+      ui.itemList.appendChild(card);
+    });
+    csfxDualLog('custom-items:list', {
+      count: items.length,
+      snapshotCart: !!snapshot.cart,
+      fallbackUsed: !snapshot.cart && !!cartSource
+    });
+    csfxUpdateCustomItemsState(ui, csfxCustomModalState.authorized);
+  }
+
+  function csfxUpdateCustomItemsState(ui, authorized) {
+    if (!ui || !ui.itemList) return;
+    var amounts = ui.itemList.querySelectorAll('input[data-role="custom-amount"]');
+    amounts.forEach(function (input) {
+      input.disabled = !authorized;
+      if (!authorized) input.value = '';
+    });
+    var buttons = ui.itemList.querySelectorAll('button[data-role="custom-apply"]');
+    buttons.forEach(function (btn) {
+      btn.disabled = !authorized;
+    });
+    var feedbacks = ui.itemList.querySelectorAll('.csfx-item-feedback');
+    feedbacks.forEach(function (node) {
+      if (!authorized) {
+        node.dataset.state = 'locked';
+        csfxShowCustomFeedback(node, 'Requiere autorización del encargado.', null);
+      } else if (node.dataset.state === 'locked') {
+        node.dataset.state = 'ready';
+        csfxShowCustomFeedback(node, 'Listo para aplicar descuento.', null);
+      }
+    });
+  }
+
+  function csfxValidateCustomDiscountPin(pin) {
+    return new Promise(function (resolve) {
+      var resolved = false;
+      var detail = {
+        pin: pin,
+        handled: false,
+        respond: function (result) {
+          if (resolved) return;
+          resolved = true;
+          resolve(!!result);
+        }
+      };
+      try {
+        document.dispatchEvent(new CustomEvent('csfx:validate-custom-discount-pin', { detail: detail }));
+      } catch (_errDispatch) {}
+      (function waitFallback(iterations) {
+        if (resolved) return;
+        if (detail.handled && iterations < 20) {
+          return setTimeout(function () { waitFallback(iterations + 1); }, 100);
+        }
+        if (resolved) return;
+        var configured = '';
+        try {
+          if (FX && typeof FX.customDiscountPin !== 'undefined' && FX.customDiscountPin !== null) {
+            configured = String(FX.customDiscountPin).trim();
+          } else if (FX && typeof FX.managerPin !== 'undefined' && FX.managerPin !== null) {
+            configured = String(FX.managerPin).trim();
+          }
+        } catch (_errCfg) {}
+        if (!configured) {
+          configured = '1234';
+        }
+        resolved = true;
+        resolve(pin === configured);
+      })(0);
+    });
+  }
+
+  function csfxAttemptCustomPinValidation(pin, ui) {
+    if (!ui) return;
+    var trimmed = String(pin || '').trim();
+    if (!trimmed) {
+      csfxShowCustomFeedback(ui.authStatus, 'Ingresa la contraseña del encargado para continuar.', false);
+      try { ui.pinInput.focus(); } catch (_errFocus) {}
+      return;
+    }
+    ui.validateBtn.disabled = true;
+    ui.scanBtn.disabled = true;
+    csfxShowCustomFeedback(ui.authStatus, 'Validando autorización…', null);
+    csfxValidateCustomDiscountPin(trimmed).then(function (ok) {
+      if (ok) {
+        csfxCustomModalState.authorized = true;
+        csfxCustomModalState.pin = trimmed;
+        csfxShowCustomFeedback(ui.authStatus, 'Autorización confirmada. Puedes asignar descuentos por producto.', true);
+        ui.pinInput.value = '';
+        ui.pinInput.disabled = true;
+        csfxUpdateCustomItemsState(ui, true);
+      } else {
+        csfxCustomModalState.authorized = false;
+        csfxCustomModalState.pin = '';
+        csfxShowCustomFeedback(ui.authStatus, 'Contraseña incorrecta. Intenta nuevamente.', false);
+        ui.pinInput.disabled = false;
+        ui.validateBtn.disabled = false;
+        ui.scanBtn.disabled = false;
+        try { ui.pinInput.focus(); } catch (_errFocus) {}
+      }
+    }).catch(function (err) {
+      csfxCustomModalState.authorized = false;
+      csfxCustomModalState.pin = '';
+      csfxShowCustomFeedback(ui.authStatus, 'No se pudo validar la contraseña: ' + (err && err.message ? err.message : 'error desconocido'), false);
+      ui.validateBtn.disabled = false;
+      ui.scanBtn.disabled = false;
+    }).finally(function () {
+      if (csfxCustomModalState.authorized) {
+        ui.validateBtn.disabled = true;
+        ui.scanBtn.disabled = true;
+      }
+    });
+  }
+
+  function csfxShowCustomFeedback(node, message, ok) {
+    if (!node) return;
+    node.textContent = message;
+    if (node.classList.contains('csfx-auth-status')) {
+      node.classList.remove('csfx-auth-status--ok', 'csfx-auth-status--error');
+      if (ok === true) {
+        node.classList.add('csfx-auth-status--ok');
+      } else if (ok === false) {
+        node.classList.add('csfx-auth-status--error');
+      }
+    } else if (node.classList.contains('csfx-item-feedback')) {
+      node.classList.remove('csfx-item-feedback--ok', 'csfx-item-feedback--error');
+      if (ok === true) {
+        node.classList.add('csfx-item-feedback--ok');
+        node.dataset.state = 'ok';
+      } else if (ok === false) {
+        node.classList.add('csfx-item-feedback--error');
+        node.dataset.state = 'error';
+      }
+    }
+  }
+
+  function csfxHandleCustomItemDiscount(item, rawValue, ctx) {
+    ctx = ctx || {};
+    var input = ctx.input;
+    var button = ctx.button;
+    var feedback = ctx.feedback;
+    if (!csfxCustomModalState.authorized) {
+      csfxShowCustomFeedback(feedback, 'Necesitas autorización del encargado para aplicar este descuento.', false);
+      return;
+    }
+    var amount = parseFloat(String(rawValue || '').replace(',', '.'));
+    if (!isFinite(amount) || amount <= 0) {
+      csfxShowCustomFeedback(feedback, 'Ingresa un monto válido mayor a cero.', false);
+      if (input) {
+        try { input.focus(); input.select(); } catch (_errSelect) {}
+      }
+      return;
+    }
+    if (button) button.disabled = true;
+    if (input) input.disabled = true;
+    csfxShowCustomFeedback(feedback, 'Enviando solicitud de descuento…', null);
+
+    var responded = false;
+    var fallbackTimer = null;
+    var detail = {
+      item: item,
+      discount: round(amount, FX.decimals),
+      discountType: 'fixed',
+      pin: csfxCustomModalState.pin,
+      handled: false,
+      respond: function (success, message) {
+        if (fallbackTimer) {
+          clearTimeout(fallbackTimer);
+          fallbackTimer = null;
+        }
+        responded = true;
+        detail.handled = true;
+        if (input) input.disabled = false;
+        if (button) button.disabled = false;
+        if (success) {
+          csfxShowCustomFeedback(feedback, message || 'Descuento aplicado desde integración externa.', true);
+        } else {
+          csfxShowCustomFeedback(feedback, message || 'No se pudo aplicar el descuento desde la integración.', false);
+          if (input) {
+            try { input.focus(); input.select(); } catch (_errSel) {}
+          }
+        }
+      }
+    };
+    try {
+      document.dispatchEvent(new CustomEvent('csfx:custom-discount-request', { detail: detail }));
+    } catch (errDispatch) {
+      responded = true;
+      csfxShowCustomFeedback(feedback, 'No se pudo enviar la solicitud: ' + (errDispatch && errDispatch.message ? errDispatch.message : 'error'), false);
+    }
+    if (!responded) {
+      csfxDualLog('custom-discount:request', {
+        itemId: item.id,
+        amount: amount
+      });
+      fallbackTimer = setTimeout(function () {
+        if (responded) return;
+        detail.handled = false;
+        var fallbackApplied = applyDualDiscountViaUI(amount);
+        if (fallbackApplied) {
+          csfxShowCustomFeedback(feedback, 'Descuento aplicado manualmente al carrito.', true);
+          schedule(decorateCart);
+          schedule(decorateTotals);
+          schedule(decoratePaymentModal);
+          schedule(decorateBill);
+          csfxDualLog('custom-discount:fallback-ui', { itemId: item.id, amount: amount });
+        } else {
+          csfxShowCustomFeedback(feedback, 'No se pudo aplicar el descuento automáticamente. Comunícate con soporte.', false);
+          csfxDualLog('custom-discount:fallback-ui-failed', { itemId: item.id, amount: amount });
+        }
+        if (input) input.disabled = false;
+        if (button) button.disabled = false;
+        responded = true;
+      }, 180);
+      if (input) input.disabled = false;
+      if (button) button.disabled = false;
+    }
+  }
+
+  try {
+    document.addEventListener('csfx:custom-pin-scanned', function (ev) {
+      if (!csfxCustomModalState.open || !csfxCustomModalUI || !csfxCustomModalUI.pinInput) return;
+      var pin = ev && ev.detail && typeof ev.detail.pin === 'string' ? ev.detail.pin.trim() : '';
+      if (!pin) return;
+      csfxCustomModalUI.pinInput.value = pin;
+      csfxAttemptCustomPinValidation(pin, csfxCustomModalUI);
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') {
+        if (csfxCustomModalState.open) {
+          csfxCloseCustomDiscountModal();
+        } else if (csfxExplainModalUI && csfxExplainModalUI.open) {
+          csfxCloseExplainModal();
+        }
+      }
+    });
+    document.addEventListener('csfx:cart-updated', function () {
+      if (csfxCustomModalState.open && csfxCustomModalUI) {
+        csfxPopulateCustomDiscountItems(csfxCustomModalUI);
+      }
+    });
+  } catch (_errCustomScan) {}
+
+// csfx: fin descuento dual
   // csfx: fin descuento dual
 
   function decoratePaymentModal() {
