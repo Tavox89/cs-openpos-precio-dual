@@ -153,12 +153,22 @@
   function hydrateFxDiscountFromOffline(){
     if (!fxOfflineState || typeof fxOfflineState !== 'object' || !fxOfflineState.disc) return;
     var storedDisc = fxOfflineState.disc;
-    var pct = Number(storedDisc.percent || storedDisc.percentDecimal || 0);
-    if (pct > 0 && (!FX.disc || !FX.disc.active || !FX.disc.percent)) {
+    var raw = (typeof storedDisc.percent !== 'undefined') ? storedDisc.percent : storedDisc.percentDecimal;
+    var pct = Number(raw || 0);
+    if (!isFinite(pct) || pct <= 0) return;
+    var normalized = pct > 1 ? pct : pct * 100;
+    if (!FX.disc || typeof FX.disc !== 'object') {
       FX.disc = {
         active: !!storedDisc.active,
-        percent: storedDisc.percent || (pct <= 1 ? pct * 100 : pct)
+        percent: normalized
       };
+      return;
+    }
+    if (!FX.disc.percent || FX.disc.percent <= 0) {
+      FX.disc.percent = normalized;
+    }
+    if (typeof FX.disc.active === 'undefined') {
+      FX.disc.active = !!storedDisc.active;
     }
   }
 
@@ -1141,53 +1151,121 @@
     var located = csfxLocateCartDetailed();
     var cart = located.cart;
     var cartSource = located.source;
-    var cartDebug = located.debug;
     var cartService = located.cartService;
-    var meta = csfxExtractMetaMap(cart);
-    var totalCandidates = [];
-    if (cart) {
-      totalCandidates.push(cart.base_grand_total);
-      totalCandidates.push(cart.baseGrandTotal);
-      totalCandidates.push(cart.grand_total);
-      totalCandidates.push(cart.grandTotal);
-      totalCandidates.push(cart.total_due);
-      totalCandidates.push(cart.totalDue);
-      totalCandidates.push(cart.total);
+    var cartDebug = located.debug && typeof located.debug === 'object' ? located.debug : {};
+
+    if (cart && OPCompat && typeof OPCompat.normalizeCart === 'function') {
+      try {
+        cart = OPCompat.normalizeCart(cart);
+        located.cart = cart;
+      } catch (errNorm) {
+        cartDebug.compatNormalizeError = (errNorm && errNorm.message) || true;
+      }
     }
+
+    var compatTotals = null;
+    if (cart && OPCompat && typeof OPCompat.readTotals === 'function') {
+      try {
+        compatTotals = OPCompat.readTotals(cart) || null;
+      } catch (errTotals) {
+        cartDebug.compatTotalsError = (errTotals && errTotals.message) || true;
+        compatTotals = null;
+      }
+    }
+    cartDebug.compatTotals = compatTotals;
+    cartDebug.cartSource = cartSource;
+    cartDebug.totalsSource = compatTotals ? 'compat' : 'legacy';
+
+    var meta = csfxExtractMetaMap(cart);
+
+    var subtotalCandidates = [];
+    var discountCandidates = [];
+    var taxCandidates = [];
+    var totalCandidates = [];
+
+    if (compatTotals && typeof compatTotals === 'object') {
+      subtotalCandidates.push(compatTotals.baseSubtotal, compatTotals.subtotal);
+      discountCandidates.push(compatTotals.discount);
+      taxCandidates.push(compatTotals.tax);
+      totalCandidates.push(compatTotals.grand, compatTotals.total);
+    }
+
+    if (cart) {
+      subtotalCandidates.push(cart.base_subtotal, cart.subtotal, cart.totals && cart.totals.base_subtotal, cart.totals && cart.totals.subtotal);
+      discountCandidates.push(
+        cart.final_discount_amount,
+        cart.discount_final_amount,
+        cart.discount_amount,
+        cart.discount
+      );
+      taxCandidates.push(
+        cart.totals && cart.totals.tax,
+        cart.totals && cart.totals.tax_amount,
+        cart.tax_amount,
+        cart.total_tax
+      );
+      totalCandidates.push(
+        cart.base_grand_total,
+        cart.baseGrandTotal,
+        cart.grand_total,
+        cart.grandTotal,
+        cart.total_due,
+        cart.totalDue,
+        cart.total
+      );
+    }
+
     if (typeof context.totalUSD !== 'undefined') {
       totalCandidates.push(context.totalUSD);
     }
-    var total = NaN;
-    for (var i = 0; i < totalCandidates.length; i++) {
-      var candidate = csfxToNumber(totalCandidates[i]);
-      if (!isNaN(candidate) && candidate >= 0) {
-        total = candidate;
-        break;
+
+    function pickCandidate(values, allowNegative) {
+      for (var i = 0; i < values.length; i++) {
+        var candidate = csfxToNumber(values[i]);
+        if (isNaN(candidate)) continue;
+        if (!allowNegative && candidate < 0) continue;
+        return candidate;
       }
+      return NaN;
     }
+
+    var total = pickCandidate(totalCandidates, false);
     if (isNaN(total) && typeof window.__CSFX_TOTAL_USD !== 'undefined') {
       var gTotal = csfxToNumber(window.__CSFX_TOTAL_USD);
       if (!isNaN(gTotal)) total = gTotal;
     }
-    var discountAmount = 0;
-    if (cart) {
-      var discountCandidate = typeof cart.final_discount_amount !== 'undefined'
-        ? cart.final_discount_amount
-        : (typeof cart.discount_amount !== 'undefined' ? cart.discount_amount : cart.discount);
-      var discParsed = csfxToNumber(discountCandidate);
-      if (!isNaN(discParsed)) discountAmount = discParsed;
-    }
+
+    var discountAmount = pickCandidate(discountCandidates, true);
+    if (isNaN(discountAmount)) discountAmount = 0;
     var discountValueMeta = csfxToNumber(meta.csfx_discount_value);
     if (!isNaN(discountValueMeta) && discountValueMeta > 0) {
       discountAmount = -Math.abs(discountValueMeta);
     }
-    var baseTotal = NaN;
-    var metaBase = csfxToNumber(meta.csfx_base_total);
-    if (!isNaN(metaBase) && metaBase > 0) {
-      baseTotal = metaBase;
-    } else if (!isNaN(total)) {
-      baseTotal = total - discountAmount;
+
+    var baseTotal = pickCandidate([
+      compatTotals && compatTotals.subtotal,
+      compatTotals && compatTotals.baseSubtotal,
+      meta && meta.csfx_base_total,
+      cart && cart.base_subtotal,
+      cart && cart.subtotal,
+      cart && cart.totals && cart.totals.base_subtotal
+    ], false);
+
+    if (isNaN(baseTotal) || baseTotal <= 0) {
+      var metaBase = csfxToNumber(meta.csfx_base_total);
+      if (!isNaN(metaBase) && metaBase > 0) {
+        baseTotal = metaBase;
+      }
     }
+
+    if ((isNaN(baseTotal) || baseTotal <= 0) && !isNaN(total)) {
+      var taxAmount = pickCandidate(taxCandidates, true);
+      var discountCalc = discountAmount;
+      if (discountCalc > 0) discountCalc = -discountCalc;
+      var taxCalc = isNaN(taxAmount) ? 0 : taxAmount;
+      baseTotal = total - discountCalc + taxCalc;
+    }
+
     if ((isNaN(baseTotal) || baseTotal <= 0) && typeof window.__CSFX_SUBTOTAL_USD !== 'undefined') {
       var gBase = csfxToNumber(window.__CSFX_SUBTOTAL_USD);
       if (!isNaN(gBase) && gBase > 0) baseTotal = gBase;
@@ -1195,9 +1273,11 @@
     if ((isNaN(baseTotal) || baseTotal <= 0) && !isNaN(total)) {
       baseTotal = total;
     }
+
     var usdPaid = csfxToNumber(meta.csfx_usd_paid);
     var discountPctMeta = meta.csfx_discount_pct != null ? Number(meta.csfx_discount_pct) : null;
     var applied = Math.abs(discountAmount) > 0.0001;
+
     return {
       cart: cart,
       cartService: cartService,
@@ -1461,37 +1541,57 @@
     var d = round(Math.max(0, Number(discountValue) || 0), FX.decimals);
     if (!isFinite(d) || d <= 0) return { ok: false };
 
-    if (!cart || typeof cart !== 'object') cart = {};
-    if (!cart.totals || typeof cart.totals !== 'object') cart.totals = {};
+    cart = cart && typeof cart === 'object' ? cart : {};
+    var via = 'fallback';
 
-    var codeAmt = round(Math.max(0, Number(cart.discount_code_amount || 0)), FX.decimals);
-    var itemsAmt = round(Math.max(0, Number(cart.final_items_discount_amount || 0)), FX.decimals);
-
-    cart.discount_source = 'csfx';
-    cart.discount_type = 'fixed';
-    cart.discount_amount = d;
-    cart.discount_final_amount = d;
-    cart.discount_tax_amount = 0; // after-tax
-    cart.discount_excl_tax = d; // after-tax
-    cart.add_discount = true;
-    cart.discount_code_amount = codeAmt;
-    cart.final_items_discount_amount = itemsAmt;
-    cart.cart_discount_amount = d;
-    cart.final_discount_amount = round(codeAmt + itemsAmt + d, FX.decimals);
-
-    if (typeof fmtUsd === 'function') {
-      cart.discount_amount_currency_formatted = fmtUsd(d);
-      cart.discount_final_amount_currency_formatted = fmtUsd(d);
-      cart.final_discount_amount_currency_formatted = fmtUsd(cart.final_discount_amount);
+    if (OPCompat && typeof OPCompat.applyManualCartDiscount === 'function') {
+      try {
+        OPCompat.applyManualCartDiscount(cart, d, 'csfx');
+        via = 'compat';
+      } catch (_errCompat) {
+        via = 'compat-error';
+      }
     }
 
-    return { ok: true, amount: d };
+    if (via !== 'compat') {
+      if (!cart.totals || typeof cart.totals !== 'object') cart.totals = {};
+      var codeAmt = round(Math.max(0, Number(cart.discount_code_amount || 0)), FX.decimals);
+      var itemsAmt = round(Math.max(0, Number(cart.final_items_discount_amount || 0)), FX.decimals);
+      cart.discount_source = 'csfx';
+      cart.discount_type = 'fixed';
+      cart.discount_amount = d;
+      cart.discount_final_amount = d;
+      cart.discount_tax_amount = 0;
+      cart.discount_excl_tax = d;
+      cart.cart_discount_amount = d;
+      cart.discount_code_amount = codeAmt;
+      cart.final_items_discount_amount = itemsAmt;
+      cart.final_discount_amount = round(codeAmt + itemsAmt + d, FX.decimals);
+      cart.final_discount_amount_incl_tax = cart.final_discount_amount;
+      cart.add_discount = true;
+      via = (via === 'compat-error') ? 'fallback-after-error' : 'fallback';
+    }
+
+    if (OPCompat && typeof OPCompat.normalizeCart === 'function') {
+      try { OPCompat.normalizeCart(cart); } catch (_errNorm) {}
+    }
+
+    if (typeof fmtUsd === 'function') {
+      var discAmt = Number(cart.discount_amount || d);
+      var finalAmt = Number(cart.final_discount_amount || discAmt);
+      cart.discount_amount_currency_formatted = fmtUsd(discAmt);
+      cart.discount_final_amount_currency_formatted = fmtUsd(discAmt);
+      cart.final_discount_amount_currency_formatted = fmtUsd(finalAmt);
+    }
+
+    return { ok: true, amount: d, via: via };
   }
 
   function csfxPersistCart(cart) {
     var snapshot = {
       discount_amount: cart.discount_amount,
       final_discount_amount: cart.final_discount_amount,
+      final_discount_amount_incl_tax: cart.final_discount_amount_incl_tax,
       grand_total: cart.grand_total,
       base_grand_total: cart.base_grand_total,
       total: cart.total,
@@ -1546,7 +1646,8 @@
       snapshotTotal: snapshot.totalUSD,
       existingDiscount: cart.discount_amount,
       existingFinalDiscount: cart.final_discount_amount,
-      hasService: !!snapshot.cartService
+      hasService: !!snapshot.cartService,
+      cartSource: snapshot.cartSource
     });
     var manualRes = csfxApplyManualCartDiscount(cart, calc && calc.discount);
     if (!manualRes.ok) {
@@ -1560,8 +1661,12 @@
     csfxDualLog('apply:manual', {
       manual: manualRes,
       cartDiscountAmount: cart.discount_amount,
-      cartFinalDiscountAmount: cart.final_discount_amount
+      cartFinalDiscountAmount: cart.final_discount_amount,
+      manualVia: manualRes.via
     });
+    if (OPCompat && typeof OPCompat.normalizeCart === 'function') {
+      try { OPCompat.normalizeCart(cart); } catch (_errNormAfterManual) {}
+    }
     var metaListBase = cart.meta_data || cart.metaData;
     var metaList = csfxSanitizeMetaList(metaListBase && metaListBase.slice ? metaListBase.slice() : metaListBase);
     var usdPaidRounded = round(calc.netEffective, FX.decimals);
@@ -1606,16 +1711,18 @@
       }
       if (svc && typeof svc === 'object') {
         var usedNative = false;
+        var nativeError = null;
         if (typeof svc.addDiscount === 'function') {
           try {
             svc.addDiscount({ amount: discountValue, type: 'fixed', source: 'csfx' });
             usedNative = true;
-          } catch (_err) {
+          } catch (_errAdd) {
+            nativeError = _errAdd;
             usedNative = false;
           }
         }
         if (!usedNative && typeof svc.setCart === 'function') {
-          try { svc.setCart(cart); } catch (_err) {}
+          try { svc.setCart(cart); } catch (_errSet) {}
         }
         if (svc.cart) {
           svc.cart.meta_data = metaList;
@@ -1625,23 +1732,29 @@
           svc.cart.csfx_discount_value = discountValue;
           svc.cart.csfx_base_total = baseTotal;
           svc.cart.csfx_discount_note = note;
+          svc.cart.final_discount_amount_incl_tax = cart.final_discount_amount_incl_tax;
+          svc.cart.finalDiscountAmountInclTax = cart.final_discount_amount_incl_tax;
         }
         if (typeof svc._initCartTotal === 'function') svc._initCartTotal();
         if (typeof svc.updateTotals === 'function') svc.updateTotals();
         if (typeof svc.saveCart === 'function') svc.saveCart();
         csfxDualLog('apply:service', {
           usedNative: usedNative,
+          nativeError: nativeError ? (nativeError.message || true) : null,
           hasSetCart: typeof svc.setCart === 'function',
           hasUpdateTotals: typeof svc.updateTotals === 'function',
           hasSaveCart: typeof svc.saveCart === 'function',
-          serviceDetected: !!svc
+          serviceDetected: !!svc,
+          cartSource: snapshot.cartSource,
+          manualVia: manualRes.via
         });
       }
     } catch (_err) {}
     csfxPersistCart(cart);
     csfxDualLog('apply:finished', {
       discountValue: discountValue,
-      finalDiscountAmount: cart.final_discount_amount
+      finalDiscountAmount: cart.final_discount_amount,
+      finalDiscountAmountInclTax: cart.final_discount_amount_incl_tax
     });
     try {
       document.dispatchEvent(new CustomEvent('csfx:dual-discount-applied', {
