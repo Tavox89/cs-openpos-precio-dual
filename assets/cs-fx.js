@@ -1587,9 +1587,51 @@
     return arr;
   }
 
-  // csfx: fallback UI para aplicar descuento manual cuando no hay CartService
+  /**
+   * csfx: fallback UI para aplicar descuento manual cuando no hay CartService.
+   *
+   * Referencia (probado manualmente):
+   * // Fallback UI: abre el diálogo de descuento manual y aplica discountValue
+   * // function applyDualDiscountViaUI(discountValue) {
+   * //   const btn = document.querySelector('button[mat-icon-button][aria-label*="Descu"]') ||
+   * //               document.querySelector('.cart-discount button');
+   * //   if (!btn) return false;
+   * //   btn.click();
+   * //   setTimeout(() => {
+   * //     const input = document.querySelector('input[formcontrolname="discount_amount"]') ||
+   * //                   document.querySelector('input[name="discount_amount"]');
+   * //     const typeSelect = document.querySelector('mat-select[formcontrolname="discount_type"]') ||
+   * //                        document.querySelector('select[name="discount_type"]');
+   * //     const formatted = discountValue.toFixed(2).replace('.', ',');
+   * //     if (input) {
+   * //       input.value = formatted;
+   * //       input.dispatchEvent(new Event('input', { bubbles: true }));
+   * //     }
+   * //     if (typeSelect) {
+   * //       typeSelect.value = 'fixed';
+   * //       typeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+   * //     } else {
+   * //       const fixedBtn = document.querySelector('button[role="radio"][aria-label*="$"]');
+   * //       if (fixedBtn) fixedBtn.click();
+   * //     }
+   * //     const confirmBtn = document.querySelector('button[mat-dialog-confirm]') ||
+   * //                        document.querySelector('button[mat-raised-button][color="primary"]');
+   * //     if (confirmBtn) confirmBtn.click();
+   * //   }, 150);
+   * //   return true;
+   * // }
+   */
   function applyDualDiscountViaUI(discountValue, hooks) {
-    var amount = round(Math.max(0, Number(discountValue) || 0), FX.decimals);
+    var rawNormalized = discountValue;
+    if (typeof rawNormalized === 'string') {
+      var sanitized = rawNormalized.replace(/\s+/g, '').replace(/[^0-9,.\-]/g, '');
+      if (sanitized.indexOf(',') > -1 && sanitized.indexOf('.') > -1) {
+        sanitized = sanitized.replace(/\./g, '');
+      }
+      rawNormalized = sanitized.replace(/,/g, '.');
+    }
+    var numericDiscount = Number(rawNormalized);
+    var amount = round(Math.max(0, numericDiscount || 0), FX.decimals);
     if (!isFinite(amount) || amount <= 0) {
       csfxDualLog('ui-discount:invalid-amount', { amount: discountValue });
       return false;
@@ -1603,7 +1645,7 @@
     }
     try { trigger.click(); } catch (_errClick) {}
     csfxDualLog('ui-discount:open', { amount: amount });
-    var formatted = amount.toFixed(FX.decimals).replace('.', ',');
+    var formatted = amount.toFixed(2).replace('.', ',');
     var afterFn = hooks && typeof hooks.after === 'function' ? hooks.after : null;
     var doneFn = hooks && typeof hooks.onDone === 'function' ? hooks.onDone : null;
 
@@ -1648,17 +1690,22 @@
         return false;
       };
 
+      var fixedHandled = false;
       if (select) {
         try {
-          if (select.tagName && select.tagName.toLowerCase() === 'select') {
+          var tagName = select.tagName ? select.tagName.toLowerCase() : '';
+          if (tagName === 'select') {
             select.value = 'fixed';
             select.dispatchEvent(new Event('change', { bubbles: true }));
+            fixedHandled = true;
           } else {
             select.dispatchEvent(new Event('click', { bubbles: true }));
-            setTimeout(ensureFixed, 140);
+            setTimeout(ensureFixed, 160);
+            fixedHandled = true;
           }
         } catch (_errSelect) {}
-      } else {
+      }
+      if (!fixedHandled) {
         ensureFixed();
       }
 
@@ -1670,6 +1717,7 @@
         if (confirmBtn) {
           try { confirmBtn.click(); } catch (_errConfirm) {}
           csfxDualLog('ui-discount:confirm', { amount: amount });
+          csfxDualLog('ui-discount:manualVia', { manualVia: 'ui' });
           setTimeout(function () {
             if (afterFn) {
               try {
@@ -1686,7 +1734,7 @@
           if (doneFn) doneFn(false);
         }
       }, 160);
-    }, 220);
+    }, 180);
 
     return true;
   }
