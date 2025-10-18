@@ -119,15 +119,22 @@
   function readTotals(cart) {
     cart = normalizeCart(cart);
     var totals = ensureObject(cart.totals);
-    var subtotal = pickFirstNumber([
+    var baseSubtotal = pickFirstNumber([
       totals.base_subtotal,
+      cart.base_subtotal
+    ], true);
+    var subtotal = pickFirstNumber([
       totals.subtotal,
-      cart.base_subtotal,
+      totals.base_subtotal,
+      cart.subtotal,
       cart.subtotal
     ], true);
     var discount = pickFirstNumber([
       totals.discount,
       totals.discount_total,
+      totals.final_discount_amount,
+      totals.final_discount_amount_incl_tax,
+      cart.final_discount_amount_incl_tax,
       cart.final_discount_amount,
       cart.discount_final_amount,
       cart.discount_amount
@@ -148,10 +155,12 @@
       cart.total_due
     ], true);
     return {
+      baseSubtotal: baseSubtotal,
       subtotal: subtotal,
       discount: discount,
       tax: tax,
-      grand: grand
+      grand: grand,
+      total: grand
     };
   }
 
@@ -192,6 +201,13 @@
     cart.add_discount = true;
     cart.addDiscount = true;
 
+    cart.totals = ensureObject(cart.totals);
+    cart.totals.discount = combined;
+    cart.totals.discountAmount = combined;
+    cart.totals.final_discount_amount = combined;
+    cart.totals.finalDiscountAmount = combined;
+
+    normalizeCart(cart);
     return cart;
   }
 

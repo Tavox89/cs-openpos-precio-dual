@@ -1236,10 +1236,14 @@
     }
 
     var discountAmount = pickCandidate(discountCandidates, true);
-    if (isNaN(discountAmount)) discountAmount = 0;
+    if (isNaN(discountAmount)) {
+      discountAmount = 0;
+    } else {
+      discountAmount = Math.abs(discountAmount);
+    }
     var discountValueMeta = csfxToNumber(meta.csfx_discount_value);
     if (!isNaN(discountValueMeta) && discountValueMeta > 0) {
-      discountAmount = -Math.abs(discountValueMeta);
+      discountAmount = round(Math.abs(discountValueMeta), FX.decimals);
     }
 
     var baseTotal = pickCandidate([
@@ -1260,10 +1264,8 @@
 
     if ((isNaN(baseTotal) || baseTotal <= 0) && !isNaN(total)) {
       var taxAmount = pickCandidate(taxCandidates, true);
-      var discountCalc = discountAmount;
-      if (discountCalc > 0) discountCalc = -discountCalc;
       var taxCalc = isNaN(taxAmount) ? 0 : taxAmount;
-      baseTotal = total - discountCalc + taxCalc;
+      baseTotal = total + discountAmount - taxCalc;
     }
 
     if ((isNaN(baseTotal) || baseTotal <= 0) && typeof window.__CSFX_SUBTOTAL_USD !== 'undefined') {
@@ -1557,6 +1559,7 @@
       if (!cart.totals || typeof cart.totals !== 'object') cart.totals = {};
       var codeAmt = round(Math.max(0, Number(cart.discount_code_amount || 0)), FX.decimals);
       var itemsAmt = round(Math.max(0, Number(cart.final_items_discount_amount || 0)), FX.decimals);
+      var combined = round(codeAmt + itemsAmt + d, FX.decimals);
       cart.discount_source = 'csfx';
       cart.discount_type = 'fixed';
       cart.discount_amount = d;
@@ -1566,9 +1569,25 @@
       cart.cart_discount_amount = d;
       cart.discount_code_amount = codeAmt;
       cart.final_items_discount_amount = itemsAmt;
-      cart.final_discount_amount = round(codeAmt + itemsAmt + d, FX.decimals);
+      cart.final_discount_amount = combined;
       cart.final_discount_amount_incl_tax = cart.final_discount_amount;
       cart.add_discount = true;
+      cart.discountSource = cart.discount_source;
+      cart.discountType = cart.discount_type;
+      cart.discountAmount = cart.discount_amount;
+      cart.discountFinalAmount = cart.discount_final_amount;
+      cart.discountTaxAmount = cart.discount_tax_amount;
+      cart.discountExclTax = cart.discount_excl_tax;
+      cart.cartDiscountAmount = cart.cart_discount_amount;
+      cart.discountCodeAmount = cart.discount_code_amount;
+      cart.finalItemsDiscountAmount = cart.final_items_discount_amount;
+      cart.finalDiscountAmount = cart.final_discount_amount;
+      cart.finalDiscountAmountInclTax = cart.final_discount_amount_incl_tax;
+      cart.addDiscount = true;
+      cart.totals.discount = combined;
+      cart.totals.discountAmount = combined;
+      cart.totals.final_discount_amount = combined;
+      cart.totals.finalDiscountAmount = combined;
       via = (via === 'compat-error') ? 'fallback-after-error' : 'fallback';
     }
 
