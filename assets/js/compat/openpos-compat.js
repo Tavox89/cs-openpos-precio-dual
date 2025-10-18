@@ -41,6 +41,17 @@
     return (value && typeof value === 'object') ? value : {};
   }
 
+  function looksLikeCartService(obj) {
+    if (!obj || typeof obj !== 'object') return false;
+    if (obj === global || obj === global.document) return false;
+    var hasStore = obj.storeName === 'cart';
+    var fnCount = 0;
+    ['setDiscount', '_initCartTotal', 'saveCart', 'updateTotals', 'getCurrentCart'].forEach(function (fn) {
+      if (typeof obj[fn] === 'function') fnCount++;
+    });
+    return hasStore || fnCount >= 2;
+  }
+
   function normalizeProduct(product) {
     product = product || {};
     var isCamel = ('priceInclTax' in product) || ('manageStock' in product) || ('parentId' in product);
@@ -172,6 +183,33 @@
     var itemsAmount = round(Math.max(0, Number(cart.final_items_discount_amount || 0)), decimals);
     var combined = round(codeAmount + itemsAmount + value, decimals);
 
+    var svc = global.__CSFX_CART_SERVICE__ || (global.OpenPOSApp && global.OpenPOSApp.cartService) || null;
+    if (svc && typeof svc.setDiscount === 'function' && typeof svc._initCartTotal === 'function') {
+      try {
+        svc.setDiscount(value, 'fixed');
+        var activeCart = null;
+        if (typeof svc.getCurrentCart === 'function') {
+          activeCart = svc.getCurrentCart();
+        } else if (svc.cart) {
+          activeCart = svc.cart;
+        }
+        if (activeCart && typeof activeCart === 'object') {
+          cart = normalizeCart(activeCart);
+        }
+        if (cart) {
+          cart.discount_source = '';
+          cart.discountSource = '';
+        }
+        svc._initCartTotal();
+        if (typeof svc.updateTotals === 'function') svc.updateTotals();
+        if (typeof svc.saveCart === 'function') svc.saveCart();
+        normalizeCart(cart);
+        return cart;
+      } catch (_nativeErr) {
+        /* Fallback to manual path */
+      }
+    }
+
     cart.discount_source = source || cart.discount_source || 'csfx';
     cart.discountSource = cart.discount_source;
     cart.discount_type = 'fixed';
@@ -230,6 +268,55 @@
   compat.readTotals = readTotals;
   compat.applyManualCartDiscount = applyManualCartDiscount;
   compat.normalizeItemDiscounts = normalizeItemDiscounts;
+  compat.resolveCartService = function () {
+    var svc = global.__CSFX_CART_SERVICE__ ||
+      (global.OpenPOSApp && global.OpenPOSApp.cartService) ||
+      (global.posApp && global.posApp.cartService) ||
+      (global.POSApp && global.POSApp.cartService) ||
+      null;
+
+    if (!svc && global.ng && typeof global.ng.getInjector === 'function' && global.document) {
+      var root = global.document.querySelector('app-root, pos-root, openpos-root, [ng-version]');
+      if (root) {
+        try {
+          var injector = global.ng.getInjector(root);
+          if (injector && typeof injector.get === 'function') {
+            try { svc = injector.get('CartService'); } catch (_errToken) {}
+            if (!svc && typeof global.CartService !== 'undefined') {
+              try { svc = injector.get(global.CartService); } catch (_errClass) {}
+            }
+          }
+        } catch (_errNg) {}
+      }
+    }
+
+    if (!svc && global.document) {
+      try {
+        var nodes = global.document.querySelectorAll('*');
+        for (var i = 0; i < nodes.length && !svc; i++) {
+          var ctx = nodes[i].__ngContext__;
+          if (!ctx) continue;
+          for (var j = 0; j < ctx.length; j++) {
+            var entry = ctx[j];
+            if (!entry) continue;
+            if (entry.cartService && looksLikeCartService(entry.cartService)) {
+              svc = entry.cartService;
+              break;
+            }
+            if (looksLikeCartService(entry)) {
+              svc = entry;
+              break;
+            }
+          }
+        }
+      } catch (_errCtx) {}
+    }
+
+    if (svc) {
+      try { global.__CSFX_CART_SERVICE__ = svc; } catch (_errExpose) {}
+    }
+    return svc;
+  };
   compat.round = compat.round || round;
 
   global.OpenPOSCompat = compat;

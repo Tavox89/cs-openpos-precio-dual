@@ -1092,6 +1092,8 @@
         service: window.OpenPOSApp && window.OpenPOSApp.cartService
       },
       { value: window.pos_cart && (window.pos_cart.cart || window.pos_cart), source: 'window.pos_cart', service: window.pos_cart && window.pos_cart.cartService },
+      { value: window.posApp && (window.posApp.cart || (window.posApp.cartService && window.posApp.cartService.cart)), source: 'window.posApp', service: window.posApp && window.posApp.cartService },
+      { value: window.POSApp && (window.POSApp.cart || (window.POSApp.cartService && window.POSApp.cartService.cart)), source: 'window.POSApp', service: window.POSApp && window.POSApp.cartService },
       { value: window.OPCart, source: 'window.OPCart' },
       { value: window.OPENPOS_CART, source: 'window.OPENPOS_CART' }
     ];
@@ -1101,7 +1103,7 @@
       if (gcHit) return gcHit;
     }
 
-    var storageKeys = ['op_cart', 'op_cache_cart', 'op_local_cart', '_op_cart_data'];
+    var storageKeys = ['op_cart', 'op_cache_cart', 'op_local_cart', '_op_cart_data', 'op_cart_data', 'op_cart_v8', 'op_v5_cart', 'op_cart_backup', 'op_cart_latest', 'op_cart_store'];
     for (var j = 0; j < storageKeys.length; j++) {
       try {
         var raw = localStorage.getItem(storageKeys[j]);
@@ -1360,12 +1362,44 @@
   }
 
   function csfxFindCartServiceViaNg(debugSvc) {
+    var selectors = ['app-root', 'pos-root', 'openpos-root', '[ng-version]'];
     var roots = [];
-    var appRoot = document.querySelector('app-root');
-    if (appRoot) roots.push(appRoot);
+    selectors.forEach(function (sel) {
+      var node = document.querySelector(sel);
+      if (node && roots.indexOf(node) === -1) roots.push(node);
+    });
     document.querySelectorAll('[ng-version]').forEach(function (node) {
       if (roots.indexOf(node) === -1) roots.push(node);
     });
+
+    if (typeof window !== 'undefined' && window.ng && typeof window.ng.getInjector === 'function') {
+      for (var s = 0; s < roots.length; s++) {
+        var rootEl = roots[s];
+        if (!rootEl) continue;
+        try {
+          var injector = window.ng.getInjector(rootEl);
+          if (!injector) continue;
+          var svc = null;
+          if (typeof injector.get === 'function') {
+            try { svc = injector.get('CartService'); } catch (_errToken) {}
+            if (!svc && typeof window.CartService !== 'undefined') {
+              try { svc = injector.get(window.CartService); } catch (_errClass) {}
+            }
+          }
+          if (svc && csfxLooksLikeCartService(svc)) {
+            if (debugSvc) {
+              debugSvc.ngHit = {
+                via: 'ng.getInjector',
+                node: rootEl.tagName,
+                className: svc.constructor && svc.constructor.name
+              };
+            }
+            return svc;
+          }
+        } catch (_errInjector) {}
+      }
+    }
+
     var visited = new Set();
     var queue = [];
     roots.forEach(function (node) {
@@ -1373,6 +1407,19 @@
         queue.push({ ctx: node.__ngContext__, node: node });
       }
     });
+    if (queue.length === 0) {
+      document.querySelectorAll('*').forEach(function (node) {
+        if (node && node.__ngContext__ && !visited.has(node.__ngContext__)) {
+          queue.push({ ctx: node.__ngContext__, node: node });
+        }
+      });
+    } else {
+      document.querySelectorAll('*').forEach(function (node) {
+        if (node && node.__ngContext__ && !visited.has(node.__ngContext__)) {
+          queue.push({ ctx: node.__ngContext__, node: node });
+        }
+      });
+    }
     var iterations = 0;
     while (queue.length && iterations < 1200) {
       iterations++;
@@ -1465,8 +1512,10 @@
     } catch (_err2) {}
 
     var globalNames = [
-      'OpenPOSApp', 'OpenposApp', 'openposApp', 'POSApp', 'posApp', 'pos_app',
-      'OPApp', 'openposapp', 'openposAppService', 'OpenPosApp'
+      'OpenPOSApp', 'OpenposApp', 'openposApp', 'OpenPOSAPP',
+      'POSApp', 'posApp', 'posapp', 'POSAPP', 'pos_app',
+      'OPApp', 'openposapp', 'openposAppService', 'OpenPosApp',
+      'posAppService', 'OpenPOSAppService', 'OpenPosAppService'
     ];
     for (var g = 0; g < globalNames.length; g++) {
       var name = globalNames[g];
@@ -1539,23 +1588,63 @@
   }
 
   // csfx: aplica descuento manual nativo OpenPOS sobre el cart
-  function csfxApplyManualCartDiscount(cart, discountValue) {
+  function csfxApplyManualCartDiscount(cart, discountValue, svcCandidate) {
     var d = round(Math.max(0, Number(discountValue) || 0), FX.decimals);
     if (!isFinite(d) || d <= 0) return { ok: false };
 
     cart = cart && typeof cart === 'object' ? cart : {};
     var via = 'fallback';
+    var svc = svcCandidate && typeof svcCandidate === 'object' ? svcCandidate : null;
+    var nativeError = null;
 
-    if (OPCompat && typeof OPCompat.applyManualCartDiscount === 'function') {
+    if (!svc) {
       try {
-        OPCompat.applyManualCartDiscount(cart, d, 'csfx');
-        via = 'compat';
-      } catch (_errCompat) {
-        via = 'compat-error';
+        var svcDebugTmp = { cartService: { attempts: [] } };
+        svc = csfxGetCartService(svcDebugTmp);
+        if (svc && typeof window !== 'undefined') {
+          window.__CSFX_CART_SERVICE__ = svc;
+        }
+      } catch (_svcErr) {
+        svc = null;
       }
     }
 
-    if (via !== 'compat') {
+    if (svc && typeof svc.setDiscount === 'function' && typeof svc._initCartTotal === 'function') {
+      try {
+        svc.setDiscount(d, 'fixed');
+        var activeCart = null;
+        if (typeof svc.getCurrentCart === 'function') {
+          activeCart = svc.getCurrentCart();
+        } else if (svc.cart) {
+          activeCart = svc.cart;
+        }
+        if (activeCart && typeof activeCart === 'object') {
+          cart = activeCart;
+        }
+        if (cart) {
+          cart.discount_source = '';
+          cart.discountSource = '';
+        }
+        svc._initCartTotal();
+        if (typeof svc.updateTotals === 'function') svc.updateTotals();
+        if (typeof svc.saveCart === 'function') svc.saveCart();
+        via = 'native';
+      } catch (errNative) {
+        nativeError = errNative;
+        via = 'native-error';
+      }
+    }
+
+    if (via !== 'native' && OPCompat && typeof OPCompat.applyManualCartDiscount === 'function') {
+      try {
+        OPCompat.applyManualCartDiscount(cart, d, 'csfx');
+        via = via === 'native-error' ? 'compat-after-native-error' : 'compat';
+      } catch (_errCompat) {
+        via = via === 'native-error' ? 'compat-failed-native-error' : via;
+      }
+    }
+
+    if (via !== 'native' && via !== 'compat' && via !== 'compat-after-native-error') {
       if (!cart.totals || typeof cart.totals !== 'object') cart.totals = {};
       var codeAmt = round(Math.max(0, Number(cart.discount_code_amount || 0)), FX.decimals);
       var itemsAmt = round(Math.max(0, Number(cart.final_items_discount_amount || 0)), FX.decimals);
@@ -1588,7 +1677,7 @@
       cart.totals.discountAmount = combined;
       cart.totals.final_discount_amount = combined;
       cart.totals.finalDiscountAmount = combined;
-      via = (via === 'compat-error') ? 'fallback-after-error' : 'fallback';
+      via = (via === 'compat-failed-native-error') ? 'fallback-after-errors' : 'fallback';
     }
 
     if (OPCompat && typeof OPCompat.normalizeCart === 'function') {
@@ -1603,7 +1692,7 @@
       cart.final_discount_amount_currency_formatted = fmtUsd(finalAmt);
     }
 
-    return { ok: true, amount: d, via: via };
+    return { ok: true, amount: d, via: via, cart: cart, service: svc || null, nativeError: nativeError };
   }
 
   function csfxPersistCart(cart) {
@@ -1668,7 +1757,7 @@
       hasService: !!snapshot.cartService,
       cartSource: snapshot.cartSource
     });
-    var manualRes = csfxApplyManualCartDiscount(cart, calc && calc.discount);
+    var manualRes = csfxApplyManualCartDiscount(cart, calc && calc.discount, snapshot.cartService);
     if (!manualRes.ok) {
       csfxDualLog('apply:manual-failed', {
         requestedDiscount: calc && calc.discount,
@@ -1676,9 +1765,18 @@
       });
       return false;
     }
+    if (manualRes.cart && typeof manualRes.cart === 'object') {
+      cart = manualRes.cart;
+    }
     var discountValue = manualRes.amount;
+    if (snapshot.cartDebug && typeof snapshot.cartDebug === 'object') {
+      snapshot.cartDebug.manualVia = manualRes.via;
+    }
     csfxDualLog('apply:manual', {
-      manual: manualRes,
+      manual: {
+        via: manualRes.via,
+        nativeError: manualRes.nativeError ? (manualRes.nativeError.message || String(manualRes.nativeError)) : null
+      },
       cartDiscountAmount: cart.discount_amount,
       cartFinalDiscountAmount: cart.final_discount_amount,
       manualVia: manualRes.via
@@ -1721,25 +1819,19 @@
     });
     // csfx: sincroniza con el servicio de OpenPOS para refrescar UI y modo offline
     try {
-      var svc = snapshot.cartService;
+      var svc = manualRes.service || snapshot.cartService;
       if ((!svc || typeof svc !== 'object') && typeof csfxCachedCartService !== 'undefined' && csfxCachedCartService) {
         svc = csfxCachedCartService;
       }
       if ((!svc || typeof svc !== 'object') && window.OpenPOSApp && OpenPOSApp.cartService) {
         svc = OpenPOSApp.cartService;
       }
+      if (svc && typeof window !== 'undefined') {
+        try { window.__CSFX_CART_SERVICE__ = svc; } catch (_errExposeSvc) {}
+      }
       if (svc && typeof svc === 'object') {
-        var usedNative = false;
-        var nativeError = null;
-        if (typeof svc.addDiscount === 'function') {
-          try {
-            svc.addDiscount({ amount: discountValue, type: 'fixed', source: 'csfx' });
-            usedNative = true;
-          } catch (_errAdd) {
-            nativeError = _errAdd;
-            usedNative = false;
-          }
-        }
+        var usedNative = manualRes.via === 'native';
+        var nativeError = manualRes.nativeError ? (manualRes.nativeError.message || String(manualRes.nativeError)) : null;
         if (!usedNative && typeof svc.setCart === 'function') {
           try { svc.setCart(cart); } catch (_errSet) {}
         }
@@ -1753,8 +1845,14 @@
           svc.cart.csfx_discount_note = note;
           svc.cart.final_discount_amount_incl_tax = cart.final_discount_amount_incl_tax;
           svc.cart.finalDiscountAmountInclTax = cart.final_discount_amount_incl_tax;
+          if (usedNative) {
+            svc.cart.discount_source = '';
+            svc.cart.discountSource = '';
+          }
         }
-        if (typeof svc._initCartTotal === 'function') svc._initCartTotal();
+        if (!usedNative && typeof svc._initCartTotal === 'function') {
+          try { svc._initCartTotal(); } catch (_errInitFinal) {}
+        }
         if (typeof svc.updateTotals === 'function') svc.updateTotals();
         if (typeof svc.saveCart === 'function') svc.saveCart();
         csfxDualLog('apply:service', {
@@ -2075,7 +2173,8 @@
       success: success,
       discount: calc.discount,
       cartFound: !!snapshot.cart,
-      remainderUsd: calc.remainderUsd
+      remainderUsd: calc.remainderUsd,
+      manualVia: snapshot.cartDebug && snapshot.cartDebug.manualVia ? snapshot.cartDebug.manualVia : null
     });
     if (status) {
       status.classList.remove('csfx-dual-status--warn', 'csfx-dual-status--info', 'csfx-dual-status--error', 'csfx-dual-status--ok');
