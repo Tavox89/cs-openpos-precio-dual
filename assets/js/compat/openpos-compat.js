@@ -275,6 +275,10 @@
       (global.POSApp && global.POSApp.cartService) ||
       null;
 
+    if (svc && !looksLikeCartService(svc)) {
+      svc = null;
+    }
+
     if (!svc && global.ng && typeof global.ng.getInjector === 'function' && global.document) {
       var root = global.document.querySelector('app-root, pos-root, openpos-root, [ng-version]');
       if (root) {
@@ -284,6 +288,9 @@
             try { svc = injector.get('CartService'); } catch (_errToken) {}
             if (!svc && typeof global.CartService !== 'undefined') {
               try { svc = injector.get(global.CartService); } catch (_errClass) {}
+            }
+            if (svc && !looksLikeCartService(svc)) {
+              svc = null;
             }
           }
         } catch (_errNg) {}

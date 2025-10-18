@@ -1587,6 +1587,110 @@
     return arr;
   }
 
+  // csfx: fallback UI para aplicar descuento manual cuando no hay CartService
+  function applyDualDiscountViaUI(discountValue, hooks) {
+    var amount = round(Math.max(0, Number(discountValue) || 0), FX.decimals);
+    if (!isFinite(amount) || amount <= 0) {
+      csfxDualLog('ui-discount:invalid-amount', { amount: discountValue });
+      return false;
+    }
+    var trigger = document.querySelector('button[mat-icon-button][aria-label*="Descu"]') ||
+      document.querySelector('.cart-discount button') ||
+      document.querySelector('button[aria-label*="Descuento"], button[aria-label*="discount"]');
+    if (!trigger) {
+      csfxDualLog('ui-discount:no-trigger', { amount: amount });
+      return false;
+    }
+    try { trigger.click(); } catch (_errClick) {}
+    csfxDualLog('ui-discount:open', { amount: amount });
+    var formatted = amount.toFixed(FX.decimals).replace('.', ',');
+    var afterFn = hooks && typeof hooks.after === 'function' ? hooks.after : null;
+    var doneFn = hooks && typeof hooks.onDone === 'function' ? hooks.onDone : null;
+
+    setTimeout(function () {
+      var input = document.querySelector('input[formcontrolname="discount_amount"]') ||
+        document.querySelector('input[name="discount_amount"]') ||
+        (function () {
+          var dialogs = document.querySelectorAll('mat-dialog-container input, .mat-dialog-container input');
+          return dialogs.length ? dialogs[0] : null;
+        })();
+      if (input) {
+        try {
+          input.focus();
+          input.value = formatted;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.dispatchEvent(new Event('blur', { bubbles: true }));
+        } catch (_errInput) {}
+      } else {
+        csfxDualLog('ui-discount:no-input', {});
+      }
+
+      var select = document.querySelector('mat-select[formcontrolname="discount_type"]') ||
+        document.querySelector('select[name="discount_type"]');
+
+      var ensureFixed = function () {
+        var fixedBtn = document.querySelector('button[role="radio"][aria-label*="$"]') ||
+          document.querySelector('button[role="radio"][aria-label*="fijo"]') ||
+          document.querySelector('button[role="radio"][aria-label*="fixed"]');
+        if (fixedBtn) {
+          try { fixedBtn.click(); } catch (_errRadio) {}
+          return true;
+        }
+        var fixedOption = Array.prototype.find.call(document.querySelectorAll('mat-option'),
+          function (opt) {
+            return opt && /fijo|fixed|\$/i.test(opt.textContent || '');
+          });
+        if (fixedOption) {
+          try { fixedOption.click(); } catch (_errOpt) {}
+          return true;
+        }
+        return false;
+      };
+
+      if (select) {
+        try {
+          if (select.tagName && select.tagName.toLowerCase() === 'select') {
+            select.value = 'fixed';
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+          } else {
+            select.dispatchEvent(new Event('click', { bubbles: true }));
+            setTimeout(ensureFixed, 140);
+          }
+        } catch (_errSelect) {}
+      } else {
+        ensureFixed();
+      }
+
+      setTimeout(function () {
+        var confirmBtn = document.querySelector('button[mat-dialog-confirm]') ||
+          document.querySelector('button[mat-raised-button][color="primary"]') ||
+          document.querySelector('mat-dialog-container button.mat-primary') ||
+          document.querySelector('.mat-dialog-container button.mat-primary');
+        if (confirmBtn) {
+          try { confirmBtn.click(); } catch (_errConfirm) {}
+          csfxDualLog('ui-discount:confirm', { amount: amount });
+          setTimeout(function () {
+            if (afterFn) {
+              try {
+                var snap = csfxGetCartSnapshot();
+                afterFn(snap);
+              } catch (afterErr) {
+                csfxDualLog('ui-discount:after-error', { error: String(afterErr) });
+              }
+            }
+            if (doneFn) doneFn(true);
+          }, 600);
+        } else {
+          csfxDualLog('ui-discount:no-confirm', {});
+          if (doneFn) doneFn(false);
+        }
+      }, 160);
+    }, 220);
+
+    return true;
+  }
+
   // csfx: aplica descuento manual nativo OpenPOS sobre el cart
   function csfxApplyManualCartDiscount(cart, discountValue, svcCandidate) {
     var d = round(Math.max(0, Number(discountValue) || 0), FX.decimals);
@@ -1649,7 +1753,7 @@
       var codeAmt = round(Math.max(0, Number(cart.discount_code_amount || 0)), FX.decimals);
       var itemsAmt = round(Math.max(0, Number(cart.final_items_discount_amount || 0)), FX.decimals);
       var combined = round(codeAmt + itemsAmt + d, FX.decimals);
-      cart.discount_source = 'csfx';
+      cart.discount_source = '';
       cart.discount_type = 'fixed';
       cart.discount_amount = d;
       cart.discount_final_amount = d;
@@ -1661,7 +1765,7 @@
       cart.final_discount_amount = combined;
       cart.final_discount_amount_incl_tax = cart.final_discount_amount;
       cart.add_discount = true;
-      cart.discountSource = cart.discount_source;
+      cart.discountSource = '';
       cart.discountType = cart.discount_type;
       cart.discountAmount = cart.discount_amount;
       cart.discountFinalAmount = cart.discount_final_amount;
@@ -1710,7 +1814,7 @@
       csfx_discount_value: cart.csfx_discount_value,
       csfx_base_total: cart.csfx_base_total
     };
-    var keys = ['op_cart', 'op_cache_cart', 'op_local_cart'];
+    var keys = ['op_cart', 'op_cache_cart', 'op_local_cart', '_op_cart_data', 'op_cart_data', 'op_cart_v8', 'op_v5_cart', 'op_cart_backup', 'op_cart_latest', 'op_cart_store'];
     for (var k = 0; k < keys.length; k++) {
       try {
         var raw = localStorage.getItem(keys[k]);
@@ -1772,6 +1876,44 @@
     if (snapshot.cartDebug && typeof snapshot.cartDebug === 'object') {
       snapshot.cartDebug.manualVia = manualRes.via;
     }
+    var uiFallbackUsed = false;
+    var uiPersisted = false;
+    if (manualRes.via !== 'native') {
+      uiFallbackUsed = applyDualDiscountViaUI(discountValue, {
+        after: function (snapshotAfter) {
+          if (!snapshotAfter || !snapshotAfter.cart) return;
+          var uiCart = snapshotAfter.cart;
+          if (OPCompat && typeof OPCompat.normalizeCart === 'function') {
+            try { uiCart = OPCompat.normalizeCart(uiCart); } catch (_errUiNorm) {}
+          }
+          uiCart.discount_source = '';
+          uiCart.discountSource = '';
+          uiCart.meta_data = metaList;
+          uiCart.metaData = metaList;
+          uiCart.csfx_usd_paid = usdPaidRounded;
+          uiCart.csfx_discount_pct = pctStored;
+          uiCart.csfx_discount_value = discountValue;
+          uiCart.csfx_base_total = baseTotal;
+          uiCart.csfx_discount_note = note;
+          csfxPersistCart(uiCart);
+          uiPersisted = true;
+          csfxDualLog('apply:ui-persist', { success: true });
+        },
+        onDone: function (success) {
+          csfxDualLog('apply:ui-done', { success: success });
+        }
+      });
+      csfxDualLog('apply:ui-attempt', { amount: discountValue, used: uiFallbackUsed });
+      if (uiFallbackUsed) {
+        manualRes.via = 'ui';
+        if (snapshot.cartDebug && typeof snapshot.cartDebug === 'object') {
+          snapshot.cartDebug.manualVia = manualRes.via;
+        }
+        cart = cart || {};
+        cart.discount_source = '';
+        cart.discountSource = '';
+      }
+    }
     csfxDualLog('apply:manual', {
       manual: {
         via: manualRes.via,
@@ -1797,6 +1939,8 @@
     metaList = csfxUpsertMeta(metaList, 'csfx_discount_value', discountValue);
     metaList = csfxUpsertMeta(metaList, 'csfx_base_total', baseTotal);
     metaList = csfxUpsertMeta(metaList, 'csfx_discount_note', note);
+    cart.discount_source = '';
+    cart.discountSource = '';
     cart.meta_data = metaList;
     cart.metaData = metaList;
     cart.csfx_usd_paid = usdPaidRounded;
@@ -1865,13 +2009,30 @@
           cartSource: snapshot.cartSource,
           manualVia: manualRes.via
         });
+      } else {
+        csfxDualLog('apply:service', {
+          usedNative: false,
+          serviceDetected: false,
+          cartSource: snapshot.cartSource,
+          manualVia: manualRes.via
+        });
       }
     } catch (_err) {}
-    csfxPersistCart(cart);
+    if (uiFallbackUsed) {
+      setTimeout(function () {
+        if (!uiPersisted) {
+          csfxPersistCart(cart);
+          csfxDualLog('apply:ui-persist-fallback', { amount: discountValue });
+        }
+      }, 900);
+    } else {
+      csfxPersistCart(cart);
+    }
     csfxDualLog('apply:finished', {
       discountValue: discountValue,
       finalDiscountAmount: cart.final_discount_amount,
-      finalDiscountAmountInclTax: cart.final_discount_amount_incl_tax
+      finalDiscountAmountInclTax: cart.final_discount_amount_incl_tax,
+      manualVia: manualRes.via
     });
     try {
       document.dispatchEvent(new CustomEvent('csfx:dual-discount-applied', {

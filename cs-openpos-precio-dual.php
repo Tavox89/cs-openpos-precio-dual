@@ -845,6 +845,8 @@ add_filter('op_get_login_cashdrawer_data', function($session){
             'usdColor'      => '#000000',
         ],
     ];
+    $session['setting']['pos_disable_cart_discount'] = 'yes';
+    $session['setting']['pos_disable_item_discount'] = 'yes';
     return $session;
 }, 50);
 
@@ -869,6 +871,8 @@ add_filter('openpos_pos_footer_js', function($handles){
     // JS principal dependiente de compat
     wp_register_script('cs-fx', $asset, ['cs-openpos-compat'], $ver, true);
     wp_script_add_data('cs-fx', 'defer', true);
+    $inline_js = "(function(){var css='.cart-discount button{display:none!important;}';var style=document.createElement('style');style.textContent=css;document.head.appendChild(style);var hide=function(){var btn=document.querySelector('.cart-discount button');if(btn){btn.style.display='none';btn.setAttribute('aria-hidden','true');}};document.addEventListener('DOMContentLoaded',hide);document.addEventListener('csfx:cart-updated',hide);})();";
+    wp_add_inline_script('cs-openpos-compat', $inline_js);
     // Boot inline para tener rate incluso en pantalla de login
     $fx = cs_fx_get_rate();
     $boot = [
