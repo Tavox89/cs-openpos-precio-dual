@@ -99,8 +99,144 @@
   var csfxCustomModalState = {
     open: false,
     authorized: false,
-    pin: ''
+    pin: '',
+    countdown: 0,
+    countdownInterval: null,
+    countdownTimeout: null
   };
+
+  var CSFX_NATIVE_STYLE_ID = 'csfx-hide-native-discounts';
+  var CSFX_NATIVE_STYLE_RULES = [
+    'button[mat-icon-button][aria-label*="Descu"]',
+    '.cart-discount button',
+    '.mat-menu-panel button[aria-label*="Descu"]'
+  ].join(', ') + ' { display: none !important; }';
+
+  function csfxInsertStyle(id, cssText) {
+    if (typeof document === 'undefined') return null;
+    var existing = document.getElementById(id);
+    if (existing) return existing;
+    var style = document.createElement('style');
+    style.id = id;
+    style.textContent = cssText;
+    var head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
+    if (head) {
+      head.appendChild(style);
+      return style;
+    }
+    document.addEventListener('DOMContentLoaded', function handleDomReady() {
+      document.removeEventListener('DOMContentLoaded', handleDomReady);
+      var readyHead = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
+      if (readyHead && !document.getElementById(id)) {
+        readyHead.appendChild(style);
+      }
+    });
+    return style;
+  }
+
+  function csfxHideNativeDiscountButtons() {
+    csfxInsertStyle(CSFX_NATIVE_STYLE_ID, CSFX_NATIVE_STYLE_RULES);
+  }
+
+  function csfxShowNativeDiscountButtons() {
+    if (typeof document === 'undefined') return;
+    var style = document.getElementById(CSFX_NATIVE_STYLE_ID);
+    if (style && style.parentNode) {
+      style.parentNode.removeChild(style);
+    }
+  }
+
+  function csfxFormatCountdown(seconds) {
+    var total = Math.max(0, Math.floor(Number(seconds) || 0));
+    var minutes = Math.floor(total / 60);
+    var sec = total % 60;
+    return minutes + ':' + String(sec).padStart(2, '0');
+  }
+
+  csfxHideNativeDiscountButtons();
+
+  function csfxClearDiscountCountdown() {
+    if (csfxCustomModalState.countdownInterval) {
+      clearInterval(csfxCustomModalState.countdownInterval);
+      csfxCustomModalState.countdownInterval = null;
+    }
+    if (csfxCustomModalState.countdownTimeout) {
+      clearTimeout(csfxCustomModalState.countdownTimeout);
+      csfxCustomModalState.countdownTimeout = null;
+    }
+  }
+
+  function csfxDeactivateNativeDiscountControls(options) {
+    options = options || {};
+    csfxClearDiscountCountdown();
+    csfxCustomModalState.countdown = 0;
+    csfxCustomModalState.authorized = false;
+    csfxCustomModalState.pin = '';
+    csfxHideNativeDiscountButtons();
+    var ui = options.ui || csfxCustomModalUI;
+    if (ui) {
+      if (ui.countdown) {
+        ui.countdown.textContent = options.countdownMessage || '';
+        ui.countdown.removeAttribute('data-active');
+      }
+      if (ui.infoMessage && !options.silent) {
+        ui.infoMessage.textContent = 'Los descuentos nativos permanecen ocultos. Solicita autorización para habilitarlos.';
+      }
+      if (ui.pinInput) {
+        ui.pinInput.disabled = false;
+        ui.pinInput.value = '';
+      }
+      if (ui.validateBtn) ui.validateBtn.disabled = false;
+      if (ui.scanBtn) ui.scanBtn.disabled = false;
+      if (ui.authStatus && !options.silent) {
+        csfxShowCustomFeedback(ui.authStatus, 'Los descuentos nativos fueron deshabilitados.', null);
+      }
+    }
+  }
+
+  function csfxBeginNativeDiscountWindow(ui, pin) {
+    if (!ui) return;
+    csfxClearDiscountCountdown();
+    csfxCustomModalState.authorized = true;
+    csfxCustomModalState.pin = pin;
+    csfxCustomModalState.countdown = 120;
+    csfxShowNativeDiscountButtons();
+    if (ui.pinInput) {
+      ui.pinInput.value = '';
+      ui.pinInput.disabled = true;
+    }
+    if (ui.validateBtn) ui.validateBtn.disabled = true;
+    if (ui.scanBtn) ui.scanBtn.disabled = true;
+    if (ui.infoMessage) {
+      ui.infoMessage.textContent = 'Los descuentos nativos están habilitados temporalmente.';
+    }
+    if (ui.authStatus) {
+      csfxShowCustomFeedback(ui.authStatus, 'Autorización confirmada. Puedes asignar descuentos por producto durante 2:00.', true);
+    }
+    var updateCountdown = function () {
+      if (!ui || !ui.countdown) return;
+      ui.countdown.setAttribute('data-active', '1');
+      ui.countdown.textContent = 'Tiempo restante: ' + csfxFormatCountdown(csfxCustomModalState.countdown);
+    };
+    updateCountdown();
+    csfxCustomModalState.countdownInterval = setInterval(function () {
+      if (!csfxCustomModalState.authorized) {
+        csfxClearDiscountCountdown();
+        return;
+      }
+      csfxCustomModalState.countdown = Math.max(0, csfxCustomModalState.countdown - 1);
+      updateCountdown();
+      if (csfxCustomModalState.countdown <= 0) {
+        csfxClearDiscountCountdown();
+        csfxDeactivateNativeDiscountControls({ ui: ui, silent: true });
+        csfxCloseCustomDiscountModal();
+      }
+    }, 1000);
+    csfxCustomModalState.countdownTimeout = setTimeout(function () {
+      csfxDeactivateNativeDiscountControls({ ui: ui, silent: true });
+      csfxCloseCustomDiscountModal();
+    }, 120000);
+  }
 
   function decodeSymbol(sym, fallback) {
     if (!sym) return fallback || '';
@@ -1089,17 +1225,9 @@
       '.csfx-auth-status{font-size:12px;font-weight:600;color:#334155;}',
       '.csfx-auth-status--ok{color:#0f766e;}',
       '.csfx-auth-status--error{color:#b91c1c;}',
-      '.csfx-item-list{display:flex;flex-direction:column;gap:10px;max-height:45vh;overflow:auto;padding-right:4px;}',
-      '.csfx-item-card{border:1px solid rgba(15,23,42,.1);border-radius:10px;padding:12px 14px;background:#f8fafc;display:flex;flex-direction:column;gap:6px;}',
-      '.csfx-item-header{display:flex;justify-content:space-between;gap:8px;color:#0f172a;font-weight:700;font-size:13px;}',
-      '.csfx-item-meta{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:#475569;}',
-      '.csfx-item-actions{display:flex;gap:8px;align-items:center;margin-top:4px;}',
-      '.csfx-item-actions input{width:90px;padding:6px 8px;border-radius:8px;border:1px solid rgba(15,23,42,.16);font-size:13px;text-align:right;}',
-      '.csfx-item-actions input:focus{outline:none;border-color:#0057b7;box-shadow:0 0 0 2px rgba(0,87,183,.16);}',
-      '.csfx-item-actions small{font-size:11px;color:#475569;}',
-      '.csfx-item-feedback{font-size:11px;color:#334155;margin-top:4px;}',
-      '.csfx-item-feedback--ok{color:#047857;}',
-      '.csfx-item-feedback--error{color:#b91c1c;}',
+      '.csfx-auth-info{font-size:12px;color:#475569;line-height:1.4;}',
+      '.csfx-countdown{font-size:14px;font-weight:700;color:#0f172a;}',
+      '.csfx-countdown[data-active=\"1\"]{color:#b91c1c;}',
       '.csfx-modal--info{max-width:420px;}',
       '.csfx-modal--info .csfx-modal-body{gap:14px;}',
       '.csfx-explain-body{display:flex;flex-direction:column;gap:12px;font-size:13px;color:#0f172a;}',
@@ -1110,8 +1238,6 @@
       '.csfx-explain-inline{font-weight:600;color:#072c59;}',
       '.csfx-explain-foot{font-size:12px;color:#475569;line-height:1.4;}',
       '.csfx-modal-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:8px;}',
-      '.csfx-empty-copy{font-size:13px;color:#475569;text-align:center;padding:18px 0;}',
-      '.csfx-guard-message{font-size:14px;color:#334155;text-align:center;padding:24px 6px;border:1px dashed rgba(51,65,85,.25);border-radius:12px;background:rgba(241,245,249,.6);}',
       // especificidad para evitar conflictos con CSS del POS
         /* Reglas específicas para el buscador (sin romper layout nativo) */
       '.csfx-chip{font-family:inherit;font-size:16px;font-weight:700;}',
@@ -3572,9 +3698,14 @@
     authCard.appendChild(authRow);
     authCard.appendChild(authStatus);
 
-    var itemList = document.createElement('div');
-    itemList.className = 'csfx-item-list';
-    itemList.dataset.csfxList = 'items';
+    var infoMessage = document.createElement('div');
+    infoMessage.className = 'csfx-auth-info';
+    infoMessage.textContent = 'Tras la autorización, los botones nativos de descuento estarán disponibles durante dos minutos.';
+    var countdown = document.createElement('div');
+    countdown.className = 'csfx-countdown';
+    countdown.textContent = '';
+    authCard.appendChild(infoMessage);
+    authCard.appendChild(countdown);
 
     var footer = document.createElement('div');
     footer.className = 'csfx-modal-footer';
@@ -3585,7 +3716,6 @@
     footer.appendChild(closeBtn);
 
     body.appendChild(authCard);
-    body.appendChild(itemList);
     body.appendChild(footer);
     modal.appendChild(header);
     modal.appendChild(body);
@@ -3600,7 +3730,8 @@
       validateBtn: validateBtn,
       scanBtn: scanBtn,
       authStatus: authStatus,
-      itemList: itemList,
+      infoMessage: infoMessage,
+      countdown: countdown,
       closeBtn: closeBtn
     };
 
@@ -3649,6 +3780,7 @@
 
   function csfxCloseCustomDiscountModal() {
     if (!csfxCustomModalUI || !csfxCustomModalUI.backdrop) return;
+    csfxDeactivateNativeDiscountControls({ ui: csfxCustomModalUI, silent: true });
     csfxCustomModalUI.backdrop.removeAttribute('data-open');
     csfxCustomModalState.open = false;
   }
@@ -3656,14 +3788,19 @@
   function csfxOpenCustomDiscountModal() {
     var ui = csfxEnsureCustomDiscountModal();
     csfxCustomModalState.open = true;
-    csfxCustomModalState.authorized = false;
-    csfxCustomModalState.pin = '';
+    csfxDeactivateNativeDiscountControls({ ui: ui, silent: true });
     ui.pinInput.value = '';
     ui.pinInput.disabled = false;
     ui.validateBtn.disabled = false;
     ui.scanBtn.disabled = false;
     csfxShowCustomFeedback(ui.authStatus, 'Requiere autorización del encargado.', null);
-    csfxPopulateCustomDiscountItems(ui);
+    if (ui.infoMessage) {
+      ui.infoMessage.textContent = 'Tras la autorización, los descuentos nativos estarán disponibles durante dos minutos.';
+    }
+    if (ui.countdown) {
+      ui.countdown.textContent = '';
+      ui.countdown.removeAttribute('data-active');
+    }
     ui.backdrop.setAttribute('data-open', 'true');
     setTimeout(function () {
       try { ui.pinInput.focus(); } catch (_errFocus) {}
@@ -3730,148 +3867,6 @@
     return items;
   }
 
-  function csfxPopulateCustomDiscountItems(ui) {
-    if (!ui || !ui.itemList) return;
-    ui.itemList.innerHTML = '';
-    if (!csfxCustomModalState.authorized) {
-      var guard = document.createElement('div');
-      guard.className = 'csfx-guard-message';
-      guard.textContent = 'Autoriza con el PIN del encargado para ver y gestionar los descuentos por producto.';
-      ui.itemList.appendChild(guard);
-      csfxUpdateCustomItemsState(ui, false);
-      return;
-    }
-    var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
-    var cartSource = snapshot.cart;
-    if (!cartSource) {
-      var located = csfxLocateCartDetailed();
-      if (located && located.cart) {
-        cartSource = located.cart;
-      } else {
-        cartSource = csfxLoadStoredCart();
-      }
-    }
-    var items = csfxCollectCartItems(cartSource);
-    if (!items.length) {
-      var storedCart = csfxLoadStoredCart();
-      if (storedCart && storedCart !== cartSource) {
-        items = csfxCollectCartItems(storedCart);
-        if (!cartSource || items.length) {
-          cartSource = storedCart;
-        }
-      }
-    }
-    if (!items.length) {
-      var empty = document.createElement('div');
-      empty.className = 'csfx-empty-copy';
-      empty.textContent = 'El carrito está vacío. Agrega productos para aplicar descuentos individuales.';
-      ui.itemList.appendChild(empty);
-      csfxUpdateCustomItemsState(ui, true);
-      return;
-    }
-    items.forEach(function (item) {
-      var card = document.createElement('div');
-      card.className = 'csfx-item-card';
-      card.dataset.itemId = String(item.id || '');
-
-      var header = document.createElement('div');
-      header.className = 'csfx-item-header';
-      var title = document.createElement('span');
-      title.textContent = item.name;
-      var qty = document.createElement('span');
-      qty.textContent = 'x' + item.qty;
-      header.appendChild(title);
-      header.appendChild(qty);
-      card.appendChild(header);
-
-      var meta = document.createElement('div');
-      meta.className = 'csfx-item-meta';
-      var sku = document.createElement('span');
-      sku.textContent = 'SKU: ' + (item.sku ? String(item.sku) : '—');
-      var price = document.createElement('span');
-      price.textContent = 'Precio: ' + fmtUsd(item.unit);
-      var total = document.createElement('span');
-      total.textContent = 'Total: ' + fmtUsd(item.total);
-      meta.appendChild(sku);
-      meta.appendChild(price);
-      meta.appendChild(total);
-      card.appendChild(meta);
-
-      var actions = document.createElement('div');
-      actions.className = 'csfx-item-actions';
-      var amountInput = document.createElement('input');
-      amountInput.type = 'number';
-      amountInput.step = '0.01';
-      amountInput.min = '0';
-      amountInput.placeholder = '0,00';
-      amountInput.dataset.role = 'custom-amount';
-      amountInput.dataset.itemId = String(item.id || '');
-      var applyBtn = document.createElement('button');
-      applyBtn.type = 'button';
-      applyBtn.className = 'csfx-btn csfx-btn--accent';
-      applyBtn.dataset.role = 'custom-apply';
-      applyBtn.dataset.itemId = String(item.id || '');
-      applyBtn.textContent = 'Aplicar';
-      actions.appendChild(amountInput);
-      actions.appendChild(applyBtn);
-      var hint = document.createElement('small');
-      hint.textContent = 'Ingresa el descuento a restar en USD.';
-      actions.appendChild(hint);
-      card.appendChild(actions);
-
-      var feedback = document.createElement('div');
-      feedback.className = 'csfx-item-feedback';
-      feedback.dataset.state = 'locked';
-      feedback.textContent = 'Requiere autorización del encargado.';
-      card.appendChild(feedback);
-
-      applyBtn.addEventListener('click', function () {
-        csfxHandleCustomItemDiscount(item, amountInput.value, {
-          button: applyBtn,
-          input: amountInput,
-          feedback: feedback
-        });
-      });
-      amountInput.addEventListener('keydown', function (ev) {
-        if (ev.key === 'Enter') {
-          ev.preventDefault();
-          applyBtn.click();
-        }
-      });
-
-      ui.itemList.appendChild(card);
-    });
-    csfxDualLog('custom-items:list', {
-      count: items.length,
-      snapshotCart: !!snapshot.cart,
-      fallbackUsed: !snapshot.cart && !!cartSource
-    });
-    csfxUpdateCustomItemsState(ui, csfxCustomModalState.authorized);
-  }
-
-  function csfxUpdateCustomItemsState(ui, authorized) {
-    if (!ui || !ui.itemList) return;
-    var amounts = ui.itemList.querySelectorAll('input[data-role="custom-amount"]');
-    amounts.forEach(function (input) {
-      input.disabled = !authorized;
-      if (!authorized) input.value = '';
-    });
-    var buttons = ui.itemList.querySelectorAll('button[data-role="custom-apply"]');
-    buttons.forEach(function (btn) {
-      btn.disabled = !authorized;
-    });
-    var feedbacks = ui.itemList.querySelectorAll('.csfx-item-feedback');
-    feedbacks.forEach(function (node) {
-      if (!authorized) {
-        node.dataset.state = 'locked';
-        csfxShowCustomFeedback(node, 'Requiere autorización del encargado.', null);
-      } else if (node.dataset.state === 'locked') {
-        node.dataset.state = 'ready';
-        csfxShowCustomFeedback(node, 'Listo para aplicar descuento.', null);
-      }
-    });
-  }
-
   function csfxValidateCustomDiscountPin(pin) {
     return new Promise(function (resolve) {
       var resolved = false;
@@ -3923,30 +3918,23 @@
     csfxShowCustomFeedback(ui.authStatus, 'Validando autorización…', null);
     csfxValidateCustomDiscountPin(trimmed).then(function (ok) {
       if (ok) {
-        csfxCustomModalState.authorized = true;
-        csfxCustomModalState.pin = trimmed;
-        csfxShowCustomFeedback(ui.authStatus, 'Autorización confirmada. Puedes asignar descuentos por producto.', true);
-        ui.pinInput.value = '';
-        ui.pinInput.disabled = true;
-        csfxUpdateCustomItemsState(ui, true);
-        csfxPopulateCustomDiscountItems(ui);
+        csfxBeginNativeDiscountWindow(ui, trimmed);
       } else {
-        csfxCustomModalState.authorized = false;
-        csfxCustomModalState.pin = '';
+        csfxDeactivateNativeDiscountControls({ ui: ui, silent: true });
         csfxShowCustomFeedback(ui.authStatus, 'Contraseña incorrecta. Intenta nuevamente.', false);
         ui.pinInput.disabled = false;
         ui.validateBtn.disabled = false;
         ui.scanBtn.disabled = false;
+        if (ui.infoMessage) {
+          ui.infoMessage.textContent = 'Tras la autorización, los descuentos nativos estarán disponibles durante dos minutos.';
+        }
         try { ui.pinInput.focus(); } catch (_errFocus) {}
-        csfxPopulateCustomDiscountItems(ui);
       }
     }).catch(function (err) {
-      csfxCustomModalState.authorized = false;
-      csfxCustomModalState.pin = '';
+      csfxDeactivateNativeDiscountControls({ ui: ui, silent: true });
       csfxShowCustomFeedback(ui.authStatus, 'No se pudo validar la contraseña: ' + (err && err.message ? err.message : 'error desconocido'), false);
       ui.validateBtn.disabled = false;
       ui.scanBtn.disabled = false;
-      csfxPopulateCustomDiscountItems(ui);
     }).finally(function () {
       if (csfxCustomModalState.authorized) {
         ui.validateBtn.disabled = true;
@@ -3965,98 +3953,6 @@
       } else if (ok === false) {
         node.classList.add('csfx-auth-status--error');
       }
-    } else if (node.classList.contains('csfx-item-feedback')) {
-      node.classList.remove('csfx-item-feedback--ok', 'csfx-item-feedback--error');
-      if (ok === true) {
-        node.classList.add('csfx-item-feedback--ok');
-        node.dataset.state = 'ok';
-      } else if (ok === false) {
-        node.classList.add('csfx-item-feedback--error');
-        node.dataset.state = 'error';
-      }
-    }
-  }
-
-  function csfxHandleCustomItemDiscount(item, rawValue, ctx) {
-    ctx = ctx || {};
-    var input = ctx.input;
-    var button = ctx.button;
-    var feedback = ctx.feedback;
-    if (!csfxCustomModalState.authorized) {
-      csfxShowCustomFeedback(feedback, 'Necesitas autorización del encargado para aplicar este descuento.', false);
-      return;
-    }
-    var amount = parseFloat(String(rawValue || '').replace(',', '.'));
-    if (!isFinite(amount) || amount <= 0) {
-      csfxShowCustomFeedback(feedback, 'Ingresa un monto válido mayor a cero.', false);
-      if (input) {
-        try { input.focus(); input.select(); } catch (_errSelect) {}
-      }
-      return;
-    }
-    if (button) button.disabled = true;
-    if (input) input.disabled = true;
-    csfxShowCustomFeedback(feedback, 'Enviando solicitud de descuento…', null);
-
-    var responded = false;
-    var fallbackTimer = null;
-    var detail = {
-      item: item,
-      discount: round(amount, FX.decimals),
-      discountType: 'fixed',
-      pin: csfxCustomModalState.pin,
-      handled: false,
-      respond: function (success, message) {
-        if (fallbackTimer) {
-          clearTimeout(fallbackTimer);
-          fallbackTimer = null;
-        }
-        responded = true;
-        detail.handled = true;
-        if (input) input.disabled = false;
-        if (button) button.disabled = false;
-        if (success) {
-          csfxShowCustomFeedback(feedback, message || 'Descuento aplicado desde integración externa.', true);
-        } else {
-          csfxShowCustomFeedback(feedback, message || 'No se pudo aplicar el descuento desde la integración.', false);
-          if (input) {
-            try { input.focus(); input.select(); } catch (_errSel) {}
-          }
-        }
-      }
-    };
-    try {
-      document.dispatchEvent(new CustomEvent('csfx:custom-discount-request', { detail: detail }));
-    } catch (errDispatch) {
-      responded = true;
-      csfxShowCustomFeedback(feedback, 'No se pudo enviar la solicitud: ' + (errDispatch && errDispatch.message ? errDispatch.message : 'error'), false);
-    }
-    if (!responded) {
-      csfxDualLog('custom-discount:request', {
-        itemId: item.id,
-        amount: amount
-      });
-      fallbackTimer = setTimeout(function () {
-        if (responded) return;
-        detail.handled = false;
-        var fallbackApplied = applyDualDiscountViaUI(amount);
-        if (fallbackApplied) {
-          csfxShowCustomFeedback(feedback, 'Descuento aplicado manualmente al carrito.', true);
-          schedule(decorateCart);
-          schedule(decorateTotals);
-          schedule(decoratePaymentModal);
-          schedule(decorateBill);
-          csfxDualLog('custom-discount:fallback-ui', { itemId: item.id, amount: amount });
-        } else {
-          csfxShowCustomFeedback(feedback, 'No se pudo aplicar el descuento automáticamente. Comunícate con soporte.', false);
-          csfxDualLog('custom-discount:fallback-ui-failed', { itemId: item.id, amount: amount });
-        }
-        if (input) input.disabled = false;
-        if (button) button.disabled = false;
-        responded = true;
-      }, 180);
-      if (input) input.disabled = false;
-      if (button) button.disabled = false;
     }
   }
 
@@ -4075,11 +3971,6 @@
         } else if (csfxExplainModalUI && csfxExplainModalUI.open) {
           csfxCloseExplainModal();
         }
-      }
-    });
-    document.addEventListener('csfx:cart-updated', function () {
-      if (csfxCustomModalState.open && csfxCustomModalUI) {
-        csfxPopulateCustomDiscountItems(csfxCustomModalUI);
       }
     });
   } catch (_errCustomScan) {}
