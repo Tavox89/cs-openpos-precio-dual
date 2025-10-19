@@ -757,6 +757,34 @@
     return candidateCount > primaryCount ? candidate : primary;
   }
 
+  function csfxCartDebugEnabled() {
+    try {
+      if (FX && FX.debug) return true;
+      if (typeof window !== 'undefined' && window.CSFX_DEBUG_CART) return !!window.CSFX_DEBUG_CART;
+      if (typeof localStorage !== 'undefined') {
+        var flag = localStorage.getItem('csfx_debug_cart');
+        if (flag === '1' || flag === 'true') return true;
+      }
+    } catch (_err) {}
+    return false;
+  }
+
+  function csfxLogCartProbe(source, candidate) {
+    if (!csfxCartDebugEnabled()) return;
+    try {
+      var info = {
+        source: source,
+        hasCart: !!(candidate && candidate.cart),
+        items: candidate && typeof candidate.itemsCount === 'number' ? candidate.itemsCount : null,
+        type: candidate && candidate.cart ? typeof candidate.cart : 'null'
+      };
+      if (candidate && candidate.storageSource) info.storage = candidate.storageSource;
+      if (candidate && candidate.dbName) info.db = candidate.dbName;
+      if (candidate && candidate.storeName) info.store = candidate.storeName;
+      (console && console.log) && console.log('[csfx][cart-detect]', info);
+    } catch (_errLog) {}
+  }
+
   function csfxResolveCartServiceCompat(debug) {
     var svc = null;
     var compat = null;
@@ -1868,6 +1896,7 @@
       }
       var candidate = csfxInspectCandidate(value, source, svc, debug);
       best = csfxBetterCandidate(best, candidate);
+      csfxLogCartProbe(source, candidate);
       if (candidate && candidate.cart && candidate.itemsCount > 0) {
         candidate.debug = debug;
         return candidate;
@@ -1876,6 +1905,7 @@
       if (deep && deep !== value) {
         var deepCandidate = csfxInspectCandidate(deep, source + '(deep)', svc, debug);
         best = csfxBetterCandidate(best, deepCandidate);
+        csfxLogCartProbe(source + '(deep)', deepCandidate);
         if (deepCandidate && deepCandidate.cart && deepCandidate.itemsCount > 0) {
           deepCandidate.debug = debug;
           return deepCandidate;
