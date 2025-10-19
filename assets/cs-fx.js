@@ -459,7 +459,6 @@
     return csfxAsyncCartCache;
   }
 
-
   function csfxLooksLikeCartSkeleton(candidate) {
     if (!candidate || typeof candidate !== 'object') return false;
     if (Array.isArray(candidate)) return false;
@@ -546,6 +545,218 @@
       if (childFound) return childFound;
     }
     return null;
+  }
+
+  function csfxInspectCandidate(value, source, svcRef, debug) {
+    var type = value == null ? String(value) : typeof value;
+    var normalized = null;
+    var itemsCount = 0;
+    var error = null;
+    try {
+      normalized = csfxNormalizeCartCandidate(value);
+    } catch (errNorm) {
+      error = errNorm;
+    }
+    if (normalized && typeof normalized === 'object') {
+      try {
+        var items = csfxCollectCartItems(normalized);
+        if (Array.isArray(items)) itemsCount = items.length;
+      } catch (errItems) {
+        error = error || errItems;
+      }
+    }
+    if (debug && debug.tried && typeof debug.tried.push === 'function') {
+      var logEntry = {
+        source: source,
+        hit: !!normalized && itemsCount > 0,
+        items: itemsCount,
+        type: type
+      };
+      if (normalized) logEntry.normalized = true;
+      if (error) logEntry.error = String(error);
+      if (!normalized) logEntry.normalized = false;
+      debug.tried.push(logEntry);
+    }
+    if (normalized) {
+      return {
+        cart: normalized,
+        source: source,
+        cartService: svcRef || null,
+        debug: debug || null,
+        itemsCount: itemsCount
+      };
+    }
+    return null;
+  }
+
+  function csfxEnumerateStorageCarts(debug) {
+    var stores = [];
+    if (typeof localStorage !== 'undefined') {
+      stores.push({ api: localStorage, label: 'localStorage', keys: csfxCartStorageKeyList() });
+    }
+    if (typeof sessionStorage !== 'undefined') {
+      stores.push({ api: sessionStorage, label: 'sessionStorage', keys: csfxSessionCartKeyList() });
+    }
+    var map = {};
+    var results = [];
+
+    function rememberCandidate(mapKey, candidate, meta) {
+      if (!candidate) return;
+      var current = map[mapKey];
+      if (!current || (candidate.itemsCount || 0) >= (current.itemsCount || 0)) {
+        candidate.storageKey = meta.key;
+        candidate.storageType = meta.label;
+        candidate.storageSource = meta.label + '.' + meta.key;
+        map[mapKey] = candidate;
+      }
+    }
+
+    stores.forEach(function (store) {
+      if (!store || !store.api) return;
+      var keys = Array.isArray(store.keys) ? store.keys : [];
+      for (var i = 0; i < keys.length; i++) {
+        var key = keys[i];
+        if (!key || typeof key !== 'string') continue;
+        var mapKey = store.label + ':' + key;
+        try {
+          var raw = store.api.getItem(key);
+          if (!raw) {
+            if (debug && debug.tried) {
+              debug.tried.push({ source: store.label + '.' + key, hit: false, empty: true, type: 'string' });
+            }
+            continue;
+          }
+          if (typeof raw === 'string' && raw.length > 2e6) {
+            continue;
+          }
+          var parsed = raw;
+          try {
+            parsed = JSON.parse(raw);
+          } catch (_errParse) {}
+          var candidate = csfxInspectCandidate(parsed, store.label + '.' + key, null, debug);
+          if (!candidate && parsed !== raw) {
+            candidate = csfxInspectCandidate(raw, store.label + '.' + key + '(raw)', null, debug);
+          }
+          if (!candidate) {
+            var deep = csfxDeepFindCart(parsed, 0, null);
+            if (!deep && parsed !== raw) {
+              deep = csfxDeepFindCart(raw, 0, null);
+            }
+            if (deep) {
+              candidate = csfxInspectCandidate(deep, store.label + '.' + key + '(deep)', null, debug);
+            }
+          }
+          rememberCandidate(mapKey, candidate, { key: key, label: store.label });
+        } catch (_errStorage) {
+          if (debug && debug.tried) {
+            debug.tried.push({
+              source: store.label + '.' + key,
+              error: String(_errStorage),
+              hit: false
+            });
+          }
+        }
+      }
+    });
+    Object.keys(map).forEach(function (k) {
+      if (map[k]) results.push(map[k]);
+    });
+    results.sort(function (a, b) {
+      return (b.itemsCount || 0) - (a.itemsCount || 0);
+    });
+    return results;
+  }
+
+  function csfxFindCartKeyInSettings(obj, depth) {
+    if (!obj || typeof obj !== 'object') return '';
+    if (depth > 6) return '';
+    var markers = [
+      'current_cart_key', 'active_cart_key', 'currentCartKey', 'activeCartKey',
+      'current_cart', 'active_cart', 'selected_cart_key', 'selectedCartKey',
+      'current_cart_id', 'currentCartId', 'active_cart_id', 'activeCartId'
+    ];
+    for (var i = 0; i < markers.length; i++) {
+      var key = markers[i];
+      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        var val = obj[key];
+        if (typeof val === 'string' || typeof val === 'number') {
+          return String(val);
+        }
+      }
+    }
+    var keys = Object.keys(obj);
+    for (var j = 0; j < keys.length; j++) {
+      var name = keys[j];
+      var value = obj[name];
+      if (value == null) continue;
+      if (typeof value === 'string' || typeof value === 'number') {
+        if (/cart.*key/i.test(name) || /key.*cart/i.test(name) || /cart.*id/i.test(name) || /id.*cart/i.test(name)) {
+          return String(value);
+        }
+      }
+    }
+    for (var k = 0; k < keys.length; k++) {
+      var childKey = keys[k];
+      var child = obj[childKey];
+      if (!child || typeof child !== 'object') continue;
+      var nested = csfxFindCartKeyInSettings(child, depth + 1);
+      if (nested) return nested;
+    }
+    return '';
+  }
+
+  function csfxReadActiveCartKey(debug) {
+    if (typeof localStorage === 'undefined') return '';
+    var raw = null;
+    try {
+      raw = localStorage.getItem('op_settings');
+    } catch (_errSettings) {
+      raw = null;
+    }
+    if (!raw) return '';
+    var parsed = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (_errParseSettings) {
+      parsed = null;
+    }
+    if (!parsed || typeof parsed !== 'object') return '';
+    var found = csfxFindCartKeyInSettings(parsed, 0);
+    if (debug) {
+      debug.activeCartKey = found || '';
+    }
+    return found || '';
+  }
+
+  function csfxSelectActiveCart(localCarts, debug) {
+    if (!Array.isArray(localCarts) || !localCarts.length) return null;
+    var activeKey = csfxReadActiveCartKey(debug);
+    if (activeKey) {
+      for (var i = 0; i < localCarts.length; i++) {
+        var entry = localCarts[i];
+        if (!entry) continue;
+        var key = entry.storageKey || entry.source || '';
+        if (!key) continue;
+        if (String(key).toLowerCase() === String(activeKey).toLowerCase()) {
+          return entry;
+        }
+      }
+    }
+    var best = null;
+    var fallback = null;
+    for (var j = 0; j < localCarts.length; j++) {
+      var candidate = localCarts[j];
+      if (!candidate || !candidate.cart) continue;
+      var count = candidate.itemsCount || 0;
+      if (count > 0) {
+        if (!best || count > (best.itemsCount || 0)) {
+          best = candidate;
+        }
+      } else if (!fallback) {
+        fallback = candidate;
+      }
+    }
+    return best || fallback || null;
   }
 
 
@@ -1587,62 +1798,45 @@
 
   function csfxLocateCartDetailed() {
     var debug = { tried: [] };
-    var svcRef = null;
-    var emptyFallback = null;
-
-    function attempt(value, source, serviceOverride) {
-      var normalized = csfxNormalizeCartCandidate(value);
-      var itemsCount = 0;
-      if (normalized && typeof normalized === 'object') {
-        try {
-          var collected = csfxCollectCartItems(normalized);
-          if (Array.isArray(collected)) itemsCount = collected.length;
-        } catch (_errCollect) {}
-      }
-      debug.tried.push({
-        source: source,
-        hit: !!normalized && itemsCount > 0,
-        items: itemsCount,
-        type: value == null ? String(value) : typeof value
-      });
-      if (normalized) {
-        return {
-          cart: normalized,
-          source: source,
-          debug: debug,
-          cartService: serviceOverride || svcRef || null,
-          itemsCount: itemsCount
-        };
-      }
-      return null;
-    }
-
-    function registerCandidate(candidate) {
-      if (!candidate) return null;
-      if (candidate.itemsCount && candidate.itemsCount > 0) return candidate;
-      if (!emptyFallback) emptyFallback = candidate;
-      return null;
-    }
-
     var svc = csfxGetCartService(debug);
-    svcRef = svc;
+    var best = null;
+    var fallback = null;
+
+    function consider(candidate) {
+      if (!candidate || !candidate.cart) return;
+      candidate.debug = debug;
+      if (typeof candidate.itemsCount !== 'number') candidate.itemsCount = 0;
+      if (candidate.itemsCount > 0) {
+        if (!best || candidate.itemsCount > (best.itemsCount || 0)) {
+          best = candidate;
+        }
+      } else if (!fallback) {
+        fallback = candidate;
+      }
+    }
+
+    function noteAsyncPromise(promise, sourceLabel) {
+      if (!promise || typeof promise.then !== 'function') return;
+      debug.tried.push({ source: sourceLabel, hit: false, async: true });
+      promise.then(function (payload) {
+        var normalized = csfxNormalizeCartCandidate(payload);
+        if (!normalized) return;
+        var items = csfxCollectCartItems(normalized);
+        if (items && items.length) {
+          csfxRememberAsyncCart(normalized, sourceLabel);
+        }
+      }).catch(function () {});
+    }
+
     if (svc && typeof svc === 'object') {
-      var svcCandidates = [];
+      var svcSources = [];
       try {
         if (typeof svc.getCurrentCart === 'function') {
           var current = svc.getCurrentCart();
           if (current && typeof current.then === 'function') {
-            debug.tried.push({ source: 'cartService.getCurrentCart()', hit: false, async: true });
-            current.then(function (payload) {
-              var normalized = csfxNormalizeCartCandidate(payload);
-              if (!normalized) return;
-              var items = csfxCollectCartItems(normalized);
-              if (items && items.length) {
-                csfxRememberAsyncCart(normalized, 'cartService.getCurrentCart()');
-              }
-            }).catch(function (_errAsyncCurrent) {});
+            noteAsyncPromise(current, 'cartService.getCurrentCart()');
           } else {
-            svcCandidates.push({ value: current, source: 'cartService.getCurrentCart()' });
+            svcSources.push({ value: current, source: 'cartService.getCurrentCart()' });
           }
         }
       } catch (errCurrent) {
@@ -1652,43 +1846,38 @@
         if (typeof svc.getCart === 'function') {
           var legacy = svc.getCart();
           if (legacy && typeof legacy.then === 'function') {
-            debug.tried.push({ source: 'cartService.getCart()', hit: false, async: true });
-            legacy.then(function (payloadLegacy) {
-              var normalizedLegacy = csfxNormalizeCartCandidate(payloadLegacy);
-              if (!normalizedLegacy) return;
-              var itemsLegacy = csfxCollectCartItems(normalizedLegacy);
-              if (itemsLegacy && itemsLegacy.length) {
-                csfxRememberAsyncCart(normalizedLegacy, 'cartService.getCart()');
-              }
-            }).catch(function (_errAsyncLegacy) {});
+            noteAsyncPromise(legacy, 'cartService.getCart()');
           } else {
-            svcCandidates.push({ value: legacy, source: 'cartService.getCart()' });
+            svcSources.push({ value: legacy, source: 'cartService.getCart()' });
           }
         }
       } catch (errLegacy) {
         debug.tried.push({ source: 'cartService.getCart()', error: String(errLegacy) });
       }
-      svcCandidates.push({ value: svc.cart, source: 'cartService.cart' });
-      svcCandidates.push({ value: svc._cart, source: 'cartService._cart' });
-      svcCandidates.push({ value: svc.cart_data, source: 'cartService.cart_data' });
-      svcCandidates.push({ value: svc.cartData, source: 'cartService.cartData' });
-      for (var c = 0; c < svcCandidates.length; c++) {
-        var candidate = svcCandidates[c];
-        if (!candidate) continue;
-        var registered = registerCandidate(attempt(candidate.value, candidate.source, svc));
-        if (registered) return registered;
-        var deepCartSvc = csfxDeepFindCart(candidate.value, 0, null);
-        if (deepCartSvc) {
-          var deepRegistered = registerCandidate(attempt(deepCartSvc, candidate.source + '(deep)', svc));
-          if (deepRegistered) return deepRegistered;
+      svcSources.push(
+        { value: svc.cart, source: 'cartService.cart' },
+        { value: svc._cart, source: 'cartService._cart' },
+        { value: svc.cart_data, source: 'cartService.cart_data' },
+        { value: svc.cartData, source: 'cartService.cartData' }
+      );
+      for (var si = 0; si < svcSources.length; si++) {
+        var svcCandidate = svcSources[si];
+        if (!svcCandidate) continue;
+        consider(csfxInspectCandidate(svcCandidate.value, svcCandidate.source, svc, debug));
+        var deepSvc = csfxDeepFindCart(svcCandidate.value, 0, null);
+        if (deepSvc) {
+          consider(csfxInspectCandidate(deepSvc, svcCandidate.source + '(deep)', svc, debug));
         }
+      }
+      var deepSvcRoot = csfxDeepFindCart(svc, 0, null);
+      if (deepSvcRoot) {
+        consider(csfxInspectCandidate(deepSvcRoot, 'cartService(deep)', svc, debug));
       }
     }
 
     var asyncCart = csfxGetCachedAsyncCart();
     if (asyncCart) {
-      var asyncRegistered = registerCandidate(attempt(asyncCart, 'cart.async-cache', svcRef));
-      if (asyncRegistered) return asyncRegistered;
+      consider(csfxInspectCandidate(asyncCart, 'cart.async-cache', svc, debug));
     }
 
     var globalCandidates = [
@@ -1705,131 +1894,53 @@
       { value: window.OPCart, source: 'window.OPCart' },
       { value: window.OPENPOS_CART, source: 'window.OPENPOS_CART' }
     ];
-    for (var i = 0; i < globalCandidates.length; i++) {
-      var gc = globalCandidates[i];
-      var registeredGlobal = registerCandidate(attempt(gc.value, gc.source, gc.service));
-      if (registeredGlobal) return registeredGlobal;
+    for (var gi = 0; gi < globalCandidates.length; gi++) {
+      var gc = globalCandidates[gi];
+      if (!gc) continue;
+      consider(csfxInspectCandidate(gc.value, gc.source, gc.service, debug));
       var deepGlobal = csfxDeepFindCart(gc.value, 0, null);
       if (deepGlobal) {
-        var deepRegisteredGlobal = registerCandidate(attempt(deepGlobal, gc.source + '(deep)', gc.service));
-        if (deepRegisteredGlobal) return deepRegisteredGlobal;
+        consider(csfxInspectCandidate(deepGlobal, gc.source + '(deep)', gc.service, debug));
       }
     }
 
-    var asyncServerCart = csfxGetCachedServerCart();
-    if (asyncServerCart) {
-      var restHit = attempt(asyncServerCart, 'rest.current-cart(cache)');
-      if (restHit) {
-        restHit.debug.serverCart = Object.assign({ source: 'cache' }, csfxServerCartDebug || {});
-        var restRegistered = registerCandidate(restHit);
-        if (restRegistered) return restRegistered;
+    var localCarts = csfxEnumerateStorageCarts(debug);
+    if (localCarts && localCarts.length) {
+      var selected = csfxSelectActiveCart(localCarts, debug);
+      if (selected) {
+        consider(selected);
+      } else {
+        localCarts.forEach(function (entry) { consider(entry); });
       }
+    }
+
+    var cachedServerCart = csfxGetCachedServerCart();
+    if (cachedServerCart) {
+      var serverCandidate = csfxInspectCandidate(cachedServerCart, 'rest.current-cart(cache)', svc, debug);
+      if (serverCandidate) {
+        serverCandidate.debug.serverCart = Object.assign({ source: 'cache' }, csfxServerCartDebug || {});
+      }
+      consider(serverCandidate);
     } else {
-      csfxEnsureServerCartFetch(debug, svcRef);
-    }
-
-    var storages = [];
-    if (typeof localStorage !== 'undefined') {
-      storages.push({ api: localStorage, label: 'localStorage', keys: csfxCartStorageKeyList() });
-    }
-    if (typeof sessionStorage !== 'undefined') {
-      storages.push({ api: sessionStorage, label: 'sessionStorage', keys: csfxSessionCartKeyList() });
-    }
-
-    for (var sIndex = 0; sIndex < storages.length; sIndex++) {
-      var entry = storages[sIndex];
-      if (!entry.api || !entry.keys || !entry.keys.length) continue;
-      for (var j = 0; j < entry.keys.length; j++) {
-        var storageKey = entry.keys[j];
-        if (!storageKey) continue;
-        try {
-          var raw = entry.api.getItem(storageKey);
-          if (!raw) {
-            debug.tried.push({ source: entry.label + '.' + storageKey, hit: false, empty: true });
-            continue;
-          }
-          var parsed;
-          try {
-            parsed = JSON.parse(raw);
-          } catch (_errParseStorage) {
-            parsed = raw;
-          }
-          var storageRegistered = registerCandidate(attempt(parsed, entry.label + '.' + storageKey, svcRef));
-          if (storageRegistered) return storageRegistered;
-          var deep = csfxDeepFindCart(parsed, 0, null);
-          if (!deep && parsed !== raw) {
-            deep = csfxDeepFindCart(raw, 0, null);
-          }
-          if (deep) {
-            var deepRegisteredStorage = registerCandidate(attempt(deep, entry.label + '.' + storageKey + '(deep)', svcRef));
-            if (deepRegisteredStorage) return deepRegisteredStorage;
-          }
-        } catch (errStorage) {
-          debug.tried.push({ source: entry.label + '.' + storageKey, error: String(errStorage) });
-        }
-      }
+      csfxEnsureServerCartFetch(debug, svc);
     }
 
     if (csfxAsyncCartDebug) {
       debug.asyncCart = Object.assign({}, csfxAsyncCartDebug);
     }
-
     if (!debug.serverCart && csfxServerCartDebug) {
       debug.serverCart = Object.assign({ source: 'debug' }, csfxServerCartDebug);
     }
 
-    if (emptyFallback) return emptyFallback;
-
-    return { cart: null, source: null, debug: debug, cartService: svcRef, itemsCount: 0 };
+    return best || fallback || { cart: null, source: null, debug: debug, cartService: svc, itemsCount: 0 };
   }
 
   function csfxLoadStoredCart() {
-    var fallback = null;
-    var storages = [];
-    if (typeof localStorage !== 'undefined') {
-      storages.push({ api: localStorage, keys: csfxCartStorageKeyList() });
-    }
-    if (typeof sessionStorage !== 'undefined') {
-      storages.push({ api: sessionStorage, keys: csfxSessionCartKeyList() });
-    }
-    for (var s = 0; s < storages.length; s++) {
-      var entry = storages[s];
-      if (!entry.api) continue;
-      var keys = entry.keys || [];
-      for (var i = 0; i < keys.length; i++) {
-        var key = keys[i];
-        if (!key) continue;
-        try {
-          var raw = entry.api.getItem(key);
-          if (!raw) continue;
-          var parsed;
-          try {
-            parsed = JSON.parse(raw);
-          } catch (_errParseStored) {
-            parsed = raw;
-          }
-          var normalized = csfxNormalizeCartCandidate(parsed);
-          if (normalized && typeof normalized === 'object') {
-            var items = csfxCollectCartItems(normalized);
-            if (items && items.length) return normalized;
-            if (!fallback) fallback = normalized;
-          }
-          var deepCart = csfxDeepFindCart(parsed, 0, null);
-          if (!deepCart && parsed !== raw) {
-            deepCart = csfxDeepFindCart(raw, 0, null);
-          }
-          if (deepCart) {
-            var normalizedDeep = csfxNormalizeCartCandidate(deepCart) || deepCart;
-            if (normalizedDeep && typeof normalizedDeep === 'object') {
-              var deepItems = csfxCollectCartItems(normalizedDeep);
-              if (deepItems && deepItems.length) return normalizedDeep;
-              if (!fallback) fallback = normalizedDeep;
-            }
-          }
-        } catch (_errStored) {}
-      }
-    }
-    return fallback;
+    var carts = csfxEnumerateStorageCarts(null);
+    if (!carts || !carts.length) return null;
+    var selected = csfxSelectActiveCart(carts, null);
+    if (selected && selected.cart) return selected.cart;
+    return carts[0] && carts[0].cart ? carts[0].cart : null;
   }
 
   function csfxLocateCart() {
