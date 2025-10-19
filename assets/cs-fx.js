@@ -191,6 +191,461 @@
 
   csfxClearLegacyStores();
 
+  var csfxCachedRegisterId = null;
+  var csfxRegisterIdSource = '';
+  var csfxRegisterScanAt = 0;
+  var csfxCartKeyCache = null;
+  var csfxCartKeyCacheAt = 0;
+  var csfxServerCartCache = null;
+  var csfxServerCartFetchedAt = 0;
+  var csfxServerCartPromise = null;
+  var csfxServerCartLastErrorAt = 0;
+  var csfxServerCartDebug = null;
+  var csfxAsyncCartCache = null;
+  var csfxAsyncCartFetchedAt = 0;
+  var csfxAsyncCartDebug = null;
+  var csfxSessionCartKeyCache = null;
+  var csfxSessionCartKeyCacheAt = 0;
+  var CSFX_SESSION_KEY_CACHE_TTL = 5000;
+  var CSFX_REGISTER_SCAN_COOLDOWN = 2500;
+  var CSFX_LS_KEY_CACHE_TTL = 5000;
+  var CSFX_SERVER_CART_TTL_MS = 5000;
+  var CSFX_SERVER_CART_ERROR_COOLDOWN = 4000;
+  var CSFX_ASYNC_CART_TTL_MS = 4000;
+  var CSFX_DEEP_CART_MAX_DEPTH = 6;
+  var CSFX_DEEP_CART_MAX_BRANCH = 120;
+
+  function csfxRememberRegisterId(candidate, source) {
+    if (candidate === null || candidate === undefined) return null;
+    var str = String(candidate).trim();
+    if (!str) return null;
+    csfxCachedRegisterId = str;
+    if (source) csfxRegisterIdSource = source;
+    return str;
+  }
+
+  function csfxExtractRegisterId(obj, source) {
+    if (!obj || typeof obj !== 'object') return null;
+    var directKeys = ['register_id', 'registerId', 'registerID', 'registerid', 'pos_register_id'];
+    for (var i = 0; i < directKeys.length; i++) {
+      var key = directKeys[i];
+      if (obj[key] !== undefined && obj[key] !== null) {
+        return csfxRememberRegisterId(obj[key], (source || '') + '.' + key);
+      }
+    }
+    if (typeof obj.id !== 'undefined' && (obj.type === 'register' || obj.entity === 'register')) {
+      return csfxRememberRegisterId(obj.id, (source || '') + '.id');
+    }
+    var relatedKeys = ['register', 'current_register', 'cashdrawer', 'drawer', 'session', 'meta', 'data'];
+    for (var j = 0; j < relatedKeys.length; j++) {
+      var nestedKey = relatedKeys[j];
+      if (obj[nestedKey] && typeof obj[nestedKey] === 'object') {
+        var nested = csfxExtractRegisterId(obj[nestedKey], (source || '') + '.' + nestedKey);
+        if (nested) return nested;
+      }
+    }
+    var keys = Object.keys(obj);
+    for (var k = 0; k < keys.length; k++) {
+      var name = keys[k];
+      if (!name || name.length > 40) continue;
+      if (!/register/i.test(name)) continue;
+      var value = obj[name];
+      if (!value) continue;
+      if (typeof value === 'string' || typeof value === 'number') {
+        return csfxRememberRegisterId(value, (source || '') + '.' + name);
+      }
+      if (typeof value === 'object') {
+        var nestedVal = csfxExtractRegisterId(value, (source || '') + '.' + name);
+        if (nestedVal) return nestedVal;
+      }
+    }
+    return null;
+  }
+
+  function csfxScanForRegisterId() {
+    var now = Date.now();
+    if (csfxCachedRegisterId && csfxCachedRegisterId.trim()) {
+      return { id: csfxCachedRegisterId, source: csfxRegisterIdSource || 'cache' };
+    }
+    if (now - csfxRegisterScanAt < CSFX_REGISTER_SCAN_COOLDOWN) {
+      return csfxCachedRegisterId ? { id: csfxCachedRegisterId, source: csfxRegisterIdSource || 'cache' } : null;
+    }
+    csfxRegisterScanAt = now;
+    var sources = [];
+    try {
+      if (typeof FX === 'object' && FX) {
+        if (FX.register_id != null) sources.push({ value: FX.register_id, source: 'FX.register_id' });
+        if (FX.registerId != null) sources.push({ value: FX.registerId, source: 'FX.registerId' });
+        if (FX.session && typeof FX.session === 'object') {
+          var viaSession = csfxExtractRegisterId(FX.session, 'FX.session');
+          if (viaSession) sources.push({ value: viaSession, source: csfxRegisterIdSource || 'FX.session' });
+        }
+      }
+    } catch (_errFxReg) {}
+    try {
+      if (typeof window !== 'undefined') {
+        var globals = [
+          { value: window.CSFX_REGISTER_ID, source: 'window.CSFX_REGISTER_ID' },
+          { value: window.CSFX_REGISTER, source: 'window.CSFX_REGISTER' },
+          { value: window.OP_REGISTER_ID, source: 'window.OP_REGISTER_ID' },
+          { value: window.OPRegisterID, source: 'window.OPRegisterID' },
+          { value: window.register_id, source: 'window.register_id' },
+          { value: window.RegisterID, source: 'window.RegisterID' }
+        ];
+        for (var g = 0; g < globals.length; g++) {
+          var gl = globals[g];
+          if (gl.value !== undefined && gl.value !== null) {
+            sources.push(gl);
+          }
+        }
+        var appGlobals = [
+          { host: window.OpenPOSApp, source: 'window.OpenPOSApp' },
+          { host: window.OpenposApp, source: 'window.OpenposApp' },
+          { host: window.openposApp, source: 'window.openposApp' },
+          { host: window.POSApp, source: 'window.POSApp' },
+          { host: window.posApp, source: 'window.posApp' },
+          { host: window.OPApp, source: 'window.OPApp' }
+        ];
+        for (var ag = 0; ag < appGlobals.length; ag++) {
+          var app = appGlobals[ag];
+          if (!app.host || typeof app.host !== 'object') continue;
+          var extracted = csfxExtractRegisterId(app.host, app.source);
+          if (extracted) {
+            sources.push({ value: extracted, source: csfxRegisterIdSource || app.source });
+            break;
+          }
+        }
+      }
+    } catch (_errWinReg) {}
+    if (typeof csfxCachedCartService === 'object' && csfxCachedCartService) {
+      var svcRegister = csfxExtractRegisterId(csfxCachedCartService, 'cartService');
+      if (svcRegister) {
+        sources.push({ value: svcRegister, source: csfxRegisterIdSource || 'cartService' });
+      }
+    }
+    var fromStorage = null;
+    if (typeof localStorage !== 'undefined') {
+      try {
+        var keys = Object.keys(localStorage);
+        for (var i = 0; i < keys.length; i++) {
+          var key = keys[i];
+          if (!key) continue;
+          if (!/register/i.test(key) && !/session/i.test(key) && !/drawer/i.test(key)) continue;
+          var raw = localStorage.getItem(key);
+          if (!raw || raw.length > 200000) continue;
+          try {
+            var parsed = JSON.parse(raw);
+            var reg = csfxExtractRegisterId(parsed, 'localStorage.' + key);
+            if (reg) {
+              fromStorage = { value: reg, source: csfxRegisterIdSource || ('localStorage.' + key) };
+              break;
+            }
+          } catch (_errParseLs) {}
+        }
+      } catch (_errLs) {}
+    }
+    if (fromStorage) sources.push(fromStorage);
+    if (sources.length) {
+      for (var s = 0; s < sources.length; s++) {
+        var src = sources[s];
+        var remembered = csfxRememberRegisterId(src.value, src.source);
+        if (remembered) {
+          return { id: remembered, source: csfxRegisterIdSource || src.source };
+        }
+      }
+    }
+    return csfxCachedRegisterId ? { id: csfxCachedRegisterId, source: csfxRegisterIdSource || 'cache' } : null;
+  }
+
+  function csfxGuessRegisterId() {
+    var found = csfxScanForRegisterId();
+    return found ? found.id : null;
+  }
+
+  function csfxCartStorageKeyList() {
+    var now = Date.now();
+    if (csfxCartKeyCache && now - csfxCartKeyCacheAt < CSFX_LS_KEY_CACHE_TTL) {
+      return csfxCartKeyCache.slice();
+    }
+    var keys = [];
+    if (typeof localStorage !== 'undefined') {
+      try {
+        keys = Object.keys(localStorage);
+      } catch (_errKeys) {
+        keys = [];
+      }
+    }
+    var preferred = [
+      'op_cart', 'op_cache_cart', 'op_local_cart', '_op_cart_data', 'op_cart_data',
+      'op_cart_v8', 'op_v5_cart', 'op_cart_backup', 'op_cart_latest', 'op_cart_store',
+      'openpos_cart', 'openpos_last_cart', 'op_cart_temp', 'op_current_cart', 'op_cart_memory',
+      'op_cart_snapshot', 'op_checkout_cart'
+    ];
+    var seen = {};
+    var list = [];
+    var push = function (key) {
+      if (!key || typeof key !== 'string') return;
+      if (seen[key]) return;
+      seen[key] = true;
+      list.push(key);
+    };
+    for (var i = 0; i < preferred.length; i++) push(preferred[i]);
+    for (var j = 0; j < keys.length; j++) push(keys[j]);
+    csfxCartKeyCache = list.slice();
+    csfxCartKeyCacheAt = now;
+    return list;
+  }
+
+  function csfxSessionCartKeyList() {
+    var now = Date.now();
+    if (csfxSessionCartKeyCache && now - csfxSessionCartKeyCacheAt < CSFX_SESSION_KEY_CACHE_TTL) {
+      return csfxSessionCartKeyCache.slice();
+    }
+    var keys = [];
+    if (typeof sessionStorage !== 'undefined') {
+      try {
+        keys = Object.keys(sessionStorage);
+      } catch (_errSession) {
+        keys = [];
+      }
+    }
+    var preferred = [
+      'op_cart', 'op_session_cart', 'op_cart_buffer', 'op_cart_temp', 'op_cart_memory',
+      'op_cart_snapshot', 'openpos_cart_session', '_op_cart_data', 'op_cart_cache'
+    ];
+    var seen = {};
+    var list = [];
+    var push = function (key) {
+      if (!key || typeof key !== 'string') return;
+      if (seen[key]) return;
+      seen[key] = true;
+      list.push(key);
+    };
+    for (var i = 0; i < preferred.length; i++) push(preferred[i]);
+    for (var j = 0; j < keys.length; j++) push(keys[j]);
+    csfxSessionCartKeyCache = list.slice();
+    csfxSessionCartKeyCacheAt = now;
+    return list;
+  }
+
+  function csfxGetCachedServerCart() {
+    if (!csfxServerCartCache) return null;
+    var age = Date.now() - csfxServerCartFetchedAt;
+    if (age > CSFX_SERVER_CART_TTL_MS) return null;
+    return csfxServerCartCache;
+  }
+
+  function csfxRememberAsyncCart(cart, source) {
+    if (!cart || typeof cart !== 'object') return;
+    csfxAsyncCartCache = cart;
+    csfxAsyncCartFetchedAt = Date.now();
+    csfxAsyncCartDebug = {
+      source: source || 'service',
+      capturedAt: csfxAsyncCartFetchedAt
+    };
+    try {
+      document.dispatchEvent(new CustomEvent('csfx:cart-updated', {
+        detail: {
+          source: source || 'service',
+          async: true
+        }
+      }));
+    } catch (_errAsyncEvent) {}
+  }
+
+  function csfxGetCachedAsyncCart() {
+    if (!csfxAsyncCartCache) return null;
+    if (Date.now() - csfxAsyncCartFetchedAt > CSFX_ASYNC_CART_TTL_MS) return null;
+    return csfxAsyncCartCache;
+  }
+
+
+  function csfxLooksLikeCartSkeleton(candidate) {
+    if (!candidate || typeof candidate !== 'object') return false;
+    if (Array.isArray(candidate)) return false;
+    var keys = Object.keys(candidate);
+    if (!keys.length) return false;
+    var itemKeys = ['items', 'cart_items', 'cartItems', 'products', 'lines', 'line_items', 'quote_items'];
+    for (var i = 0; i < itemKeys.length; i++) {
+      var value = candidate[itemKeys[i]];
+      if (!value) continue;
+      if (Array.isArray(value) && value.length) return true;
+      if (value && typeof value === 'object' && Object.keys(value).length) return true;
+    }
+    if (candidate.totals && typeof candidate.totals === 'object' && Object.keys(candidate.totals).length) return true;
+    if (candidate.base_grand_total || candidate.grand_total || candidate.total || candidate.subtotal) return true;
+    if (candidate.quote_id || candidate.order_id || candidate.draft_id) return true;
+    return false;
+  }
+
+  function csfxBranchScoreForKey(key) {
+    if (!key) return 0;
+    var name = String(key).toLowerCase();
+    var score = 0;
+    if (name.indexOf('cart') > -1) score += 6;
+    if (name.indexOf('current') > -1) score += 3;
+    if (name.indexOf('active') > -1) score += 2;
+    if (name.indexOf('session') > -1 || name.indexOf('register') > -1) score += 1;
+    if (name.indexOf('order') > -1 || name.indexOf('quote') > -1) score += 2;
+    if (name.indexOf('items') > -1 || name.indexOf('lines') > -1) score += 2;
+    if (name.indexOf('data') > -1 || name.indexOf('response') > -1 || name.indexOf('payload') > -1) score += 1;
+    return score;
+  }
+
+  function csfxDeepFindCart(value, depth, visited) {
+    if (value == null) return null;
+    if (depth > CSFX_DEEP_CART_MAX_DEPTH) return null;
+    if (typeof value === 'string') {
+      try {
+        var parsed = JSON.parse(value);
+        return csfxDeepFindCart(parsed, depth + 1, visited);
+      } catch (_errStr) {
+        return null;
+      }
+    }
+    if (typeof value !== 'object') return null;
+    if (!visited) {
+      visited = typeof WeakSet !== 'undefined' ? new WeakSet() : [];
+    }
+    if (visited.has && visited.has(value)) return null;
+    if (visited.add) {
+      visited.add(value);
+    } else if (Array.isArray(visited)) {
+      if (visited.indexOf(value) > -1) return null;
+      visited.push(value);
+    }
+    if (!Array.isArray(value)) {
+      var normalized = csfxNormalizeCartCandidate(value);
+      if (normalized && typeof normalized === 'object') {
+        var items = csfxCollectCartItems(normalized);
+        if (items && items.length) return normalized;
+      }
+      if (csfxLooksLikeCartSkeleton(value)) {
+        return value;
+      }
+    }
+    var branchCount = 0;
+    if (Array.isArray(value)) {
+      for (var i = 0; i < value.length; i++) {
+        if (branchCount++ > CSFX_DEEP_CART_MAX_BRANCH) break;
+        var found = csfxDeepFindCart(value[i], depth + 1, visited);
+        if (found) return found;
+      }
+      return null;
+    }
+    var keys = Object.keys(value);
+    keys.sort(function (a, b) {
+      return csfxBranchScoreForKey(b) - csfxBranchScoreForKey(a);
+    });
+    for (var j = 0; j < keys.length; j++) {
+      if (branchCount++ > CSFX_DEEP_CART_MAX_BRANCH) break;
+      var key = keys[j];
+      var child = value[key];
+      if (child == null) continue;
+      var childFound = csfxDeepFindCart(child, depth + 1, visited);
+      if (childFound) return childFound;
+    }
+    return null;
+  }
+
+
+  function csfxEnsureServerCartFetch(debug, svcRef) {
+    if (typeof fetch !== 'function') return null;
+    var now = Date.now();
+    if (csfxServerCartPromise) return csfxServerCartPromise;
+    if (now - csfxServerCartLastErrorAt < CSFX_SERVER_CART_ERROR_COOLDOWN) return null;
+
+    var registerId = null;
+    if (svcRef && typeof svcRef === 'object') {
+      registerId = csfxExtractRegisterId(svcRef, 'cartService') || registerId;
+    }
+    if (!registerId) {
+      registerId = csfxGuessRegisterId();
+    }
+    var payload = {};
+    if (registerId) {
+      payload.register_id = registerId;
+    }
+    csfxServerCartDebug = {
+      status: 'pending',
+      requestedAt: now,
+      registerId: registerId || null
+    };
+    var requestInit = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin'
+    };
+    try {
+      requestInit.body = JSON.stringify(payload);
+    } catch (_errStr) {
+      requestInit.body = '{}';
+    }
+    csfxServerCartPromise = fetch('/wp-json/op/v1/cart/current-cart', requestInit).then(function (resp) {
+      csfxServerCartDebug = Object.assign({}, csfxServerCartDebug, {
+        httpStatus: resp.status,
+        ok: resp.ok
+      });
+      if (!resp.ok) {
+        throw new Error('HTTP ' + resp.status);
+      }
+      return resp.json().catch(function (errJson) {
+        throw new Error('Invalid JSON: ' + (errJson && errJson.message ? errJson.message : 'parse error'));
+      });
+    }).then(function (payload) {
+      var data = null;
+      if (payload && typeof payload === 'object') {
+        if (payload.response && typeof payload.response === 'object') {
+          if (payload.response.data && typeof payload.response.data === 'object') {
+            data = payload.response.data;
+          }
+          csfxServerCartDebug = Object.assign({}, csfxServerCartDebug, {
+            responseStatus: payload.response.status
+          });
+        } else if (payload.data && typeof payload.data === 'object') {
+          data = payload.data;
+        }
+      }
+      var normalized = csfxNormalizeCartCandidate(data);
+      csfxServerCartCache = normalized || null;
+      csfxServerCartFetchedAt = Date.now();
+      csfxServerCartLastErrorAt = 0;
+      csfxServerCartDebug = Object.assign({}, csfxServerCartDebug, {
+        status: normalized ? 'success' : 'empty',
+        fetchedAt: csfxServerCartFetchedAt,
+        itemCount: normalized && normalized.items ? (Array.isArray(normalized.items) ? normalized.items.length : Object.keys(normalized.items).length || 0) : 0
+      });
+      try {
+        document.dispatchEvent(new CustomEvent('csfx:cart-updated', {
+          detail: {
+            source: 'rest.current-cart',
+            async: true,
+            registerId: registerId || null
+          }
+        }));
+      } catch (_errEvent) {}
+      return csfxServerCartCache;
+    }).catch(function (err) {
+      csfxServerCartLastErrorAt = Date.now();
+      csfxServerCartDebug = Object.assign({}, csfxServerCartDebug || {}, {
+        status: 'error',
+        error: err && err.message ? err.message : String(err)
+      });
+      return null;
+    }).finally(function () {
+      csfxServerCartPromise = null;
+    });
+    if (debug && debug.tried && Array.isArray(debug.tried)) {
+      debug.tried.push({
+        source: 'rest.current-cart',
+        hit: false,
+        async: true,
+        registerId: registerId || null
+      });
+    }
+    return csfxServerCartPromise;
+  }
+
   // --- Utilidades ---
   function round(n, d) {
     d = (typeof d === 'number') ? d : FX.decimals;
@@ -371,6 +826,7 @@
       '.csfx-explain-foot{font-size:12px;color:#475569;line-height:1.4;}',
       '.csfx-modal-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:8px;}',
       '.csfx-empty-copy{font-size:13px;color:#475569;text-align:center;padding:18px 0;}',
+      '.csfx-guard-message{font-size:14px;color:#334155;text-align:center;padding:24px 6px;border:1px dashed rgba(51,65,85,.25);border-radius:12px;background:rgba(241,245,249,.6);}',
       // especificidad para evitar conflictos con CSS del POS
         /* Reglas específicas para el buscador (sin romper layout nativo) */
       '.csfx-chip{font-family:inherit;font-size:16px;font-weight:700;}',
@@ -1132,11 +1588,21 @@
   function csfxLocateCartDetailed() {
     var debug = { tried: [] };
     var svcRef = null;
+    var emptyFallback = null;
+
     function attempt(value, source, serviceOverride) {
       var normalized = csfxNormalizeCartCandidate(value);
+      var itemsCount = 0;
+      if (normalized && typeof normalized === 'object') {
+        try {
+          var collected = csfxCollectCartItems(normalized);
+          if (Array.isArray(collected)) itemsCount = collected.length;
+        } catch (_errCollect) {}
+      }
       debug.tried.push({
         source: source,
-        hit: !!normalized,
+        hit: !!normalized && itemsCount > 0,
+        items: itemsCount,
         type: value == null ? String(value) : typeof value
       });
       if (normalized) {
@@ -1144,9 +1610,17 @@
           cart: normalized,
           source: source,
           debug: debug,
-          cartService: serviceOverride || svcRef || null
+          cartService: serviceOverride || svcRef || null,
+          itemsCount: itemsCount
         };
       }
+      return null;
+    }
+
+    function registerCandidate(candidate) {
+      if (!candidate) return null;
+      if (candidate.itemsCount && candidate.itemsCount > 0) return candidate;
+      if (!emptyFallback) emptyFallback = candidate;
       return null;
     }
 
@@ -1159,6 +1633,14 @@
           var current = svc.getCurrentCart();
           if (current && typeof current.then === 'function') {
             debug.tried.push({ source: 'cartService.getCurrentCart()', hit: false, async: true });
+            current.then(function (payload) {
+              var normalized = csfxNormalizeCartCandidate(payload);
+              if (!normalized) return;
+              var items = csfxCollectCartItems(normalized);
+              if (items && items.length) {
+                csfxRememberAsyncCart(normalized, 'cartService.getCurrentCart()');
+              }
+            }).catch(function (_errAsyncCurrent) {});
           } else {
             svcCandidates.push({ value: current, source: 'cartService.getCurrentCart()' });
           }
@@ -1171,6 +1653,14 @@
           var legacy = svc.getCart();
           if (legacy && typeof legacy.then === 'function') {
             debug.tried.push({ source: 'cartService.getCart()', hit: false, async: true });
+            legacy.then(function (payloadLegacy) {
+              var normalizedLegacy = csfxNormalizeCartCandidate(payloadLegacy);
+              if (!normalizedLegacy) return;
+              var itemsLegacy = csfxCollectCartItems(normalizedLegacy);
+              if (itemsLegacy && itemsLegacy.length) {
+                csfxRememberAsyncCart(normalizedLegacy, 'cartService.getCart()');
+              }
+            }).catch(function (_errAsyncLegacy) {});
           } else {
             svcCandidates.push({ value: legacy, source: 'cartService.getCart()' });
           }
@@ -1185,23 +1675,20 @@
       for (var c = 0; c < svcCandidates.length; c++) {
         var candidate = svcCandidates[c];
         if (!candidate) continue;
-        var value = candidate.value;
-        var source = candidate.source;
-        var normalized = csfxNormalizeCartCandidate(value);
-        debug.tried.push({
-          source: source,
-          hit: !!normalized,
-          type: value == null ? String(value) : typeof value
-        });
-        if (normalized) {
-          return {
-            cart: normalized,
-            source: source,
-            debug: debug,
-            cartService: svc
-          };
+        var registered = registerCandidate(attempt(candidate.value, candidate.source, svc));
+        if (registered) return registered;
+        var deepCartSvc = csfxDeepFindCart(candidate.value, 0, null);
+        if (deepCartSvc) {
+          var deepRegistered = registerCandidate(attempt(deepCartSvc, candidate.source + '(deep)', svc));
+          if (deepRegistered) return deepRegistered;
         }
       }
+    }
+
+    var asyncCart = csfxGetCachedAsyncCart();
+    if (asyncCart) {
+      var asyncRegistered = registerCandidate(attempt(asyncCart, 'cart.async-cache', svcRef));
+      if (asyncRegistered) return asyncRegistered;
     }
 
     var globalCandidates = [
@@ -1220,42 +1707,129 @@
     ];
     for (var i = 0; i < globalCandidates.length; i++) {
       var gc = globalCandidates[i];
-      var gcHit = attempt(gc.value, gc.source, gc.service);
-      if (gcHit) return gcHit;
-    }
-
-    var storageKeys = ['op_cart', 'op_cache_cart', 'op_local_cart', '_op_cart_data', 'op_cart_data', 'op_cart_v8', 'op_v5_cart', 'op_cart_backup', 'op_cart_latest', 'op_cart_store'];
-    for (var j = 0; j < storageKeys.length; j++) {
-      try {
-        var raw = localStorage.getItem(storageKeys[j]);
-        if (!raw) {
-          debug.tried.push({ source: 'localStorage.' + storageKeys[j], hit: false, empty: true });
-          continue;
-        }
-        var parsed = JSON.parse(raw);
-        var storageHit = attempt(parsed, 'localStorage.' + storageKeys[j]);
-        if (storageHit) return storageHit;
-      } catch (err) {
-        debug.tried.push({ source: 'localStorage.' + storageKeys[j], error: String(err) });
+      var registeredGlobal = registerCandidate(attempt(gc.value, gc.source, gc.service));
+      if (registeredGlobal) return registeredGlobal;
+      var deepGlobal = csfxDeepFindCart(gc.value, 0, null);
+      if (deepGlobal) {
+        var deepRegisteredGlobal = registerCandidate(attempt(deepGlobal, gc.source + '(deep)', gc.service));
+        if (deepRegisteredGlobal) return deepRegisteredGlobal;
       }
     }
 
-    return { cart: null, source: null, debug: debug, cartService: svcRef };
+    var asyncServerCart = csfxGetCachedServerCart();
+    if (asyncServerCart) {
+      var restHit = attempt(asyncServerCart, 'rest.current-cart(cache)');
+      if (restHit) {
+        restHit.debug.serverCart = Object.assign({ source: 'cache' }, csfxServerCartDebug || {});
+        var restRegistered = registerCandidate(restHit);
+        if (restRegistered) return restRegistered;
+      }
+    } else {
+      csfxEnsureServerCartFetch(debug, svcRef);
+    }
+
+    var storages = [];
+    if (typeof localStorage !== 'undefined') {
+      storages.push({ api: localStorage, label: 'localStorage', keys: csfxCartStorageKeyList() });
+    }
+    if (typeof sessionStorage !== 'undefined') {
+      storages.push({ api: sessionStorage, label: 'sessionStorage', keys: csfxSessionCartKeyList() });
+    }
+
+    for (var sIndex = 0; sIndex < storages.length; sIndex++) {
+      var entry = storages[sIndex];
+      if (!entry.api || !entry.keys || !entry.keys.length) continue;
+      for (var j = 0; j < entry.keys.length; j++) {
+        var storageKey = entry.keys[j];
+        if (!storageKey) continue;
+        try {
+          var raw = entry.api.getItem(storageKey);
+          if (!raw) {
+            debug.tried.push({ source: entry.label + '.' + storageKey, hit: false, empty: true });
+            continue;
+          }
+          var parsed;
+          try {
+            parsed = JSON.parse(raw);
+          } catch (_errParseStorage) {
+            parsed = raw;
+          }
+          var storageRegistered = registerCandidate(attempt(parsed, entry.label + '.' + storageKey, svcRef));
+          if (storageRegistered) return storageRegistered;
+          var deep = csfxDeepFindCart(parsed, 0, null);
+          if (!deep && parsed !== raw) {
+            deep = csfxDeepFindCart(raw, 0, null);
+          }
+          if (deep) {
+            var deepRegisteredStorage = registerCandidate(attempt(deep, entry.label + '.' + storageKey + '(deep)', svcRef));
+            if (deepRegisteredStorage) return deepRegisteredStorage;
+          }
+        } catch (errStorage) {
+          debug.tried.push({ source: entry.label + '.' + storageKey, error: String(errStorage) });
+        }
+      }
+    }
+
+    if (csfxAsyncCartDebug) {
+      debug.asyncCart = Object.assign({}, csfxAsyncCartDebug);
+    }
+
+    if (!debug.serverCart && csfxServerCartDebug) {
+      debug.serverCart = Object.assign({ source: 'debug' }, csfxServerCartDebug);
+    }
+
+    if (emptyFallback) return emptyFallback;
+
+    return { cart: null, source: null, debug: debug, cartService: svcRef, itemsCount: 0 };
   }
 
   function csfxLoadStoredCart() {
-    if (typeof localStorage === 'undefined') return null;
-    var storageKeys = ['op_cart', 'op_cache_cart', 'op_local_cart', '_op_cart_data', 'op_cart_data', 'op_cart_v8', 'op_v5_cart', 'op_cart_backup', 'op_cart_latest', 'op_cart_store'];
-    for (var i = 0; i < storageKeys.length; i++) {
-      try {
-        var raw = localStorage.getItem(storageKeys[i]);
-        if (!raw) continue;
-        var parsed = JSON.parse(raw);
-        var normalized = csfxNormalizeCartCandidate(parsed);
-        if (normalized && typeof normalized === 'object') return normalized;
-      } catch (_errStored) {}
+    var fallback = null;
+    var storages = [];
+    if (typeof localStorage !== 'undefined') {
+      storages.push({ api: localStorage, keys: csfxCartStorageKeyList() });
     }
-    return null;
+    if (typeof sessionStorage !== 'undefined') {
+      storages.push({ api: sessionStorage, keys: csfxSessionCartKeyList() });
+    }
+    for (var s = 0; s < storages.length; s++) {
+      var entry = storages[s];
+      if (!entry.api) continue;
+      var keys = entry.keys || [];
+      for (var i = 0; i < keys.length; i++) {
+        var key = keys[i];
+        if (!key) continue;
+        try {
+          var raw = entry.api.getItem(key);
+          if (!raw) continue;
+          var parsed;
+          try {
+            parsed = JSON.parse(raw);
+          } catch (_errParseStored) {
+            parsed = raw;
+          }
+          var normalized = csfxNormalizeCartCandidate(parsed);
+          if (normalized && typeof normalized === 'object') {
+            var items = csfxCollectCartItems(normalized);
+            if (items && items.length) return normalized;
+            if (!fallback) fallback = normalized;
+          }
+          var deepCart = csfxDeepFindCart(parsed, 0, null);
+          if (!deepCart && parsed !== raw) {
+            deepCart = csfxDeepFindCart(raw, 0, null);
+          }
+          if (deepCart) {
+            var normalizedDeep = csfxNormalizeCartCandidate(deepCart) || deepCart;
+            if (normalizedDeep && typeof normalizedDeep === 'object') {
+              var deepItems = csfxCollectCartItems(normalizedDeep);
+              if (deepItems && deepItems.length) return normalizedDeep;
+              if (!fallback) fallback = normalizedDeep;
+            }
+          }
+        } catch (_errStored) {}
+      }
+    }
+    return fallback;
   }
 
   function csfxLocateCart() {
@@ -2965,6 +3539,15 @@
 
   function csfxPopulateCustomDiscountItems(ui) {
     if (!ui || !ui.itemList) return;
+    ui.itemList.innerHTML = '';
+    if (!csfxCustomModalState.authorized) {
+      var guard = document.createElement('div');
+      guard.className = 'csfx-guard-message';
+      guard.textContent = 'Autoriza con el PIN del encargado para ver y gestionar los descuentos por producto.';
+      ui.itemList.appendChild(guard);
+      csfxUpdateCustomItemsState(ui, false);
+      return;
+    }
     var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
     var cartSource = snapshot.cart;
     if (!cartSource) {
@@ -2985,15 +3568,12 @@
         }
       }
     }
-    ui.itemList.innerHTML = '';
     if (!items.length) {
       var empty = document.createElement('div');
       empty.className = 'csfx-empty-copy';
       empty.textContent = 'El carrito está vacío. Agrega productos para aplicar descuentos individuales.';
       ui.itemList.appendChild(empty);
-      csfxCustomModalState.authorized = false;
-      csfxCustomModalState.pin = '';
-      csfxUpdateCustomItemsState(ui, false);
+      csfxUpdateCustomItemsState(ui, true);
       return;
     }
     items.forEach(function (item) {
@@ -3156,6 +3736,7 @@
         ui.pinInput.value = '';
         ui.pinInput.disabled = true;
         csfxUpdateCustomItemsState(ui, true);
+        csfxPopulateCustomDiscountItems(ui);
       } else {
         csfxCustomModalState.authorized = false;
         csfxCustomModalState.pin = '';
@@ -3164,6 +3745,7 @@
         ui.validateBtn.disabled = false;
         ui.scanBtn.disabled = false;
         try { ui.pinInput.focus(); } catch (_errFocus) {}
+        csfxPopulateCustomDiscountItems(ui);
       }
     }).catch(function (err) {
       csfxCustomModalState.authorized = false;
@@ -3171,6 +3753,7 @@
       csfxShowCustomFeedback(ui.authStatus, 'No se pudo validar la contraseña: ' + (err && err.message ? err.message : 'error desconocido'), false);
       ui.validateBtn.disabled = false;
       ui.scanBtn.disabled = false;
+      csfxPopulateCustomDiscountItems(ui);
     }).finally(function () {
       if (csfxCustomModalState.authorized) {
         ui.validateBtn.disabled = true;
