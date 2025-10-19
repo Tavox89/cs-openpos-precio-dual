@@ -196,24 +196,21 @@
   var csfxRegisterScanAt = 0;
   var csfxCartKeyCache = null;
   var csfxCartKeyCacheAt = 0;
-  var csfxServerCartCache = null;
-  var csfxServerCartFetchedAt = 0;
-  var csfxServerCartPromise = null;
-  var csfxServerCartLastErrorAt = 0;
-  var csfxServerCartDebug = null;
   var csfxAsyncCartCache = null;
   var csfxAsyncCartFetchedAt = 0;
   var csfxAsyncCartDebug = null;
   var csfxSessionCartKeyCache = null;
   var csfxSessionCartKeyCacheAt = 0;
+  var csfxIndexedDbCartsCache = null;
+  var csfxIndexedDbScanAt = 0;
+  var csfxIndexedDbScanPromise = null;
   var CSFX_SESSION_KEY_CACHE_TTL = 5000;
   var CSFX_REGISTER_SCAN_COOLDOWN = 2500;
   var CSFX_LS_KEY_CACHE_TTL = 5000;
-  var CSFX_SERVER_CART_TTL_MS = 5000;
-  var CSFX_SERVER_CART_ERROR_COOLDOWN = 4000;
   var CSFX_ASYNC_CART_TTL_MS = 4000;
   var CSFX_DEEP_CART_MAX_DEPTH = 6;
   var CSFX_DEEP_CART_MAX_BRANCH = 120;
+  var CSFX_INDEXEDDB_TTL_MS = 10000;
 
   function csfxRememberRegisterId(candidate, source) {
     if (candidate === null || candidate === undefined) return null;
@@ -426,13 +423,6 @@
     csfxSessionCartKeyCache = list.slice();
     csfxSessionCartKeyCacheAt = now;
     return list;
-  }
-
-  function csfxGetCachedServerCart() {
-    if (!csfxServerCartCache) return null;
-    var age = Date.now() - csfxServerCartFetchedAt;
-    if (age > CSFX_SERVER_CART_TTL_MS) return null;
-    return csfxServerCartCache;
   }
 
   function csfxRememberAsyncCart(cart, source) {
@@ -759,102 +749,126 @@
     return best || fallback || null;
   }
 
-
-  function csfxEnsureServerCartFetch(debug, svcRef) {
-    if (typeof fetch !== 'function') return null;
+  // No consultamos el API del servidor: los carritos se buscan solo en storage e IndexedDB locales.
+  function csfxEnumerateIndexedDBCarts(debug) {
     var now = Date.now();
-    if (csfxServerCartPromise) return csfxServerCartPromise;
-    if (now - csfxServerCartLastErrorAt < CSFX_SERVER_CART_ERROR_COOLDOWN) return null;
+    if (csfxIndexedDbCartsCache && now - csfxIndexedDbScanAt < CSFX_INDEXEDDB_TTL_MS) {
+      return csfxIndexedDbCartsCache.slice();
+    }
+    csfxKickoffIndexedDbScan(debug);
+    return csfxIndexedDbCartsCache ? csfxIndexedDbCartsCache.slice() : [];
+  }
 
-    var registerId = null;
-    if (svcRef && typeof svcRef === 'object') {
-      registerId = csfxExtractRegisterId(svcRef, 'cartService') || registerId;
-    }
-    if (!registerId) {
-      registerId = csfxGuessRegisterId();
-    }
-    var payload = {};
-    if (registerId) {
-      payload.register_id = registerId;
-    }
-    csfxServerCartDebug = {
-      status: 'pending',
-      requestedAt: now,
-      registerId: registerId || null
-    };
-    var requestInit = {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin'
-    };
-    try {
-      requestInit.body = JSON.stringify(payload);
-    } catch (_errStr) {
-      requestInit.body = '{}';
-    }
-    csfxServerCartPromise = fetch('/wp-json/op/v1/cart/current-cart', requestInit).then(function (resp) {
-      csfxServerCartDebug = Object.assign({}, csfxServerCartDebug, {
-        httpStatus: resp.status,
-        ok: resp.ok
-      });
-      if (!resp.ok) {
-        throw new Error('HTTP ' + resp.status);
-      }
-      return resp.json().catch(function (errJson) {
-        throw new Error('Invalid JSON: ' + (errJson && errJson.message ? errJson.message : 'parse error'));
-      });
-    }).then(function (payload) {
-      var data = null;
-      if (payload && typeof payload === 'object') {
-        if (payload.response && typeof payload.response === 'object') {
-          if (payload.response.data && typeof payload.response.data === 'object') {
-            data = payload.response.data;
-          }
-          csfxServerCartDebug = Object.assign({}, csfxServerCartDebug, {
-            responseStatus: payload.response.status
-          });
-        } else if (payload.data && typeof payload.data === 'object') {
-          data = payload.data;
-        }
-      }
-      var normalized = csfxNormalizeCartCandidate(data);
-      csfxServerCartCache = normalized || null;
-      csfxServerCartFetchedAt = Date.now();
-      csfxServerCartLastErrorAt = 0;
-      csfxServerCartDebug = Object.assign({}, csfxServerCartDebug, {
-        status: normalized ? 'success' : 'empty',
-        fetchedAt: csfxServerCartFetchedAt,
-        itemCount: normalized && normalized.items ? (Array.isArray(normalized.items) ? normalized.items.length : Object.keys(normalized.items).length || 0) : 0
-      });
-      try {
-        document.dispatchEvent(new CustomEvent('csfx:cart-updated', {
-          detail: {
-            source: 'rest.current-cart',
-            async: true,
-            registerId: registerId || null
-          }
-        }));
-      } catch (_errEvent) {}
-      return csfxServerCartCache;
-    }).catch(function (err) {
-      csfxServerCartLastErrorAt = Date.now();
-      csfxServerCartDebug = Object.assign({}, csfxServerCartDebug || {}, {
-        status: 'error',
-        error: err && err.message ? err.message : String(err)
-      });
+  function csfxKickoffIndexedDbScan(debug) {
+    if (!window.indexedDB || typeof indexedDB.databases !== 'function') {
+      csfxIndexedDbScanPromise = null;
+      if (!csfxIndexedDbCartsCache) csfxIndexedDbCartsCache = [];
+      csfxIndexedDbScanAt = Date.now();
+      if (debug) debug.indexedDbScan = { supported: false };
       return null;
-    }).finally(function () {
-      csfxServerCartPromise = null;
-    });
-    if (debug && debug.tried && Array.isArray(debug.tried)) {
-      debug.tried.push({
-        source: 'rest.current-cart',
-        hit: false,
-        async: true,
-        registerId: registerId || null
-      });
     }
-    return csfxServerCartPromise;
+    if (csfxIndexedDbScanPromise) return csfxIndexedDbScanPromise;
+    csfxIndexedDbScanPromise = indexedDB.databases().then(function (dbs) {
+      var list = Array.isArray(dbs) ? dbs : [];
+      var tasks = list.map(function (meta) { return csfxScanIndexedDbDatabase(meta, debug); });
+      return Promise.all(tasks).then(function (chunks) {
+        var flat = [];
+        chunks.forEach(function (chunk) {
+          if (Array.isArray(chunk)) flat = flat.concat(chunk);
+        });
+        csfxIndexedDbCartsCache = flat;
+        csfxIndexedDbScanAt = Date.now();
+        if (debug) {
+          debug.indexedDbScan = {
+            supported: true,
+            databases: list.length,
+            carts: flat.length
+          };
+        }
+        return flat;
+      });
+    }).catch(function (err) {
+      if (debug) debug.indexedDbError = String(err);
+      csfxIndexedDbCartsCache = csfxIndexedDbCartsCache || [];
+      csfxIndexedDbScanAt = Date.now();
+      return [];
+    }).finally(function () {
+      csfxIndexedDbScanPromise = null;
+    });
+    return csfxIndexedDbScanPromise;
+  }
+
+  function csfxScanIndexedDbDatabase(info, debug) {
+    return new Promise(function (resolve) {
+      if (!info || !info.name) return resolve([]);
+      var request;
+      try {
+        request = indexedDB.open(info.name, info.version);
+      } catch (_errOpen) {
+        return resolve([]);
+      }
+      var settled = false;
+      function finish(result) {
+        if (settled) return;
+        settled = true;
+        try { if (request && request.result) request.result.close(); } catch (_errClose) {}
+        resolve(result || []);
+      }
+      request.onerror = function () { finish([]); };
+      request.onupgradeneeded = function () { finish([]); };
+      request.onsuccess = function (event) {
+        var db = event && event.target ? event.target.result : null;
+        if (!db) return finish([]);
+        var stores = [];
+        try { stores = Array.from(db.objectStoreNames || []); } catch (_errNames) { stores = []; }
+        if (!stores.length) {
+          try { db.close(); } catch (_errCloseDb) {}
+          return finish([]);
+        }
+        var aggregated = [];
+        var pending = stores.length;
+        var done = function () {
+          pending--;
+          if (pending <= 0) {
+            try { db.close(); } catch (_errCloseDb2) {}
+            finish(aggregated);
+          }
+        };
+        stores.forEach(function (storeName) {
+          var tx;
+          try {
+            tx = db.transaction(storeName, 'readonly');
+          } catch (_errTx) {
+            done();
+            return;
+          }
+          var store = tx.objectStore(storeName);
+          var req;
+          try {
+            req = store.getAll();
+          } catch (_errCursor) {
+            done();
+            return;
+          }
+          req.onerror = function () {
+            done();
+          };
+          req.onsuccess = function (ev) {
+            var values = (ev && ev.target && ev.target.result) || [];
+            for (var i = 0; i < values.length; i++) {
+              var candidate = csfxInspectCandidate(values[i], 'indexedDB.' + info.name + '.' + storeName, null, debug);
+              if (candidate) {
+                candidate.dbName = info.name;
+                candidate.storeName = storeName;
+                candidate.storageSource = 'indexedDB:' + info.name + '/' + storeName;
+                aggregated.push(candidate);
+              }
+            }
+            done();
+          };
+        });
+      };
+    });
   }
 
   // --- Utilidades ---
@@ -1904,6 +1918,7 @@
       }
     }
 
+    // Carritos persistidos en localStorage/sessionStorage.
     var localCarts = csfxEnumerateStorageCarts(debug);
     if (localCarts && localCarts.length) {
       var selected = csfxSelectActiveCart(localCarts, debug);
@@ -1914,33 +1929,33 @@
       }
     }
 
-    var cachedServerCart = csfxGetCachedServerCart();
-    if (cachedServerCart) {
-      var serverCandidate = csfxInspectCandidate(cachedServerCart, 'rest.current-cart(cache)', svc, debug);
-      if (serverCandidate) {
-        serverCandidate.debug.serverCart = Object.assign({ source: 'cache' }, csfxServerCartDebug || {});
+    // Carritos almacenados en IndexedDB (fallback moderno que evita depender del servidor).
+    var indexedCarts = csfxEnumerateIndexedDBCarts(debug);
+    if (indexedCarts && indexedCarts.length) {
+      var selectedIdb = csfxSelectActiveCart(indexedCarts, debug);
+      if (selectedIdb) {
+        consider(selectedIdb);
+      } else {
+        indexedCarts.forEach(function (entry) { consider(entry); });
       }
-      consider(serverCandidate);
-    } else {
-      csfxEnsureServerCartFetch(debug, svc);
     }
 
     if (csfxAsyncCartDebug) {
       debug.asyncCart = Object.assign({}, csfxAsyncCartDebug);
-    }
-    if (!debug.serverCart && csfxServerCartDebug) {
-      debug.serverCart = Object.assign({ source: 'debug' }, csfxServerCartDebug);
     }
 
     return best || fallback || { cart: null, source: null, debug: debug, cartService: svc, itemsCount: 0 };
   }
 
   function csfxLoadStoredCart() {
-    var carts = csfxEnumerateStorageCarts(null);
-    if (!carts || !carts.length) return null;
-    var selected = csfxSelectActiveCart(carts, null);
+    var carts = csfxEnumerateStorageCarts(null) || [];
+    var idbCarts = csfxEnumerateIndexedDBCarts(null) || [];
+    var combined = carts.concat(idbCarts);
+    if (!combined.length) return null;
+    var selected = csfxSelectActiveCart(combined, null);
     if (selected && selected.cart) return selected.cart;
-    return carts[0] && carts[0].cart ? carts[0].cart : null;
+    var first = combined[0];
+    return first && first.cart ? first.cart : null;
   }
 
   function csfxLocateCart() {
