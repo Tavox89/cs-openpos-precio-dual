@@ -749,6 +749,38 @@
     return best || fallback || null;
   }
 
+  function csfxBetterCandidate(primary, candidate) {
+    if (!candidate) return primary;
+    if (!primary) return candidate;
+    var primaryCount = primary.itemsCount || 0;
+    var candidateCount = candidate.itemsCount || 0;
+    return candidateCount > primaryCount ? candidate : primary;
+  }
+
+  function csfxResolveCartServiceCompat(debug) {
+    var svc = null;
+    var compat = null;
+    try {
+      if (typeof window !== 'undefined' &&
+        window.OpenPOSCompat &&
+        typeof window.OpenPOSCompat.resolveCartService === 'function') {
+        compat = window.OpenPOSCompat.resolveCartService();
+        if (compat && debug) {
+          debug.cartService = debug.cartService || {};
+          debug.cartService.resolvedVia = 'OpenPOSCompat';
+        }
+      }
+    } catch (errCompat) {
+      if (debug) {
+        debug.cartService = debug.cartService || {};
+        debug.cartService.compatError = String(errCompat);
+      }
+      compat = null;
+    }
+    if (compat) return compat;
+    return csfxGetCartService(debug);
+  }
+
   // No consultamos el API del servidor: los carritos se buscan solo en storage e IndexedDB locales.
   function csfxEnumerateIndexedDBCarts(debug) {
     var now = Date.now();
@@ -1812,22 +1844,8 @@
 
   function csfxLocateCartDetailed() {
     var debug = { tried: [] };
-    var svc = csfxGetCartService(debug);
+    var svc = csfxResolveCartServiceCompat(debug);
     var best = null;
-    var fallback = null;
-
-    function consider(candidate) {
-      if (!candidate || !candidate.cart) return;
-      candidate.debug = debug;
-      if (typeof candidate.itemsCount !== 'number') candidate.itemsCount = 0;
-      if (candidate.itemsCount > 0) {
-        if (!best || candidate.itemsCount > (best.itemsCount || 0)) {
-          best = candidate;
-        }
-      } else if (!fallback) {
-        fallback = candidate;
-      }
-    }
 
     function noteAsyncPromise(promise, sourceLabel) {
       if (!promise || typeof promise.then !== 'function') return;
@@ -1842,15 +1860,39 @@
       }).catch(function () {});
     }
 
+    function evaluate(value, source) {
+      if (typeof source !== 'string') source = 'cart.unknown';
+      if (value === undefined && debug) {
+        debug.tried.push({ source: source, hit: false, type: 'undefined' });
+        return null;
+      }
+      var candidate = csfxInspectCandidate(value, source, svc, debug);
+      best = csfxBetterCandidate(best, candidate);
+      if (candidate && candidate.cart && candidate.itemsCount > 0) {
+        candidate.debug = debug;
+        return candidate;
+      }
+      var deep = csfxDeepFindCart(value, 0, null);
+      if (deep && deep !== value) {
+        var deepCandidate = csfxInspectCandidate(deep, source + '(deep)', svc, debug);
+        best = csfxBetterCandidate(best, deepCandidate);
+        if (deepCandidate && deepCandidate.cart && deepCandidate.itemsCount > 0) {
+          deepCandidate.debug = debug;
+          return deepCandidate;
+        }
+      }
+      return null;
+    }
+
     if (svc && typeof svc === 'object') {
-      var svcSources = [];
       try {
         if (typeof svc.getCurrentCart === 'function') {
           var current = svc.getCurrentCart();
           if (current && typeof current.then === 'function') {
             noteAsyncPromise(current, 'cartService.getCurrentCart()');
           } else {
-            svcSources.push({ value: current, source: 'cartService.getCurrentCart()' });
+            var currentCandidate = evaluate(current, 'cartService.getCurrentCart()');
+            if (currentCandidate) return currentCandidate;
           }
         }
       } catch (errCurrent) {
@@ -1862,89 +1904,77 @@
           if (legacy && typeof legacy.then === 'function') {
             noteAsyncPromise(legacy, 'cartService.getCart()');
           } else {
-            svcSources.push({ value: legacy, source: 'cartService.getCart()' });
+            var legacyCandidate = evaluate(legacy, 'cartService.getCart()');
+            if (legacyCandidate) return legacyCandidate;
           }
         }
       } catch (errLegacy) {
         debug.tried.push({ source: 'cartService.getCart()', error: String(errLegacy) });
       }
-      svcSources.push(
-        { value: svc.cart, source: 'cartService.cart' },
-        { value: svc._cart, source: 'cartService._cart' },
-        { value: svc.cart_data, source: 'cartService.cart_data' },
-        { value: svc.cartData, source: 'cartService.cartData' }
-      );
-      for (var si = 0; si < svcSources.length; si++) {
-        var svcCandidate = svcSources[si];
-        if (!svcCandidate) continue;
-        consider(csfxInspectCandidate(svcCandidate.value, svcCandidate.source, svc, debug));
-        var deepSvc = csfxDeepFindCart(svcCandidate.value, 0, null);
-        if (deepSvc) {
-          consider(csfxInspectCandidate(deepSvc, svcCandidate.source + '(deep)', svc, debug));
-        }
+      var svcProps = [
+        { key: 'cart', label: 'cartService.cart' },
+        { key: '_cart', label: 'cartService._cart' },
+        { key: 'cart_data', label: 'cartService.cart_data' },
+        { key: 'cartData', label: 'cartService.cartData' },
+        { key: 'activeCart', label: 'cartService.activeCart' }
+      ];
+      for (var p = 0; p < svcProps.length; p++) {
+        var prop = svcProps[p];
+        if (!prop) continue;
+        var value = svc[prop.key];
+        if (typeof value === 'undefined') continue;
+        var propCandidate = evaluate(value, prop.label);
+        if (propCandidate) return propCandidate;
       }
-      var deepSvcRoot = csfxDeepFindCart(svc, 0, null);
-      if (deepSvcRoot) {
-        consider(csfxInspectCandidate(deepSvcRoot, 'cartService(deep)', svc, debug));
+      var svcDeep = csfxDeepFindCart(svc, 0, null);
+      if (svcDeep && svcDeep !== svc) {
+        var deepSvcCandidate = evaluate(svcDeep, 'cartService(deep)');
+        if (deepSvcCandidate) return deepSvcCandidate;
       }
     }
 
     var asyncCart = csfxGetCachedAsyncCart();
     if (asyncCart) {
-      consider(csfxInspectCandidate(asyncCart, 'cart.async-cache', svc, debug));
+      var asyncCandidate = evaluate(asyncCart, 'cart.async-cache');
+      if (asyncCandidate) return asyncCandidate;
     }
 
-    var globalCandidates = [
-      { value: window.OpenPOSApp && window.OpenPOSApp.cart, source: 'OpenPOSApp.cart', service: window.OpenPOSApp && window.OpenPOSApp.cartService },
-      { value: window.OpenPOSApp && window.OpenPOSApp.activeCart, source: 'OpenPOSApp.activeCart', service: window.OpenPOSApp && window.OpenPOSApp.cartService },
-      {
-        value: window.OpenPOSApp && window.OpenPOSApp.cartService && window.OpenPOSApp.cartService.cart,
-        source: 'OpenPOSApp.cartService.cart',
-        service: window.OpenPOSApp && window.OpenPOSApp.cartService
-      },
-      { value: window.pos_cart && (window.pos_cart.cart || window.pos_cart), source: 'window.pos_cart', service: window.pos_cart && window.pos_cart.cartService },
-      { value: window.posApp && (window.posApp.cart || (window.posApp.cartService && window.posApp.cartService.cart)), source: 'window.posApp', service: window.posApp && window.posApp.cartService },
-      { value: window.POSApp && (window.POSApp.cart || (window.POSApp.cartService && window.POSApp.cartService.cart)), source: 'window.POSApp', service: window.POSApp && window.POSApp.cartService },
-      { value: window.OPCart, source: 'window.OPCart' },
-      { value: window.OPENPOS_CART, source: 'window.OPENPOS_CART' }
-    ];
-    for (var gi = 0; gi < globalCandidates.length; gi++) {
-      var gc = globalCandidates[gi];
-      if (!gc) continue;
-      consider(csfxInspectCandidate(gc.value, gc.source, gc.service, debug));
-      var deepGlobal = csfxDeepFindCart(gc.value, 0, null);
-      if (deepGlobal) {
-        consider(csfxInspectCandidate(deepGlobal, gc.source + '(deep)', gc.service, debug));
-      }
-    }
-
-    // Carritos persistidos en localStorage/sessionStorage.
     var localCarts = csfxEnumerateStorageCarts(debug);
-    if (localCarts && localCarts.length) {
+    if (Array.isArray(localCarts) && localCarts.length) {
       var selected = csfxSelectActiveCart(localCarts, debug);
-      if (selected) {
-        consider(selected);
-      } else {
-        localCarts.forEach(function (entry) { consider(entry); });
+      if (selected && selected.cart) {
+        selected.debug = debug;
+        return selected;
       }
+      localCarts.forEach(function (entry) {
+        if (!entry) return;
+        best = csfxBetterCandidate(best, entry);
+      });
     }
 
-    // Carritos almacenados en IndexedDB (fallback moderno que evita depender del servidor).
     var indexedCarts = csfxEnumerateIndexedDBCarts(debug);
-    if (indexedCarts && indexedCarts.length) {
-      var selectedIdb = csfxSelectActiveCart(indexedCarts, debug);
-      if (selectedIdb) {
-        consider(selectedIdb);
-      } else {
-        indexedCarts.forEach(function (entry) { consider(entry); });
+    if (Array.isArray(indexedCarts) && indexedCarts.length) {
+      var selectedIndexed = csfxSelectActiveCart(indexedCarts, debug);
+      if (selectedIndexed && selectedIndexed.cart) {
+        selectedIndexed.debug = debug;
+        return selectedIndexed;
       }
+      indexedCarts.forEach(function (entry) {
+        if (!entry) return;
+        best = csfxBetterCandidate(best, entry);
+      });
     }
 
     if (csfxAsyncCartDebug) {
       debug.asyncCart = Object.assign({}, csfxAsyncCartDebug);
     }
 
-    return best || fallback || { cart: null, source: null, debug: debug, cartService: svc, itemsCount: 0 };
+    if (best && best.cart) {
+      best.debug = debug;
+      return best;
+    }
+
+    return { cart: null, source: null, debug: debug, cartService: svc || null, itemsCount: 0 };
   }
 
   function csfxLoadStoredCart() {
@@ -2312,7 +2342,14 @@
   }
 
   function csfxGetCartService(debug) {
-    var svcDebug = debug.cartService = { attempts: [] };
+    debug = debug || {};
+    var svcDebug = debug.cartService;
+    if (!svcDebug || typeof svcDebug !== 'object') {
+      svcDebug = { attempts: [] };
+      debug.cartService = svcDebug;
+    } else if (!Array.isArray(svcDebug.attempts)) {
+      svcDebug.attempts = [];
+    }
     function record(source, svc, ok) {
       svcDebug.attempts.push({
         source: source,
