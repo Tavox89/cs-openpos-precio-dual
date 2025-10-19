@@ -325,6 +325,9 @@
       '.csfx-badge-handle{background:#0057b7;color:#fff;padding:10px 16px;border-radius:12px 12px 0 0;font-size:15px;display:flex;align-items:center;gap:10px;box-shadow:0 8px 18px rgba(0,87,183,.35);transition:background .2s ease,box-shadow .2s ease;width:100%;}',
       '.csfx-badge-handle:hover{background:#0b6ad4;}',
       '.csfx-badge-handle *{pointer-events:none;}',
+      '.csfx-badge:not(.open) .csfx-badge-handle{padding:8px 6px;font-size:13px;gap:4px;justify-content:flex-end;}',
+      '.csfx-badge:not(.open) .csfx-badge-label{font-size:13px;text-align:right;display:inline-block;}',
+      '.csfx-badge:not(.open) .csfx-badge-icon{width:20px;height:20px;}',
       '.csfx-badge-icon{display:inline-flex;width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,.3);align-items:center;justify-content:center;font-size:15px;box-shadow:0 4px 10px rgba(255,255,255,.2);}',
       '.csfx-badge-label{font-size:13px;font-weight:600;}',
       '.csfx-badge-content{background:#ffffff;color:#0f172a;padding:12px 14px;border-radius:0 0 12px 12px;display:none;font-size:13px;white-space:nowrap;box-shadow:0 16px 32px rgba(15,23,42,.25);border:1px solid rgba(15,23,42,.06);min-width:260px;}',
@@ -1015,7 +1018,7 @@
         rateText = Number(FX.rate).toFixed(FX.decimals);
       }
     } catch (_errRate) {}
-    handle.innerHTML = '<span class="csfx-badge-icon">🏷️</span><span class="csfx-badge-label">Ref ' + rateText + '</span>';
+    handle.innerHTML = '<span class="csfx-badge-icon">🏷️</span><span class="csfx-badge-label">' + rateText + '</span>';
   }
 
   /**
