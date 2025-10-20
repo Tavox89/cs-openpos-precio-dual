@@ -107,6 +107,28 @@
     countdownTimeout: null
   };
 
+  function csfxAccessDebugLog() {
+    if (typeof console === 'undefined' || !console.log) return;
+    var enabled = true;
+    try {
+      if (typeof window.CSFX_ACCESS_DEBUG !== 'undefined') {
+        enabled = !!window.CSFX_ACCESS_DEBUG;
+      } else if (typeof window.CSFX_DEBUG !== 'undefined') {
+        enabled = !!window.CSFX_DEBUG;
+      } else if (typeof FX !== 'undefined' && FX && typeof FX.debug !== 'undefined') {
+        enabled = !!FX.debug;
+      }
+    } catch (_errEnabled) {}
+    if (!enabled) return;
+    var args = Array.prototype.slice.call(arguments);
+    args.unshift('[CSFX Access]');
+    try {
+      console.log.apply(console, args);
+    } catch (_errLog) {
+      try { console.log(args.join(' ')); } catch (_errLog2) {}
+    }
+  }
+
   var CSFX_AUTH_DURATION_SECONDS = 120;
   var CSFX_AUTH_INFO_DEFAULT = 'Los descuentos nativos se habilitarán por 2 minutos tras autorizar.';
   var CSFX_AUTH_INFO_ACTIVE = 'Los descuentos nativos están habilitados temporalmente.';
@@ -4203,6 +4225,7 @@
     }, 60);
   }
   function csfxValidateCustomDiscountPin(pin) {
+    csfxAccessDebugLog('csfxValidateCustomDiscountPin invoked', { pin: pin });
     return new Promise(function (resolve) {
       var resolved = false;
       var detail = {
@@ -4211,15 +4234,20 @@
         respond: function (result) {
           if (resolved) return;
           resolved = true;
+          csfxAccessDebugLog('csfxValidateCustomDiscountPin -> detail.respond', { result: !!result, pin: pin });
           resolve(!!result);
         }
       };
       try {
         document.dispatchEvent(new CustomEvent('csfx:validate-custom-discount-pin', { detail: detail }));
-      } catch (_errDispatch) {}
+        csfxAccessDebugLog('csfxValidateCustomDiscountPin event dispatched', { handled: detail.handled, hasRespond: typeof detail.respond === 'function' });
+      } catch (_errDispatch) {
+        csfxAccessDebugLog('csfxValidateCustomDiscountPin dispatch error', { error: _errDispatch && _errDispatch.message });
+      }
       (function waitFallback(iterations) {
         if (resolved) return;
         if (detail.handled && iterations < 20) {
+          csfxAccessDebugLog('csfxValidateCustomDiscountPin waiting for handler', { iteration: iterations, pin: pin });
           return setTimeout(function () { waitFallback(iterations + 1); }, 100);
         }
         if (resolved) return;
@@ -4235,6 +4263,7 @@
           configured = '1234';
         }
         resolved = true;
+        csfxAccessDebugLog('csfxValidateCustomDiscountPin fallback comparison', { pin: pin, configured: configured, match: pin === configured });
         resolve(pin === configured);
       })(0);
     });
@@ -4243,6 +4272,7 @@
   function csfxAttemptCustomPinValidation(pin, ui) {
     if (!ui) return;
     var trimmed = String(pin || '').trim();
+    csfxAccessDebugLog('csfxAttemptCustomPinValidation', { raw: pin, trimmed: trimmed });
     if (!trimmed) {
       csfxShowCustomFeedback(ui.authStatus, 'Ingresa la contraseña del encargado para continuar.', false);
       try { ui.pinInput.focus(); } catch (_errFocus) {}
@@ -4252,6 +4282,7 @@
     ui.scanBtn.disabled = true;
     csfxShowCustomFeedback(ui.authStatus, 'Validando autorización…', null);
     csfxValidateCustomDiscountPin(trimmed).then(function (ok) {
+      csfxAccessDebugLog('csfxAttemptCustomPinValidation result', { success: !!ok, pin: trimmed });
       if (ok) {
         csfxBeginNativeDiscountWindow(ui, trimmed);
       } else {
@@ -4266,6 +4297,7 @@
         try { ui.pinInput.focus(); } catch (_errFocus) {}
       }
     }).catch(function (err) {
+      csfxAccessDebugLog('csfxAttemptCustomPinValidation error', { error: err && err.message ? err.message : err, pin: trimmed });
       csfxDeactivateNativeDiscountControls({ ui: ui, silent: true });
       csfxShowCustomFeedback(ui.authStatus, 'No se pudo validar la contraseña: ' + (err && err.message ? err.message : 'error desconocido'), false);
       ui.validateBtn.disabled = false;

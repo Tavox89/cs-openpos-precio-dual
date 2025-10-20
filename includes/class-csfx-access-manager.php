@@ -67,7 +67,10 @@ class CSFX_Access_Manager {
 
         add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
         add_filter( 'op_get_login_cashdrawer_data', array( $this, 'inject_access_snapshot' ), 60 );
-        add_action( 'wp_footer', array( $this, 'print_access_inline_script' ), 105 );
+        add_action( 'wp_footer', array( $this, 'print_access_inline_script' ), PHP_INT_MAX );
+        add_action( 'admin_footer', array( $this, 'print_access_inline_script' ), PHP_INT_MAX );
+        add_action( 'wp_print_footer_scripts', array( $this, 'print_access_inline_script' ), PHP_INT_MAX );
+        add_action( 'admin_print_footer_scripts', array( $this, 'print_access_inline_script' ), PHP_INT_MAX );
     }
 
     public function register_admin_page() {
@@ -571,6 +574,17 @@ class CSFX_Access_Manager {
             );
         }
 
+        if ( defined( 'CS_FX_DEBUG' ) && CS_FX_DEBUG ) {
+            $this->log_event(
+                'Validación REST de PIN',
+                array(
+                    'result'         => $match ? 'valid' : 'invalid',
+                    'user_id'        => $match ? (int) $match->user_id : 0,
+                    'pin_fingerprint'=> hash( 'sha256', 'debug|' . $key ),
+                )
+            );
+        }
+
         if ( $request->get_param( 'snapshot' ) ) {
             $data['snapshot'] = $this->get_access_snapshot();
         }
@@ -589,23 +603,25 @@ class CSFX_Access_Manager {
     }
 
     public function print_access_inline_script() {
-        if ( is_admin() || wp_doing_ajax() ) {
+        static $printed = false;
+        if ( $printed ) {
             return;
         }
-        if ( ! wp_script_is( 'cs-fx', 'enqueued' ) ) {
-            return;
-        }
+        $printed = true;
         $snapshot = $this->get_access_snapshot();
         $payload  = wp_json_encode( $snapshot, JSON_UNESCAPED_SLASHES );
         $endpoint = esc_url_raw( rest_url( 'csfx/v1/access/validate' ) );
         ?>
         <script>
         window.__CS_FX_ACCESS = <?php echo $payload ? $payload : 'null'; ?>;
-        window.CSFX_ACCESS_ENDPOINT = '<?php echo esc_js( $endpoint ); ?>';
+        window.CSFX_ACCESS_ENDPOINT = <?php echo wp_json_encode( $endpoint, JSON_UNESCAPED_SLASHES ); ?>;
+        window.CSFX_ACCESS_DEBUG = true;
+        console.log('[CSFX Access] Inline script bootstrap', window.__CS_FX_ACCESS);
         (function(){
           if (typeof window === 'undefined') return;
           var snapshot = window.__CS_FX_ACCESS || {};
           var storageKey = 'csfx_access_snapshot';
+          var debugSeed = true;
 
           function loadSnapshot(){
             try {
@@ -624,6 +640,8 @@ class CSFX_Access_Manager {
             } catch (err) {}
           }
 
+          console.log('[CSFX Access] Inline script attached', snapshot);
+
           if (!snapshot || !snapshot.list || !snapshot.list.length) {
             var stored = loadSnapshot();
             if (stored && stored.list) {
@@ -632,6 +650,10 @@ class CSFX_Access_Manager {
             }
           } else {
             persistSnapshot(snapshot);
+          }
+
+          function normalizePin(value){
+            return String(value || '').replace(/\s+/g, '');
           }
 
           function sha256(ascii){
@@ -731,14 +753,28 @@ class CSFX_Access_Manager {
 
           function findLocal(pin){
             if (!snapshot || !snapshot.list) return null;
+            var normalized = normalizePin(pin);
             for (var i = 0; i < snapshot.list.length; i++) {
               var entry = snapshot.list[i];
               if (!entry || entry.status !== 'active') continue;
               if (isExpired(entry)) continue;
-              if (entry.secure_hash && computeHash(entry, pin) === entry.secure_hash) {
+              var computedSecure = entry.secure_hash ? computeHash(entry, normalized) : null;
+              var computedManual = entry.manual_hash ? computeManual(entry, normalized) : null;
+              debugLog('[CSFX Access] Comparación local', {
+                entryId: entry.id || entry.user_id || i,
+                pinIngresado: pin,
+                pinNormalizado: normalized,
+                secureSalt: entry.secure_salt || null,
+                computedSecure: computedSecure,
+                expectedSecure: entry.secure_hash || null,
+                manualSalt: entry.manual_salt || null,
+                computedManual: computedManual,
+                expectedManual: entry.manual_hash || null
+              });
+              if (entry.secure_hash && computedSecure === entry.secure_hash) {
                 return entry;
               }
-              if (entry.manual_hash && computeManual(entry, pin) === entry.manual_hash) {
+              if (entry.manual_hash && computedManual === entry.manual_hash) {
                 return entry;
               }
             }
@@ -750,34 +786,48 @@ class CSFX_Access_Manager {
             var detail = ev.detail;
             var pin = detail.pin || '';
             if (!pin) return;
+            var normalizedPin = normalizePin(pin);
             detail.handled = true;
+            detail.pinNormalized = normalizedPin;
+            debugLog('[CSFX Access] PIN recibido', pin);
+            if (pin !== normalizedPin) {
+              debugLog('[CSFX Access] PIN normalizado', normalizedPin);
+            }
+            debugLog('[CSFX Access] Snapshot actual', snapshot && snapshot.list ? snapshot.list : snapshot);
 
             Promise.resolve().then(function(){
-              var entry = findLocal(pin);
+              var entry = findLocal(normalizedPin);
               if (entry) {
+                debugLog('[CSFX Access] PIN validado localmente', entry);
                 detail.respond(true);
                 return;
               }
               if (!window.CSFX_ACCESS_ENDPOINT) {
+                debugLog('[CSFX Access] Endpoint REST no configurado.');
                 detail.respond(false);
                 return;
               }
               return fetch(window.CSFX_ACCESS_ENDPOINT, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: pin, snapshot: true }),
+                body: JSON.stringify({ key: normalizedPin, snapshot: true }),
                 credentials: 'same-origin'
               }).then(function(res){
+                debugLog('[CSFX Access] Respuesta REST status', res.status);
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 return res.json();
               }).then(function(json){
+                debugLog('[CSFX Access] Payload REST', json);
                 if (json && json.snapshot && json.snapshot.list) {
                   snapshot = json.snapshot;
                   window.__CS_FX_ACCESS = snapshot;
                   persistSnapshot(snapshot);
+                  debugLog('[CSFX Access] Snapshot actualizado desde REST', snapshot.list);
                 }
+                debugLog('[CSFX Access] Resultado de validación REST', !!(json && json.valid));
                 detail.respond(!!(json && json.valid));
               }).catch(function(){
+                debugLog('[CSFX Access] Error durante validación REST');
                 detail.respond(false);
               });
             });
@@ -963,14 +1013,33 @@ class CSFX_Access_Manager {
                 continue;
             }
             $secure_plain = $this->decrypt_value( $row->secure_key_cipher, $row->secure_key_iv );
-            if ( $this->compare_hash( $row->secure_key_hash, $row->secure_key_salt, $pin ) || ( $secure_plain && hash_equals( $secure_plain, $pin ) ) ) {
+            $secure_hash_match = $this->compare_hash( $row->secure_key_hash, $row->secure_key_salt, $pin );
+            if ( $secure_hash_match || ( $secure_plain && hash_equals( $secure_plain, $pin ) ) ) {
                 return $row;
             }
+            $manual_plain       = '';
+            $manual_hash_match  = false;
             if ( $row->manual_key_hash || $row->manual_key_cipher ) {
                 $manual_plain = $this->decrypt_value( $row->manual_key_cipher, $row->manual_key_iv );
-                if ( $this->compare_hash( $row->manual_key_hash, $row->manual_key_salt, $pin ) || ( $manual_plain && hash_equals( $manual_plain, $pin ) ) ) {
+                $manual_hash_match = $this->compare_hash( $row->manual_key_hash, $row->manual_key_salt, $pin );
+                if ( $manual_hash_match || ( $manual_plain && hash_equals( $manual_plain, $pin ) ) ) {
                     return $row;
                 }
+            }
+            if ( defined( 'CS_FX_DEBUG' ) && CS_FX_DEBUG ) {
+                $this->log_event(
+                    'Comparación PIN sin coincidencia',
+                    array(
+                        'row_id'            => (int) $row->id,
+                        'status'            => $row->status,
+                        'expired'           => $this->is_row_expired( $row ),
+                        'secure_hash_match' => $secure_hash_match,
+                        'has_secure_plain'  => $secure_plain !== '',
+                        'manual_hash_match' => $manual_hash_match,
+                        'has_manual_plain'  => $manual_plain !== '',
+                        'pin_fingerprint'   => substr( hash( 'sha256', 'debug|' . $pin ), 0, 16 ),
+                    )
+                );
             }
         }
         return null;
@@ -993,39 +1062,59 @@ class CSFX_Access_Manager {
             $secure_plain = $this->decrypt_value( $row->secure_key_cipher, $row->secure_key_iv );
             $manual_plain = $this->decrypt_value( $row->manual_key_cipher, $row->manual_key_iv );
 
-            $secure_salt = $row->secure_key_salt ? $row->secure_key_salt : ( $secure_plain ? wp_generate_password( 16, false, false ) : '' );
-            $manual_salt = $row->manual_key_salt ? $row->manual_key_salt : ( $manual_plain ? wp_generate_password( 16, false, false ) : '' );
+            $secure_salt = $row->secure_key_salt ? $row->secure_key_salt : '';
+            $manual_salt = $row->manual_key_salt ? $row->manual_key_salt : '';
 
-            $secure_hash = ( $secure_plain && $secure_salt ) ? hash( 'sha256', $secure_salt . '|' . $secure_plain ) : '';
-            $manual_hash = ( $manual_plain && $manual_salt ) ? hash( 'sha256', $manual_salt . '|' . $manual_plain ) : '';
+            $secure_hash = $row->secure_key_hash ? $row->secure_key_hash : '';
+            $manual_hash = $row->manual_key_hash ? $row->manual_key_hash : '';
 
             $needs_update = false;
             $update_data  = array();
 
             if ( $secure_plain ) {
-                if ( $secure_hash !== $row->secure_key_hash ) {
-                    $update_data['secure_key_hash'] = $secure_hash;
-                    $needs_update = true;
-                }
-                if ( $secure_salt !== $row->secure_key_salt ) {
+                if ( '' === $secure_salt ) {
+                    $secure_salt = wp_generate_password( 16, false, false );
                     $update_data['secure_key_salt'] = $secure_salt;
                     $needs_update = true;
                 }
+
+                $computed_secure_hash = hash( 'sha256', $secure_salt . '|' . $secure_plain );
+                if ( $computed_secure_hash !== $secure_hash ) {
+                    $secure_hash = $computed_secure_hash;
+                    $update_data['secure_key_hash'] = $secure_hash;
+                    $needs_update = true;
+                }
+            } else {
+                if ( $secure_salt || $secure_hash ) {
+                    $update_data['secure_key_salt'] = '';
+                    $update_data['secure_key_hash'] = '';
+                    $needs_update = true;
+                }
+                $secure_salt = '';
+                $secure_hash = '';
             }
 
             if ( $manual_plain ) {
-                if ( $manual_hash !== $row->manual_key_hash ) {
-                    $update_data['manual_key_hash'] = $manual_hash;
-                    $needs_update = true;
-                }
-                if ( $manual_salt !== $row->manual_key_salt ) {
+                if ( '' === $manual_salt ) {
+                    $manual_salt = wp_generate_password( 16, false, false );
                     $update_data['manual_key_salt'] = $manual_salt;
                     $needs_update = true;
                 }
-            } elseif ( $row->manual_key_hash || $row->manual_key_salt ) {
-                $update_data['manual_key_hash'] = '';
-                $update_data['manual_key_salt'] = '';
-                $needs_update = true;
+
+                $computed_manual_hash = hash( 'sha256', $manual_salt . '|' . $manual_plain );
+                if ( $computed_manual_hash !== $manual_hash ) {
+                    $manual_hash = $computed_manual_hash;
+                    $update_data['manual_key_hash'] = $manual_hash;
+                    $needs_update = true;
+                }
+            } else {
+                if ( $manual_salt || $manual_hash ) {
+                    $update_data['manual_key_salt'] = '';
+                    $update_data['manual_key_hash'] = '';
+                    $needs_update = true;
+                }
+                $manual_salt = '';
+                $manual_hash = '';
             }
 
             if ( $needs_update ) {
