@@ -107,9 +107,88 @@
     countdownTimeout: null
   };
 
+  var CSFX_SUPERVISOR_STORAGE_KEY = 'csfx_last_supervisor';
+  var CSFX_SUPERVISOR_META_KEYS = [
+    'csfx_auth_supervisor_id',
+    'csfx_auth_supervisor_name',
+    'csfx_auth_supervisor_email',
+    'csfx_auth_supervisor_source',
+    'csfx_auth_supervisor_method',
+    'csfx_auth_supervisor_ref',
+    'csfx_auth_supervisor_time',
+    'csfx_auth_supervisor_expires',
+    'csfx_auth_session_id'
+  ];
+  var csfxSupervisorCache = null;
+
+  function csfxReadSupervisorStorage() {
+    try {
+      var raw = null;
+      if (typeof sessionStorage !== 'undefined') {
+        raw = sessionStorage.getItem(CSFX_SUPERVISOR_STORAGE_KEY);
+      }
+      if (!raw && typeof localStorage !== 'undefined') {
+        raw = localStorage.getItem(CSFX_SUPERVISOR_STORAGE_KEY);
+      }
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      return (parsed && typeof parsed === 'object') ? parsed : null;
+    } catch (_errReadSupervisor) {
+      return null;
+    }
+  }
+
+  function csfxRememberSupervisor(info) {
+    if (info && typeof info === 'object') {
+      csfxSupervisorCache = Object.assign({}, info);
+      var payload = null;
+      try { payload = JSON.stringify(csfxSupervisorCache); } catch (_errStringify) { payload = null; }
+      if (payload) {
+        try { if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(CSFX_SUPERVISOR_STORAGE_KEY, payload); } catch (_errSessionStore) {}
+        try { if (typeof localStorage !== 'undefined') localStorage.setItem(CSFX_SUPERVISOR_STORAGE_KEY, payload); } catch (_errLocalStore) {}
+      }
+    } else {
+      csfxSupervisorCache = null;
+      try { if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(CSFX_SUPERVISOR_STORAGE_KEY); } catch (_errSessionRemove) {}
+      try { if (typeof localStorage !== 'undefined') localStorage.removeItem(CSFX_SUPERVISOR_STORAGE_KEY); } catch (_errLocalRemove) {}
+    }
+  }
+
+  function csfxGetLastSupervisor(forceReload) {
+    if (!forceReload && csfxSupervisorCache) return csfxSupervisorCache;
+    var stored = csfxReadSupervisorStorage();
+    if (stored && typeof stored === 'object') {
+      if (!stored.reference) {
+        try { stored.reference = csfxAuthorizationReference(); } catch (_errRefFetch) {}
+      }
+      csfxSupervisorCache = stored;
+      return csfxSupervisorCache;
+    }
+    csfxSupervisorCache = null;
+    return null;
+  }
+
+  try {
+    var csfxInitialSupervisor = csfxReadSupervisorStorage();
+    if (csfxInitialSupervisor) {
+      csfxRememberSupervisor(csfxInitialSupervisor);
+    }
+  } catch (_errInitRemember) {}
+
+  try {
+    document.addEventListener('csfx:supervisor-authorized', function (ev) {
+      if (!ev || !ev.detail || !ev.detail.supervisor) return;
+      var supervisor = Object.assign({}, ev.detail.supervisor);
+      if (!supervisor.reference) {
+        try { supervisor.reference = csfxAuthorizationReference(); } catch (_errRefAssign) {}
+      }
+      csfxRememberSupervisor(supervisor);
+    });
+  } catch (_errBindSupervisor) {}
+
   function csfxAccessDebugLog() {
     if (typeof console === 'undefined' || !console.log) return;
-    var enabled = true;
+    var enabled = false;
     try {
       if (typeof window.CSFX_ACCESS_DEBUG !== 'undefined') {
         enabled = !!window.CSFX_ACCESS_DEBUG;
@@ -2552,7 +2631,22 @@
     if (cart) {
       ingest(cart.meta_data);
       ingest(cart.metaData);
-      ['csfx_usd_paid', 'csfx_discount_pct', 'csfx_discount_value', 'csfx_discount_note', 'csfx_base_total'].forEach(function (k) {
+      [
+        'csfx_usd_paid',
+        'csfx_discount_pct',
+        'csfx_discount_value',
+        'csfx_discount_note',
+        'csfx_base_total',
+        'csfx_auth_supervisor_id',
+        'csfx_auth_supervisor_name',
+        'csfx_auth_supervisor_email',
+        'csfx_auth_supervisor_source',
+        'csfx_auth_supervisor_method',
+        'csfx_auth_supervisor_ref',
+        'csfx_auth_supervisor_time',
+        'csfx_auth_supervisor_expires',
+        'csfx_auth_session_id'
+      ].forEach(function (k) {
         if (typeof cart[k] !== 'undefined') meta[k] = cart[k];
       });
     }
@@ -2589,6 +2683,9 @@
     cartDebug.cartSource = cartSource;
     cartDebug.totalsSource = compatTotals ? 'compat' : 'legacy';
 
+    if (cart) {
+      csfxEnrichCartWithSupervisor(cart);
+    }
     var meta = csfxExtractMetaMap(cart);
 
     var subtotalCandidates = [];
@@ -2757,6 +2854,57 @@
       var key = item.key || item.name || item.code;
       return key ? key.indexOf('csfx_') !== 0 : true;
     });
+  }
+
+  function csfxEnrichCartWithSupervisor(targetCart) {
+    if (!targetCart || typeof targetCart !== 'object') return;
+    var base = Array.isArray(targetCart.meta_data) ? targetCart.meta_data : (Array.isArray(targetCart.metaData) ? targetCart.metaData : []);
+    var meta = [];
+    if (Array.isArray(base)) {
+      base.forEach(function (item) {
+        if (!item) return;
+        var key = item.key || item.name || item.code;
+        if (key && CSFX_SUPERVISOR_META_KEYS.indexOf(key) !== -1) return;
+        meta.push(item);
+      });
+    }
+    var supervisor = csfxGetLastSupervisor(false);
+    var pushMeta = function (key, value) {
+      if (value === null || typeof value === 'undefined') return;
+      var normalized = value;
+      if (typeof normalized === 'number') {
+        if (!isFinite(normalized)) return;
+        normalized = normalized.toString();
+      } else if (typeof normalized === 'boolean') {
+        normalized = normalized ? '1' : '0';
+      }
+      if (typeof normalized === 'string') {
+        if (normalized.trim() === '') return;
+      }
+      meta.push({ key: key, value: normalized });
+    };
+    if (supervisor && typeof supervisor === 'object') {
+      pushMeta('csfx_auth_supervisor_id', typeof supervisor.id !== 'undefined' ? supervisor.id : '');
+      pushMeta('csfx_auth_supervisor_name', supervisor.name || '');
+      pushMeta('csfx_auth_supervisor_email', supervisor.email || '');
+      pushMeta('csfx_auth_supervisor_source', supervisor.via || supervisor.source || '');
+      pushMeta('csfx_auth_supervisor_method', supervisor.method || '');
+      pushMeta('csfx_auth_supervisor_ref', supervisor.reference || '');
+      pushMeta('csfx_auth_supervisor_time', supervisor.authorized_at || supervisor.authorizedAt || '');
+      if (supervisor.expires_at || supervisor.expiresAt) {
+        pushMeta('csfx_auth_supervisor_expires', supervisor.expires_at || supervisor.expiresAt);
+      }
+      if (supervisor.session_id) {
+        pushMeta('csfx_auth_session_id', supervisor.session_id);
+      }
+      targetCart.csfx_auth_supervisor_id = typeof supervisor.id !== 'undefined' ? supervisor.id : '';
+      targetCart.csfx_auth_supervisor_name = supervisor.name || '';
+    } else {
+      delete targetCart.csfx_auth_supervisor_id;
+      delete targetCart.csfx_auth_supervisor_name;
+    }
+    targetCart.meta_data = meta;
+    targetCart.metaData = meta;
   }
 
   var csfxCachedCartService = null;
@@ -3277,6 +3425,9 @@
   }
 
   function csfxPersistCart(cart) {
+    if (cart) {
+      csfxEnrichCartWithSupervisor(cart);
+    }
     var snapshot = {
       discount_amount: cart.discount_amount,
       final_discount_amount: cart.final_discount_amount,
@@ -3409,6 +3560,7 @@
       targetCart.csfx_discount_value = discountValue;
       targetCart.csfx_base_total = baseTotal;
       targetCart.csfx_discount_note = note;
+      csfxEnrichCartWithSupervisor(targetCart);
     };
 
     applyMetaToCart(cart);

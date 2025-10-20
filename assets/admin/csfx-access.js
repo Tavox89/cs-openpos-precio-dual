@@ -167,7 +167,7 @@
     emailEl.textContent = data.user && data.user.email ? data.user.email : '';
     var statusClass = data.status && data.status.class ? data.status.class : 'inactive';
     statusBadge.textContent = data.status && data.status.label ? data.status.label : '';
-    statusBadge.className = sanitizeClass('csfx-access-status', statusClass);
+    statusBadge.className = sanitizeClass('csfx-status-badge', statusClass);
     manualNote.textContent = data.manual_hint || '';
     expiresNote.textContent = data.expires && data.expires.display ? data.expires.display : '';
     updatedEl.textContent = formatUpdated(data.updated || '');
@@ -190,7 +190,9 @@
           downloadBtn.href = data.qr;
           var slug = (data.user && data.user.name ? data.user.name : 'qr').toLowerCase().replace(/[^a-z0-9]+/g, '-');
           downloadBtn.setAttribute('download', 'csfx-supervisor-' + slug + '.png');
-          downloadBtn.removeAttribute('hidden');
+          downloadBtn.dataset.available = '1';
+          downloadBtn.removeAttribute('aria-disabled');
+          downloadBtn.removeAttribute('tabindex');
         }
       } else {
         qrImg.src = '';
@@ -198,7 +200,10 @@
         qrImg.setAttribute('hidden', '');
         if (downloadBtn) {
           downloadBtn.href = '#';
-          downloadBtn.setAttribute('hidden', '');
+          downloadBtn.removeAttribute('download');
+          downloadBtn.dataset.available = '0';
+          downloadBtn.setAttribute('aria-disabled', 'true');
+          downloadBtn.setAttribute('tabindex', '-1');
         }
       }
     }

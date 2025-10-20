@@ -71,6 +71,7 @@ class CSFX_Access_Manager {
         add_action( 'admin_footer', array( $this, 'print_access_inline_script' ), PHP_INT_MAX );
         add_action( 'wp_print_footer_scripts', array( $this, 'print_access_inline_script' ), PHP_INT_MAX );
         add_action( 'admin_print_footer_scripts', array( $this, 'print_access_inline_script' ), PHP_INT_MAX );
+        add_action( 'op_pos_page_after', array( $this, 'print_access_inline_script' ), PHP_INT_MAX );
     }
 
     public function register_admin_page() {
@@ -131,166 +132,193 @@ class CSFX_Access_Manager {
             <p class="description"><?php esc_html_e( 'Administra los supervisores autorizados para validar descuentos personalizados dentro del POS.', 'csfx' ); ?></p>
 
             <div class="csfx-access-panels">
-                <div class="csfx-access-panel">
-                    <h2><?php esc_html_e( 'Agregar supervisor autorizado', 'csfx' ); ?></h2>
-                    <?php if ( $active_count >= self::MAX_ACTIVE ) : ?>
-                        <p class="csfx-access-warning">⚠️ <?php esc_html_e( 'Has alcanzado el máximo de autorizados activos. Revoca alguno antes de registrar un nuevo supervisor.', 'csfx' ); ?></p>
-                    <?php endif; ?>
-                    <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="csfx-access-form">
-                        <?php wp_nonce_field( 'csfx-access-create' ); ?>
-                        <input type="hidden" name="action" value="csfx_access_create" />
-                        <input type="hidden" name="user_id" value="" data-csfx-access-user-field />
-                        <table class="form-table">
-                            <tr>
-                                <th scope="row"><label for="csfx-access-user-search"><?php esc_html_e( 'Supervisor', 'csfx' ); ?></label></th>
-                                <td>
-                                    <input type="search" class="regular-text" id="csfx-access-user-search" name="user_search" placeholder="<?php esc_attr_e( 'Buscar por nombre o correo…', 'csfx' ); ?>" data-csfx-access-user-search data-nonce="<?php echo esc_attr( $search_key ); ?>" autocomplete="off" />
-                                    <p class="description"><?php esc_html_e( 'Selecciona un usuario existente de WordPress.', 'csfx' ); ?></p>
-                                    <div class="csfx-access-user-results" data-csfx-access-user-results></div>
-                                </td>
-                            </tr>
-                            <tr>
-                                <th scope="row"><label for="csfx-access-manual-key"><?php esc_html_e( 'Clave manual (opcional)', 'csfx' ); ?></label></th>
-                                <td>
-                                    <input type="text" class="regular-text" id="csfx-access-manual-key" name="manual_key" maxlength="32" autocomplete="off" />
-                                    <p class="description"><?php esc_html_e( 'Úsala solo en emergencias. Si la dejas vacía se generará una clave segura automáticamente.', 'csfx' ); ?></p>
-                                </td>
-                            </tr>
-                            <tr>
-                                <th scope="row"><label for="csfx-access-expiration"><?php esc_html_e( 'Expiración (opcional)', 'csfx' ); ?></label></th>
-                                <td>
-                                    <input type="date" id="csfx-access-expiration" name="expires_at" />
-                                    <p class="description"><?php esc_html_e( 'Fecha en la que la autorización se revocará automáticamente.', 'csfx' ); ?></p>
-                                </td>
-                            </tr>
-                        </table>
-                        <p class="submit">
-                            <button type="submit" class="button button-primary" <?php disabled( $active_count >= self::MAX_ACTIVE ); ?>><?php esc_html_e( 'Registrar autorizado', 'csfx' ); ?></button>
-                        </p>
-                    </form>
+                <div class="csfx-card csfx-card--form">
+                    <div class="csfx-card__header">
+                        <h2 class="csfx-card__title"><?php esc_html_e( 'Agregar supervisor autorizado', 'csfx' ); ?></h2>
+                    </div>
+                    <div class="csfx-card__body">
+                        <?php if ( $active_count >= self::MAX_ACTIVE ) : ?>
+                            <p class="csfx-alert csfx-alert--warning">
+                                <span class="csfx-alert__icon" aria-hidden="true">⚠️</span>
+                                <?php esc_html_e( 'Has alcanzado el máximo de autorizados activos. Revoca alguno antes de registrar un nuevo supervisor.', 'csfx' ); ?>
+                            </p>
+                        <?php endif; ?>
+                        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="csfx-access-form">
+                            <?php wp_nonce_field( 'csfx-access-create' ); ?>
+                            <input type="hidden" name="action" value="csfx_access_create" />
+                            <input type="hidden" name="user_id" value="" data-csfx-access-user-field />
+                            <table class="form-table csfx-form-table">
+                                <tr>
+                                    <th scope="row"><label for="csfx-access-user-search"><?php esc_html_e( 'Supervisor', 'csfx' ); ?></label></th>
+                                    <td>
+                                        <input type="search" class="regular-text" id="csfx-access-user-search" name="user_search" placeholder="<?php esc_attr_e( 'Buscar por nombre o correo…', 'csfx' ); ?>" data-csfx-access-user-search data-nonce="<?php echo esc_attr( $search_key ); ?>" autocomplete="off" />
+                                        <p class="description"><?php esc_html_e( 'Selecciona un usuario existente de WordPress.', 'csfx' ); ?></p>
+                                        <div class="csfx-access-user-results" data-csfx-access-user-results></div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row"><label for="csfx-access-manual-key"><?php esc_html_e( 'Clave manual (opcional)', 'csfx' ); ?></label></th>
+                                    <td>
+                                        <input type="text" class="regular-text" id="csfx-access-manual-key" name="manual_key" maxlength="32" autocomplete="off" placeholder="<?php esc_attr_e( 'PIN o código del supervisor', 'csfx' ); ?>" />
+                                        <p class="description"><?php esc_html_e( 'Úsala solo en emergencias. Si la dejas vacía se generará una clave segura automáticamente.', 'csfx' ); ?></p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row"><label for="csfx-access-expiration"><?php esc_html_e( 'Expiración (opcional)', 'csfx' ); ?></label></th>
+                                    <td>
+                                        <input type="date" id="csfx-access-expiration" name="expires_at" />
+                                        <p class="description"><?php esc_html_e( 'Fecha en la que la autorización se revocará automáticamente.', 'csfx' ); ?></p>
+                                    </td>
+                                </tr>
+                            </table>
+                            <p class="submit">
+                                <button type="submit" class="csfx-button csfx-button--primary" <?php disabled( $active_count >= self::MAX_ACTIVE ); ?>><?php esc_html_e( 'Registrar autorizado', 'csfx' ); ?></button>
+                            </p>
+                        </form>
+                    </div>
                 </div>
 
-                <div class="csfx-access-panel">
-                    <h2>
-                        <?php esc_html_e( 'Supervisores registrados', 'csfx' ); ?>
-                        <span class="csfx-access-counter"><?php printf( esc_html__( '%d activos', 'csfx' ), intval( $active_count ) ); ?></span>
-                    </h2>
-                    <?php if ( empty( $authorizers ) ) : ?>
-                        <p><?php esc_html_e( 'Aún no se han agregado supervisores autorizados.', 'csfx' ); ?></p>
-                    <?php else : ?>
-                        <div class="csfx-access-table-wrap">
-                            <table class="widefat fixed striped csfx-access-table">
-                                <thead>
-                                    <tr>
-                                        <th><?php esc_html_e( 'Supervisor', 'csfx' ); ?></th>
-                                        <th><?php esc_html_e( 'Estado', 'csfx' ); ?></th>
-                                        <th><?php esc_html_e( 'Acciones', 'csfx' ); ?></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ( $authorizers as $auth ) :
-                                        $user            = $this->get_user_summary( $auth->user_id );
-                                        $secure_plain    = $this->decrypt_value( $auth->secure_key_cipher, $auth->secure_key_iv );
-                                        $manual_plain    = $this->decrypt_value( $auth->manual_key_cipher, $auth->manual_key_iv );
-                                        $is_expired      = $this->is_row_expired( $auth );
-                                        $status_label    = $is_expired ? __( 'Expirada', 'csfx' ) : ( 'active' === $auth->status ? __( 'Activa', 'csfx' ) : __( 'Revocada', 'csfx' ) );
-                                        $status_class    = $is_expired ? 'expired' : ( 'active' === $auth->status ? 'active' : 'inactive' );
-                                        $qr_text         = sprintf( 'Supervisor: %s | Clave: %s', $user['name'], $secure_plain );
-                                        $qr_data         = $this->get_qr_data_uri( $qr_text );
-                                        $toggle_active   = ( 'active' === $auth->status && ! $is_expired );
-                                        $toggle_label    = $toggle_active ? __( 'Revocar', 'csfx' ) : __( 'Activar', 'csfx' );
-                                        $toggle_button   = $toggle_active ? 'csfx-access-btn csfx-access-btn--danger' : 'csfx-access-btn csfx-access-btn--ghost';
-                                        $expires_display = $auth->expires_at ? $this->format_datetime( $auth->expires_at ) : __( 'Sin vencimiento', 'csfx' );
-                                        $expires_date    = $auth->expires_at ? gmdate( 'Y-m-d', strtotime( $auth->expires_at ) ) : '';
-                                        $manual_status   = $manual_plain ? __( 'Clave manual activa', 'csfx' ) : __( 'Sin clave manual', 'csfx' );
-                                        $row_payload     = array(
-                                            'id'          => (int) $auth->id,
-                                            'user'        => array(
-                                                'name'  => $user['name'],
-                                                'email' => $user['email'],
-                                            ),
-                                            'status'      => array(
-                                                'label' => $status_label,
-                                                'class' => $status_class,
-                                                'raw'   => $auth->status,
-                                            ),
-                                            'secure_key'  => $secure_plain,
-                                            'manual_key'  => $manual_plain,
-                                            'manual_hint' => $manual_status,
-                                            'expires'     => array(
-                                                'date'    => $expires_date,
-                                                'display' => $expires_display,
-                                            ),
-                                            'updated'     => $auth->updated_at ? $this->format_datetime( $auth->updated_at ) : '',
-                                            'qr'          => $qr_data,
-                                            'nonce'       => array(
-                                                'update'     => wp_create_nonce( 'csfx-access-update-' . $auth->id ),
-                                                'regenerate' => wp_create_nonce( 'csfx-access-regenerate-' . $auth->id ),
-                                            ),
-                                        );
-                                        ?>
-                                        <tr>
-                                            <td class="csfx-access-col-user">
-                                                <div class="csfx-access-user-name"><?php echo esc_html( $user['name'] ); ?></div>
-                                                <div class="csfx-access-user-email"><?php echo esc_html( $user['email'] ); ?></div>
-                                            </td>
-                                            <td class="csfx-access-col-status">
-                                                <span class="csfx-access-status csfx-access-status--<?php echo esc_attr( $status_class ); ?>"><?php echo esc_html( $status_label ); ?></span>
-                                                <div class="csfx-access-status-note"><?php echo esc_html( $manual_status ); ?></div>
-                                                <div class="csfx-access-status-note"><?php echo esc_html( $expires_display ); ?></div>
-                                            </td>
-                                            <td class="csfx-access-actions-cell">
-                                                <button type="button" class="csfx-access-btn csfx-access-btn--ghost" data-csfx-open-modal data-csfx-auth="<?php echo esc_attr( wp_json_encode( $row_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ); ?>"><?php esc_html_e( 'Ver', 'csfx' ); ?></button>
-                                                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="csfx-access-inline-action">
-                                                    <?php wp_nonce_field( 'csfx-access-toggle-' . $auth->id ); ?>
-                                                    <input type="hidden" name="action" value="csfx_access_toggle" />
-                                                    <input type="hidden" name="id" value="<?php echo esc_attr( $auth->id ); ?>" />
-                                                    <input type="hidden" name="toggle_to" value="<?php echo esc_attr( $toggle_active ? 'revoked' : 'active' ); ?>" />
-                                                    <button type="submit" class="<?php echo esc_attr( $toggle_button ); ?>"><?php echo esc_html( $toggle_label ); ?></button>
-                                                </form>
-                                                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" onsubmit="return confirm('<?php esc_attr_e( '¿Eliminar este autorizado?', 'csfx' ); ?>');" class="csfx-access-inline-action">
-                                                    <?php wp_nonce_field( 'csfx-access-delete-' . $auth->id ); ?>
-                                                    <input type="hidden" name="action" value="csfx_access_delete" />
-                                                    <input type="hidden" name="id" value="<?php echo esc_attr( $auth->id ); ?>" />
-                                                    <button type="submit" class="csfx-access-btn csfx-access-btn--danger"><?php esc_html_e( 'Eliminar', 'csfx' ); ?></button>
-                                                </form>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
+                <div class="csfx-card csfx-card--list">
+                    <div class="csfx-card__header">
+                        <div class="csfx-card__title-group">
+                            <h2 class="csfx-card__title"><?php esc_html_e( 'Supervisores registrados', 'csfx' ); ?></h2>
                         </div>
-                        <p class="description csfx-access-endpoint"><?php esc_html_e( 'Endpoint de validación REST:', 'csfx' ); ?> <code><?php echo esc_html( $endpoint ); ?></code></p>
-                    <?php endif; ?>
-                </div>
-            <div class="csfx-access-modal" data-csfx-modal hidden>
-                <div class="csfx-access-modal__backdrop" data-csfx-modal-close></div>
-                <div class="csfx-access-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="csfx-access-modal-title">
-                    <button type="button" class="csfx-access-modal__close" data-csfx-modal-close aria-label="<?php esc_attr_e( 'Cerrar', 'csfx' ); ?>">&times;</button>
-                    <div class="csfx-access-modal__header">
-                        <h3 id="csfx-access-modal-title" data-csfx-modal-name></h3>
-                        <div class="csfx-access-modal__email" data-csfx-modal-email></div>
-                        <div class="csfx-access-modal__status">
-                            <span class="csfx-access-status" data-csfx-modal-status></span>
-                            <span class="csfx-access-modal__hint" data-csfx-modal-manual-note></span>
-                            <span class="csfx-access-modal__hint" data-csfx-modal-expires-display></span>
-                        </div>
-                        <div class="csfx-access-modal__meta" data-csfx-modal-updated-label="<?php esc_attr_e( 'Última actualización:', 'csfx' ); ?>">
-                            <span data-csfx-modal-updated></span>
-                        </div>
+                        <span class="csfx-badge csfx-badge--info"><?php printf( esc_html__( '%d activos', 'csfx' ), intval( $active_count ) ); ?></span>
                     </div>
-                    <div class="csfx-access-modal__body">
+                    <div class="csfx-card__body">
+                        <?php if ( empty( $authorizers ) ) : ?>
+                            <p class="csfx-card__empty"><?php esc_html_e( 'Aún no se han agregado supervisores autorizados.', 'csfx' ); ?></p>
+                        <?php else : ?>
+                            <div class="csfx-table" role="region" aria-live="polite">
+                                <table class="csfx-table__table" role="grid">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col"><?php esc_html_e( 'Supervisor', 'csfx' ); ?></th>
+                                            <th scope="col"><?php esc_html_e( 'Estado', 'csfx' ); ?></th>
+                                            <th scope="col"><?php esc_html_e( 'Acciones', 'csfx' ); ?></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php foreach ( $authorizers as $auth ) :
+                                            $user            = $this->get_user_summary( $auth->user_id );
+                                            $secure_plain    = $this->decrypt_value( $auth->secure_key_cipher, $auth->secure_key_iv );
+                                            $manual_plain    = $this->decrypt_value( $auth->manual_key_cipher, $auth->manual_key_iv );
+                                            $is_expired      = $this->is_row_expired( $auth );
+                                            $status_label    = $is_expired ? __( 'Expirada', 'csfx' ) : ( 'active' === $auth->status ? __( 'Activa', 'csfx' ) : __( 'Revocada', 'csfx' ) );
+                                            $status_class    = $is_expired ? 'expired' : ( 'active' === $auth->status ? 'active' : 'inactive' );
+                                            $qr_text         = $secure_plain ? $secure_plain : '';
+                                            $qr_data         = $qr_text ? $this->get_qr_data_uri( $qr_text ) : '';
+                                            $toggle_active   = ( 'active' === $auth->status && ! $is_expired );
+                                            $toggle_label    = $toggle_active ? __( 'Revocar', 'csfx' ) : __( 'Activar', 'csfx' );
+                                            $toggle_button   = $toggle_active ? 'csfx-button csfx-button--danger-outline' : 'csfx-button csfx-button--success';
+                                            $toggle_title    = $toggle_active ? __( 'Revoca el acceso inmediato del supervisor.', 'csfx' ) : __( 'Restaura el acceso del supervisor a las validaciones.', 'csfx' );
+                                            $expires_display = $auth->expires_at ? $this->format_datetime( $auth->expires_at ) : __( 'Sin vencimiento', 'csfx' );
+                                            $expires_date    = $auth->expires_at ? gmdate( 'Y-m-d', strtotime( $auth->expires_at ) ) : '';
+                                            $manual_status   = $manual_plain ? __( 'Clave manual activa', 'csfx' ) : __( 'Sin clave manual', 'csfx' );
+                                            $row_payload     = array(
+                                                'id'          => (int) $auth->id,
+                                                'user'        => array(
+                                                    'name'  => $user['name'],
+                                                    'email' => $user['email'],
+                                                ),
+                                                'status'      => array(
+                                                    'label' => $status_label,
+                                                    'class' => $status_class,
+                                                    'raw'   => $auth->status,
+                                                ),
+                                                'secure_key'  => $secure_plain,
+                                                'manual_key'  => $manual_plain,
+                                                'manual_hint' => $manual_status,
+                                                'expires'     => array(
+                                                    'date'    => $expires_date,
+                                                    'display' => $expires_display,
+                                                ),
+                                                'updated'     => $auth->updated_at ? $this->format_datetime( $auth->updated_at ) : '',
+                                                'qr'          => $qr_data,
+                                                'nonce'       => array(
+                                                    'update'     => wp_create_nonce( 'csfx-access-update-' . $auth->id ),
+                                                    'regenerate' => wp_create_nonce( 'csfx-access-regenerate-' . $auth->id ),
+                                                ),
+                                            );
+                                            ?>
+                                            <tr>
+                                                <td class="csfx-table__cell csfx-table__cell--user" data-title="<?php esc_attr_e( 'Supervisor', 'csfx' ); ?>">
+                                                    <span class="csfx-table__primary"><?php echo esc_html( $user['name'] ); ?></span>
+                                                    <span class="csfx-table__secondary"><?php echo esc_html( $user['email'] ); ?></span>
+                                                </td>
+                                                <td class="csfx-table__cell csfx-table__cell--status" data-title="<?php esc_attr_e( 'Estado', 'csfx' ); ?>">
+                                                    <span class="csfx-status-badge csfx-status-badge--<?php echo esc_attr( $status_class ); ?>"><?php echo esc_html( $status_label ); ?></span>
+                                                    <span class="csfx-table__hint"><?php echo esc_html( $manual_status ); ?></span>
+                                                    <span class="csfx-table__hint"><?php echo esc_html( $expires_display ); ?></span>
+                                                </td>
+                                                <td class="csfx-table__cell csfx-table__cell--actions" data-title="<?php esc_attr_e( 'Acciones', 'csfx' ); ?>">
+                                                    <button type="button" class="csfx-button csfx-button--primary" data-csfx-open-modal data-csfx-auth="<?php echo esc_attr( wp_json_encode( $row_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ); ?>" title="<?php esc_attr_e( 'Ver detalles del supervisor', 'csfx' ); ?>"><?php esc_html_e( 'Ver', 'csfx' ); ?></button>
+                                                    <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="csfx-inline-form">
+                                                        <?php wp_nonce_field( 'csfx-access-toggle-' . $auth->id ); ?>
+                                                        <input type="hidden" name="action" value="csfx_access_toggle" />
+                                                        <input type="hidden" name="id" value="<?php echo esc_attr( $auth->id ); ?>" />
+                                                        <input type="hidden" name="toggle_to" value="<?php echo esc_attr( $toggle_active ? 'revoked' : 'active' ); ?>" />
+                                                        <button type="submit" class="<?php echo esc_attr( $toggle_button ); ?>" title="<?php echo esc_attr( $toggle_title ); ?>"><?php echo esc_html( $toggle_label ); ?></button>
+                                                    </form>
+                                                    <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" onsubmit="return confirm('<?php esc_attr_e( '¿Eliminar este autorizado?', 'csfx' ); ?>');" class="csfx-inline-form">
+                                                        <?php wp_nonce_field( 'csfx-access-delete-' . $auth->id ); ?>
+                                                        <input type="hidden" name="action" value="csfx_access_delete" />
+                                                        <input type="hidden" name="id" value="<?php echo esc_attr( $auth->id ); ?>" />
+                                                        <button type="submit" class="csfx-button csfx-button--danger" title="<?php esc_attr_e( 'Eliminar al supervisor y sus claves asociadas.', 'csfx' ); ?>"><?php esc_html_e( 'Eliminar', 'csfx' ); ?></button>
+                                                    </form>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                    <div class="csfx-card__footer">
+                        <span class="csfx-card__footer-label"><?php esc_html_e( 'Endpoint de validación REST', 'csfx' ); ?></span>
+                        <code class="csfx-code-block"><?php echo esc_html( $endpoint ); ?></code>
+                    </div>
+                </div>
+            </div>
+
+            <div class="csfx-access-modal csfx-modal" data-csfx-modal hidden>
+                <div class="csfx-modal__backdrop" data-csfx-modal-close></div>
+                <div class="csfx-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="csfx-access-modal-title">
+                    <header class="csfx-modal__header">
+                        <div class="csfx-modal__identity">
+                            <h3 id="csfx-access-modal-title" data-csfx-modal-name></h3>
+                            <div class="csfx-modal__email" data-csfx-modal-email></div>
+                        </div>
+                        <button type="button" class="csfx-modal__close" data-csfx-modal-close aria-label="<?php esc_attr_e( 'Cerrar', 'csfx' ); ?>">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </header>
+                    <div class="csfx-modal__summary">
+                        <span class="csfx-status-badge" data-csfx-modal-status></span>
+                        <span class="csfx-modal__hint" data-csfx-modal-manual-note></span>
+                        <span class="csfx-modal__hint" data-csfx-modal-expires-display></span>
+                    </div>
+                    <div class="csfx-access-modal__meta csfx-modal__meta" data-csfx-modal-updated-label="<?php esc_attr_e( 'Última actualización:', 'csfx' ); ?>">
+                        <span data-csfx-modal-updated></span>
+                    </div>
+                    <div class="csfx-modal__body">
                         <section class="csfx-modal-section">
                             <h4><?php esc_html_e( 'Clave segura', 'csfx' ); ?></h4>
-                            <div class="csfx-modal-secure-row">
-                                <code class="csfx-modal-secure" data-csfx-modal-secure></code>
-                                <button type="button" class="csfx-modal-link" data-csfx-copy="secure"><?php esc_html_e( 'Copiar', 'csfx' ); ?></button>
+                            <div class="csfx-modal-secure">
+                                <code class="csfx-code-block csfx-code-block--contrast" data-csfx-modal-secure></code>
+                                <button type="button" class="csfx-button csfx-button--ghost csfx-button--icon" data-csfx-copy="secure" title="<?php esc_attr_e( 'Copiar clave segura al portapapeles', 'csfx' ); ?>">
+                                    <svg class="csfx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" aria-hidden="true">
+                                        <path d="M6 2.75h9.25a2 2 0 0 1 2 2V14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M4.75 6H11a2 2 0 0 1 2 2v7.25a2 2 0 0 1-2 2H4.75a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    <span><?php esc_html_e( 'Copiar', 'csfx' ); ?></span>
+                                </button>
                             </div>
                             <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" data-csfx-modal-form="regenerate" class="csfx-modal-inline-form">
                                 <input type="hidden" name="action" value="csfx_access_regenerate" />
                                 <input type="hidden" name="id" value="" data-csfx-modal-field="id-regenerate" />
                                 <input type="hidden" name="_wpnonce" value="" data-csfx-modal-field="nonce-regenerate" />
-                                <button type="submit" class="csfx-access-btn"><?php esc_html_e( 'Regenerar clave segura', 'csfx' ); ?></button>
+                                <button type="submit" class="csfx-button csfx-button--primary csfx-button--block"><?php esc_html_e( 'Regenerar clave segura', 'csfx' ); ?></button>
                             </form>
                         </section>
                         <section class="csfx-modal-section">
@@ -299,15 +327,15 @@ class CSFX_Access_Manager {
                                 <input type="hidden" name="action" value="csfx_access_update" />
                                 <input type="hidden" name="id" value="" data-csfx-modal-field="id-manual" />
                                 <input type="hidden" name="_wpnonce" value="" data-csfx-modal-field="nonce-update" />
-                                <label class="csfx-modal-label">
-                                    <span><?php esc_html_e( 'PIN o código del supervisor', 'csfx' ); ?></span>
-                                    <input type="text" name="manual_key" maxlength="32" autocomplete="off" data-csfx-modal-input="manual" />
+                                <label class="csfx-modal-field">
+                                    <span class="csfx-modal-field__label"><?php esc_html_e( 'PIN o código del supervisor', 'csfx' ); ?></span>
+                                    <input type="text" name="manual_key" maxlength="32" autocomplete="off" placeholder="<?php esc_attr_e( 'PIN o código del supervisor', 'csfx' ); ?>" data-csfx-modal-input="manual" />
                                 </label>
                                 <div class="csfx-modal-actions">
-                                    <button type="submit" class="csfx-access-btn csfx-access-btn--ghost"><?php esc_html_e( 'Guardar cambios', 'csfx' ); ?></button>
-                                    <button type="button" class="csfx-modal-link" data-csfx-clear-manual><?php esc_html_e( 'Eliminar clave manual', 'csfx' ); ?></button>
+                                    <button type="submit" class="csfx-button csfx-button--primary"><?php esc_html_e( 'Guardar cambios', 'csfx' ); ?></button>
+                                    <button type="button" class="csfx-button csfx-button--subtle csfx-button--danger-text" data-csfx-clear-manual title="<?php esc_attr_e( 'Eliminará la clave manual al guardar.', 'csfx' ); ?>"><?php esc_html_e( 'Eliminar clave manual', 'csfx' ); ?></button>
                                 </div>
-                                <p class="csfx-access-hint"><?php esc_html_e( 'Deja el campo vacío y guarda para eliminar la clave manual.', 'csfx' ); ?></p>
+                                <p class="csfx-modal-note"><?php esc_html_e( 'Deja el campo vacío y guarda para eliminar la clave manual.', 'csfx' ); ?></p>
                             </form>
                         </section>
                         <section class="csfx-modal-section">
@@ -316,26 +344,34 @@ class CSFX_Access_Manager {
                                 <input type="hidden" name="action" value="csfx_access_update" />
                                 <input type="hidden" name="id" value="" data-csfx-modal-field="id-expires" />
                                 <input type="hidden" name="_wpnonce" value="" data-csfx-modal-field="nonce-update-2" />
-                                <label class="csfx-modal-label">
-                                    <span><?php esc_html_e( 'Fecha de vencimiento', 'csfx' ); ?></span>
+                                <label class="csfx-modal-field csfx-modal-field--inline">
+                                    <span class="csfx-modal-field__label"><?php esc_html_e( 'Fecha de vencimiento', 'csfx' ); ?></span>
                                     <input type="date" name="expires_at" data-csfx-modal-input="expires" />
                                 </label>
                                 <div class="csfx-modal-actions">
-                                    <button type="submit" class="csfx-access-btn csfx-access-btn--ghost"><?php esc_html_e( 'Actualizar', 'csfx' ); ?></button>
-                                    <button type="button" class="csfx-modal-link" data-csfx-clear-expiry><?php esc_html_e( 'Quitar vencimiento', 'csfx' ); ?></button>
+                                    <button type="submit" class="csfx-button csfx-button--primary"><?php esc_html_e( 'Actualizar', 'csfx' ); ?></button>
+                                    <button type="button" class="csfx-button csfx-button--subtle" data-csfx-clear-expiry title="<?php esc_attr_e( 'Quita la fecha de vencimiento para mantener el acceso indefinido.', 'csfx' ); ?>"><?php esc_html_e( 'Quitar vencimiento', 'csfx' ); ?></button>
                                 </div>
                             </form>
                         </section>
                         <section class="csfx-modal-section">
                             <h4><?php esc_html_e( 'QR del supervisor', 'csfx' ); ?></h4>
                             <div class="csfx-modal-qr">
-                                <img src="" alt="" data-csfx-modal-qr />
-                                <a href="#" class="csfx-access-btn csfx-access-btn--ghost" data-csfx-modal-download download hidden><?php esc_html_e( 'Descargar QR', 'csfx' ); ?></a>
+                                <div class="csfx-modal-qr__preview">
+                                    <img src="" alt="" data-csfx-modal-qr />
+                                </div>
+                                <a href="#" class="csfx-button csfx-button--outline csfx-button--icon csfx-modal-qr__download" data-csfx-modal-download aria-disabled="true" tabindex="-1" data-available="0">
+                                    <svg class="csfx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" aria-hidden="true">
+                                        <path d="M10 3.5v9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M6.75 9.75 10 12.75l3.25-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M4.5 15.25h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                                    </svg>
+                                    <span><?php esc_html_e( 'Descargar QR', 'csfx' ); ?></span>
+                                </a>
                             </div>
                         </section>
                     </div>
                 </div>
-            </div>
             </div>
         </div>
         <?php
@@ -615,13 +651,33 @@ class CSFX_Access_Manager {
         <script>
         window.__CS_FX_ACCESS = <?php echo $payload ? $payload : 'null'; ?>;
         window.CSFX_ACCESS_ENDPOINT = <?php echo wp_json_encode( $endpoint, JSON_UNESCAPED_SLASHES ); ?>;
-        window.CSFX_ACCESS_DEBUG = true;
-        console.log('[CSFX Access] Inline script bootstrap', window.__CS_FX_ACCESS);
+        if (typeof window.CSFX_ACCESS_DEBUG === 'undefined') {
+          window.CSFX_ACCESS_DEBUG = <?php echo CS_FX_DEBUG ? 'true' : 'false'; ?>;
+        }
         (function(){
           if (typeof window === 'undefined') return;
           var snapshot = window.__CS_FX_ACCESS || {};
           var storageKey = 'csfx_access_snapshot';
-          var debugSeed = true;
+          var debugSeed = <?php echo CS_FX_DEBUG ? 'true' : 'false'; ?>;
+
+          function debugLog() {
+            var enabled = debugSeed;
+            if (typeof window.CSFX_ACCESS_DEBUG !== 'undefined') {
+              enabled = !!window.CSFX_ACCESS_DEBUG;
+            } else if (!enabled && typeof window.CSFX_DEBUG !== 'undefined') {
+              enabled = !!window.CSFX_DEBUG;
+            }
+            if (!enabled) {
+              return;
+            }
+            try {
+              if (arguments.length === 1) {
+                console.log(arguments[0]);
+              } else {
+                console.log.apply(console, arguments);
+              }
+            } catch (err) {}
+          }
 
           function loadSnapshot(){
             try {
@@ -640,7 +696,66 @@ class CSFX_Access_Manager {
             } catch (err) {}
           }
 
-          console.log('[CSFX Access] Inline script attached', snapshot);
+          var supervisorStorageKey = 'csfx_last_supervisor';
+
+          function loadSupervisorRecord(){
+            try {
+              var raw = null;
+              if (typeof sessionStorage !== 'undefined') {
+                raw = sessionStorage.getItem(supervisorStorageKey);
+              }
+              if (!raw && typeof localStorage !== 'undefined') {
+                raw = localStorage.getItem(supervisorStorageKey);
+              }
+              if (!raw) return null;
+              return JSON.parse(raw);
+            } catch (err) {
+              return null;
+            }
+          }
+
+          function persistSupervisorRecord(record){
+            if (!record || typeof record !== 'object') return;
+            window.CSFX_LAST_SUPERVISOR = record;
+            try {
+              if (typeof sessionStorage !== 'undefined') {
+                sessionStorage.setItem(supervisorStorageKey, JSON.stringify(record));
+              }
+            } catch (errSess) {}
+            try {
+              if (typeof localStorage !== 'undefined') {
+                localStorage.setItem(supervisorStorageKey, JSON.stringify(record));
+              }
+            } catch (errLocal) {}
+            try {
+              document.dispatchEvent(new CustomEvent('csfx:supervisor-authorized', { detail: { supervisor: record } }));
+            } catch (errEvt) {}
+          }
+
+          function buildSupervisorRecord(entry, context){
+            context = context || {};
+            var source = entry || context.user || {};
+            if (!source || typeof source !== 'object') return null;
+            var record = {
+              id: typeof source.user_id !== 'undefined' ? source.user_id : (typeof source.id !== 'undefined' ? source.id : null),
+              name: source.user_name || source.user || source.name || '',
+              email: source.user_email || source.email || '',
+              via: context.via || 'local',
+              method: context.method || '',
+              authorized_at: new Date().toISOString()
+            };
+            if (typeof source.expires_at !== 'undefined' && source.expires_at) {
+              record.expires_at = source.expires_at;
+            }
+            return record;
+          }
+
+          var storedSupervisor = loadSupervisorRecord();
+          if (storedSupervisor) {
+            window.CSFX_LAST_SUPERVISOR = storedSupervisor;
+          }
+
+          debugLog('[CSFX Access] Inline script bootstrap', snapshot);
 
           if (!snapshot || !snapshot.list || !snapshot.list.length) {
             var stored = loadSnapshot();
@@ -772,10 +887,10 @@ class CSFX_Access_Manager {
                 expectedManual: entry.manual_hash || null
               });
               if (entry.secure_hash && computedSecure === entry.secure_hash) {
-                return entry;
+                return { entry: entry, method: 'secure', normalized: normalized };
               }
               if (entry.manual_hash && computedManual === entry.manual_hash) {
-                return entry;
+                return { entry: entry, method: 'manual', normalized: normalized };
               }
             }
             return null;
@@ -796,9 +911,16 @@ class CSFX_Access_Manager {
             debugLog('[CSFX Access] Snapshot actual', snapshot && snapshot.list ? snapshot.list : snapshot);
 
             Promise.resolve().then(function(){
-              var entry = findLocal(normalizedPin);
-              if (entry) {
-                debugLog('[CSFX Access] PIN validado localmente', entry);
+              var localMatch = findLocal(normalizedPin);
+              if (localMatch && localMatch.entry) {
+                debugLog('[CSFX Access] PIN validado localmente', localMatch.entry);
+                var localRecord = buildSupervisorRecord(localMatch.entry, {
+                  via: 'local',
+                  method: localMatch.method || ''
+                });
+                if (localRecord) {
+                  persistSupervisorRecord(localRecord);
+                }
                 detail.respond(true);
                 return;
               }
@@ -824,8 +946,33 @@ class CSFX_Access_Manager {
                   persistSnapshot(snapshot);
                   debugLog('[CSFX Access] Snapshot actualizado desde REST', snapshot.list);
                 }
-                debugLog('[CSFX Access] Resultado de validación REST', !!(json && json.valid));
-                detail.respond(!!(json && json.valid));
+                var isValid = !!(json && json.valid);
+                debugLog('[CSFX Access] Resultado de validación REST', isValid);
+                if (isValid) {
+                  var remoteSource = null;
+                  if (json.user && typeof json.user === 'object') {
+                    remoteSource = {
+                      user_id: json.user.id,
+                      user_name: json.user.name,
+                      user_email: json.user.email,
+                      expires_at: null
+                    };
+                  }
+                  if (!remoteSource && snapshot && Array.isArray(snapshot.list)) {
+                    for (var j = 0; j < snapshot.list.length; j++) {
+                      var candidate = snapshot.list[j];
+                      if (candidate && candidate.user_id) {
+                        remoteSource = candidate;
+                        break;
+                      }
+                    }
+                  }
+                  var remoteRecord = buildSupervisorRecord(remoteSource, { via: 'remote', method: (json && json.method) ? json.method : 'remote' });
+                  if (remoteRecord) {
+                    persistSupervisorRecord(remoteRecord);
+                  }
+                }
+                detail.respond(isValid);
               }).catch(function(){
                 debugLog('[CSFX Access] Error durante validación REST');
                 detail.respond(false);
@@ -1126,6 +1273,7 @@ class CSFX_Access_Manager {
                 'id'           => (int) $row->id,
                 'user_id'      => (int) $row->user_id,
                 'user_name'    => $user['name'],
+                'user_email'   => $user['email'],
                 'secure_hash'  => $secure_hash,
                 'secure_salt'  => $secure_salt,
                 'manual_hash'  => $manual_hash,
