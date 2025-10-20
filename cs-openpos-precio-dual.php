@@ -8,6 +8,13 @@
 
 if ( ! defined('ABSPATH') ) exit;
 
+if ( ! defined( 'CSFX_PLUGIN_FILE' ) ) {
+  define( 'CSFX_PLUGIN_FILE', __FILE__ );
+}
+if ( ! defined( 'CSFX_PLUGIN_VERSION' ) ) {
+  define( 'CSFX_PLUGIN_VERSION', '1.4.0' );
+}
+
 /* ====== CONFIG ====== */
 if ( ! defined('CS_FX_ORIGIN') )          define('CS_FX_ORIGIN', ''); // '' = autodetectar
 if ( ! defined('CS_FX_DEFAULT_REMOTE') )  define('CS_FX_DEFAULT_REMOTE', 'https://clubsamsve.com'); // fallback
@@ -38,6 +45,10 @@ if ( get_option('csfx_divisa_methods') === false )   update_option('csfx_divisa_
 if ( get_option('csfx_asset_version') === false )    update_option('csfx_asset_version', '2.3.4');
 if ( get_option('csfx_api_sslverify') === false )    update_option('csfx_api_sslverify', 1);
 if ( get_option('csfx_api_fallback_fox') === false ) update_option('csfx_api_fallback_fox', 0);
+
+require_once __DIR__ . '/includes/class-csfx-access-manager.php';
+register_activation_hook( CSFX_PLUGIN_FILE, array( 'CSFX_Access_Manager', 'install' ) );
+CSFX_Access_Manager::instance();
 
 // ================== ADMIN: MENÚ "Conf Tavox" SIEMPRE VISIBLE ==================
 // Creamos SIEMPRE un menú top-level. Además intentamos colgarlo en WooCommerce y (si existe) en OpenPOS.
@@ -873,6 +884,7 @@ add_filter('openpos_pos_footer_js', function($handles){
     wp_script_add_data('cs-fx', 'defer', true);
     // Boot inline para tener rate incluso en pantalla de login
     $fx = cs_fx_get_rate();
+    $access_manager = CSFX_Access_Manager::instance();
     $boot = [
         'enabled'   => true,
         'base'      => cs_fx_base_currency(),
@@ -899,6 +911,8 @@ add_filter('openpos_pos_footer_js', function($handles){
             'discountColor' => '#28a745',
             'usdColor'      => '#000000',
         ],
+        'accessSnapshot' => $access_manager->get_access_snapshot(),
+        'accessEndpoint' => rest_url( 'csfx/v1/access/validate' ),
     ];
     wp_add_inline_script('cs-fx', 'window.__CS_FX_BOOT = '. wp_json_encode($boot, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE) .';', 'before');
     add_action('wp_footer', function(){
@@ -908,6 +922,7 @@ add_filter('openpos_pos_footer_js', function($handles){
       $hide_tax = defined('CS_FX_HIDE_TAX') ? (bool) CS_FX_HIDE_TAX : true;
       $rate_url = esc_js( rest_url('csfx/v1/rate') );
       $disc_url = esc_js( rest_url('csfx/v1/discount') );
+      $access_url = esc_js( rest_url('csfx/v1/access/validate') );
       $opts = array(
         'hideTax' => $hide_tax,
         'divisaMethods' => csfx_get_divisa_methods(),
@@ -915,6 +930,7 @@ add_filter('openpos_pos_footer_js', function($handles){
       echo "<script>\n";
       echo "  window.CSFX_RATE_ENDPOINT = '" . $rate_url . "';\n";
       echo "  window.CSFX_DISCOUNT_ENDPOINT = '" . $disc_url . "';\n";
+      echo "  window.CSFX_ACCESS_ENDPOINT = '" . $access_url . "';\n";
       echo "  window.CSFX_OPTS = " . wp_json_encode($opts, JSON_UNESCAPED_UNICODE) . ";\n";
       echo "</script>";
     }, 99);

@@ -96,6 +96,8 @@
 
   var csfxCustomModalUI = null;
   var csfxExplainModalUI = null;
+  var csfxAuthWidget = null;
+  var csfxUpdatingReference = false;
   var csfxCustomModalState = {
     open: false,
     authorized: false,
@@ -105,12 +107,32 @@
     countdownTimeout: null
   };
 
-  var CSFX_NATIVE_STYLE_ID = 'csfx-hide-native-discounts';
-  var CSFX_NATIVE_STYLE_RULES = [
+  var CSFX_AUTH_DURATION_SECONDS = 120;
+  var CSFX_AUTH_INFO_DEFAULT = 'Los descuentos nativos se habilitarán por 2 minutos tras autorizar.';
+  var CSFX_AUTH_INFO_ACTIVE = 'Los descuentos nativos están habilitados temporalmente.';
+  var CSFX_AUTH_INFO_DISABLED = 'Los descuentos nativos permanecen ocultos. Solicita autorización para habilitarlos.';
+
+  var CSFX_NATIVE_STYLE_ID = 'csfx-hide-discounts';
+  var CSFX_NATIVE_GUARD_SELECTORS = [
     'button[mat-icon-button][aria-label*="Descu"]',
     '.cart-discount button',
-    '.mat-menu-panel button[aria-label*="Descu"]'
-  ].join(', ') + ' { display: none !important; }';
+    '.mat-menu-panel button[aria-label*="Descu"]',
+    '.product-discount-dialog button',
+    '.mat-dialog-container button[aria-label*="Descuento"]',
+    '.mat-dialog-container .discount-details-trigger',
+    '.mat-dialog-container .discount-details-sidenav',
+    '.csfx-guarded'
+  ];
+  var CSFX_NATIVE_STYLE_SELECTORS = [
+    '.mat-dialog-container .discount-details-trigger',
+    '.mat-dialog-container .discount-details-sidenav'
+  ];
+  var CSFX_NATIVE_GUARD_SELECTOR = CSFX_NATIVE_GUARD_SELECTORS.join(', ');
+  var CSFX_NATIVE_STYLE_RULES = CSFX_NATIVE_STYLE_SELECTORS.join(', ') + ' { display: none !important; pointer-events: none !important; }' +
+    '\n.cart-discount button, button[mat-icon-button][aria-label*=\"Descu\"] { pointer-events: none !important; opacity: 0.35 !important; }';
+  var csfxDiscountObserver = null;
+  var csfxDiscountObserverPending = false;
+  var csfxManualDiscountBypassUntil = 0;
 
   function csfxInsertStyle(id, cssText) {
     if (typeof document === 'undefined') return null;
@@ -136,6 +158,9 @@
 
   function csfxHideNativeDiscountButtons() {
     csfxInsertStyle(CSFX_NATIVE_STYLE_ID, CSFX_NATIVE_STYLE_RULES);
+    csfxApplyDiscountRowGuard(document, true);
+    csfxStartDiscountObserver();
+    csfxManualDiscountBypassUntil = 0;
   }
 
   function csfxShowNativeDiscountButtons() {
@@ -144,6 +169,221 @@
     if (style && style.parentNode) {
       style.parentNode.removeChild(style);
     }
+    csfxApplyDiscountRowGuard(document, false);
+    csfxStopDiscountObserver();
+  }
+
+  function csfxMatchesDiscountTarget(node) {
+    if (!node || typeof node !== 'object') return false;
+    if (typeof node.closest === 'function') {
+      try {
+        var hit = node.closest(CSFX_NATIVE_GUARD_SELECTOR);
+        if (hit) return true;
+      } catch (_errClosest) {}
+    }
+    var current = node;
+    while (current && current !== document && current !== window) {
+      if (current.matches && current.matches(CSFX_NATIVE_GUARD_SELECTOR)) return true;
+      current = current.parentNode || current.host || null;
+    }
+    return false;
+  }
+
+  var csfxDiscountGuard = { handler: null };
+
+  function csfxBlockNativeDiscountActions() {
+    if (typeof document === 'undefined') return;
+    if (csfxDiscountGuard.handler) return;
+    csfxDiscountGuard.handler = function (ev) {
+      var target = ev.target;
+      if (!target) return;
+      if (csfxManualDiscountBypassUntil && Date.now() < csfxManualDiscountBypassUntil) {
+        return;
+      }
+      if (csfxMatchesDiscountTarget(target)) {
+        ev.stopPropagation();
+        ev.preventDefault();
+      }
+    };
+    document.addEventListener('click', csfxDiscountGuard.handler, true);
+  }
+
+  function csfxAllowNativeDiscountActions() {
+    if (typeof document === 'undefined') return;
+    if (!csfxDiscountGuard.handler) return;
+    document.removeEventListener('click', csfxDiscountGuard.handler, true);
+    csfxDiscountGuard.handler = null;
+    csfxManualDiscountBypassUntil = 0;
+  }
+
+  function csfxCollapseDualPanel(panel) {
+    if (typeof document === 'undefined') return;
+    var targets = [];
+    if (panel && typeof panel.closest === 'function') {
+      var badge = panel.closest('.csfx-badge');
+      if (badge) targets.push(badge);
+    }
+    if (!targets.length) {
+      document.querySelectorAll('.csfx-badge.open').forEach(function (node) {
+        if (targets.indexOf(node) === -1) targets.push(node);
+      });
+    }
+    targets.forEach(function (node) {
+      if (node && node.classList) {
+        node.classList.remove('open');
+      }
+    });
+  }
+
+  function csfxEnsureAuthWidget() {
+    if (typeof document === 'undefined') return null;
+    if (csfxAuthWidget && csfxAuthWidget.root && document.body && document.body.contains(csfxAuthWidget.root)) {
+      return csfxAuthWidget;
+    }
+    if (!document.body) return null;
+    var root = document.createElement('div');
+    root.className = 'csfx-auth-widget';
+    var icon = document.createElement('span');
+    icon.className = 'csfx-auth-widget__icon';
+    icon.textContent = '⏳';
+    var info = document.createElement('div');
+    info.className = 'csfx-auth-widget__info';
+    var ref = document.createElement('span');
+    ref.className = 'csfx-auth-widget__ref';
+    ref.textContent = 'Ref. POS';
+    var timer = document.createElement('span');
+    timer.className = 'csfx-auth-widget__timer';
+    timer.textContent = 'Autorización expira en 0:00';
+    info.appendChild(ref);
+    info.appendChild(timer);
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'csfx-auth-widget__close';
+    closeBtn.textContent = 'Cerrar';
+    root.appendChild(icon);
+    root.appendChild(info);
+    root.appendChild(closeBtn);
+    document.body.appendChild(root);
+    closeBtn.addEventListener('click', function () {
+      csfxHideAuthWidget();
+      csfxDeactivateNativeDiscountControls();
+    });
+    csfxAuthWidget = { root: root, timer: timer, closeBtn: closeBtn, ref: ref, icon: icon };
+    csfxUpdateAuthorizationReferenceText();
+    return csfxAuthWidget;
+  }
+
+  function csfxShowAuthWidget() {
+    var widget = csfxEnsureAuthWidget();
+    if (!widget || !widget.root) return;
+    widget.root.setAttribute('data-open', 'true');
+    csfxUpdateAuthorizationReferenceText();
+    csfxUpdateAuthWidgetCountdown();
+  }
+
+  function csfxHideAuthWidget() {
+    if (!csfxAuthWidget || !csfxAuthWidget.root) return;
+    csfxAuthWidget.root.removeAttribute('data-open');
+    csfxAuthWidget.root.removeAttribute('data-active');
+    csfxAuthWidget.root.removeAttribute('data-tone');
+  }
+
+  function csfxUpdateAuthWidgetCountdown() {
+    if (!csfxAuthWidget || !csfxAuthWidget.timer) return;
+    var tone = '';
+    if (csfxCustomModalState.authorized && csfxCustomModalState.countdown > 0) {
+      csfxAuthWidget.timer.textContent = 'Autorización expira en ' + csfxFormatCountdown(csfxCustomModalState.countdown);
+      if (csfxAuthWidget.root) {
+        csfxAuthWidget.root.setAttribute('data-active', '1');
+      }
+      if (csfxCustomModalState.countdown <= 30) {
+        tone = 'danger';
+      } else if (csfxCustomModalState.countdown <= 60) {
+        tone = 'warn';
+      } else {
+        tone = 'safe';
+      }
+    } else {
+      csfxAuthWidget.timer.textContent = 'Autorización inactiva';
+      if (csfxAuthWidget.root) {
+        csfxAuthWidget.root.removeAttribute('data-active');
+      }
+    }
+    if (csfxAuthWidget.root) {
+      if (tone) {
+        csfxAuthWidget.root.setAttribute('data-tone', tone);
+      } else {
+        csfxAuthWidget.root.removeAttribute('data-tone');
+      }
+    }
+  }
+
+  function csfxApplyDiscountRowGuard(root, enable) {
+    if (typeof document === 'undefined') return;
+    if (!root) root = document;
+    if (!root.querySelectorAll) return;
+    if (!enable) {
+      root.querySelectorAll('.csfx-guarded').forEach(function (node) {
+        node.classList.remove('csfx-guarded');
+      });
+      return;
+    }
+    if (csfxCustomModalState && csfxCustomModalState.authorized) return;
+    var selectors = '.item-row, .mat-list-item, .discount-details-trigger, .discount-details-sidenav, .mat-dialog-container div, .mat-dialog-container span, .mat-dialog-container button';
+    var nodes = root.querySelectorAll(selectors);
+    nodes.forEach(function (node) {
+      if (!node || !node.textContent) return;
+      if (node.classList && node.classList.contains('csfx-guarded')) return;
+      var text = node.textContent.trim().toLowerCase();
+      if (!text) return;
+      if (text === 'descuento' || text.indexOf('descuento ') === 0 || text.indexOf(' descuento') !== -1) {
+        var target = null;
+        if (node.matches && node.matches('.item-row, .mat-list-item, .discount-details-trigger, .discount-details-sidenav')) {
+          target = node;
+        }
+        if (!target && typeof node.closest === 'function') {
+          target = node.closest('.item-row, .mat-list-item, .discount-details-trigger, .discount-details-sidenav');
+        }
+        if (!target || !target.classList) return;
+        target.classList.add('csfx-guarded');
+      }
+    });
+  }
+
+  function csfxStartDiscountObserver() {
+    if (csfxDiscountObserver || typeof MutationObserver === 'undefined' || typeof document === 'undefined') return;
+    if (!document.body) {
+      if (csfxDiscountObserverPending) return;
+      csfxDiscountObserverPending = true;
+      document.addEventListener('DOMContentLoaded', function handleCsfxGuard() {
+        document.removeEventListener('DOMContentLoaded', handleCsfxGuard);
+        csfxDiscountObserverPending = false;
+        csfxStartDiscountObserver();
+      });
+      return;
+    }
+    csfxDiscountObserverPending = false;
+    csfxDiscountObserver = new MutationObserver(function (mutations) {
+      if (csfxCustomModalState && csfxCustomModalState.authorized) return;
+      mutations.forEach(function (mutation) {
+        if (!mutation.addedNodes) return;
+        mutation.addedNodes.forEach(function (node) {
+          if (!node || node.nodeType !== 1) return;
+          csfxApplyDiscountRowGuard(node, true);
+        });
+      });
+    });
+    csfxDiscountObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function csfxStopDiscountObserver() {
+    if (!csfxDiscountObserver) {
+      csfxDiscountObserverPending = false;
+      return;
+    }
+    try { csfxDiscountObserver.disconnect(); } catch (_err) {}
+    csfxDiscountObserver = null;
+    csfxDiscountObserverPending = false;
   }
 
   function csfxFormatCountdown(seconds) {
@@ -154,6 +394,7 @@
   }
 
   csfxHideNativeDiscountButtons();
+  csfxBlockNativeDiscountActions();
 
   function csfxClearDiscountCountdown() {
     if (csfxCustomModalState.countdownInterval) {
@@ -164,15 +405,18 @@
       clearTimeout(csfxCustomModalState.countdownTimeout);
       csfxCustomModalState.countdownTimeout = null;
     }
+    csfxHideAuthWidget();
+    csfxUpdateAuthWidgetCountdown();
   }
 
   function csfxDeactivateNativeDiscountControls(options) {
     options = options || {};
-    csfxClearDiscountCountdown();
-    csfxCustomModalState.countdown = 0;
     csfxCustomModalState.authorized = false;
     csfxCustomModalState.pin = '';
+    csfxClearDiscountCountdown();
+    csfxCustomModalState.countdown = 0;
     csfxHideNativeDiscountButtons();
+    csfxBlockNativeDiscountActions();
     var ui = options.ui || csfxCustomModalUI;
     if (ui) {
       if (ui.countdown) {
@@ -180,7 +424,7 @@
         ui.countdown.removeAttribute('data-active');
       }
       if (ui.infoMessage && !options.silent) {
-        ui.infoMessage.textContent = 'Los descuentos nativos permanecen ocultos. Solicita autorización para habilitarlos.';
+        ui.infoMessage.textContent = options.infoMessage || CSFX_AUTH_INFO_DISABLED;
       }
       if (ui.pinInput) {
         ui.pinInput.disabled = false;
@@ -192,6 +436,7 @@
         csfxShowCustomFeedback(ui.authStatus, 'Los descuentos nativos fueron deshabilitados.', null);
       }
     }
+    csfxUpdateAuthWidgetCountdown();
   }
 
   function csfxBeginNativeDiscountWindow(ui, pin) {
@@ -199,8 +444,11 @@
     csfxClearDiscountCountdown();
     csfxCustomModalState.authorized = true;
     csfxCustomModalState.pin = pin;
-    csfxCustomModalState.countdown = 120;
+    csfxCustomModalState.countdown = CSFX_AUTH_DURATION_SECONDS;
     csfxShowNativeDiscountButtons();
+    csfxAllowNativeDiscountActions();
+    csfxCollapseDualPanel();
+    csfxShowAuthWidget();
     if (ui.pinInput) {
       ui.pinInput.value = '';
       ui.pinInput.disabled = true;
@@ -208,17 +456,20 @@
     if (ui.validateBtn) ui.validateBtn.disabled = true;
     if (ui.scanBtn) ui.scanBtn.disabled = true;
     if (ui.infoMessage) {
-      ui.infoMessage.textContent = 'Los descuentos nativos están habilitados temporalmente.';
+      ui.infoMessage.textContent = CSFX_AUTH_INFO_ACTIVE;
     }
     if (ui.authStatus) {
-      csfxShowCustomFeedback(ui.authStatus, 'Autorización confirmada. Puedes asignar descuentos por producto durante 2:00.', true);
+      csfxShowCustomFeedback(ui.authStatus, 'Autorización confirmada. Puedes asignar descuentos por producto durante ' + csfxFormatCountdown(CSFX_AUTH_DURATION_SECONDS) + '.', true);
     }
     var updateCountdown = function () {
-      if (!ui || !ui.countdown) return;
-      ui.countdown.setAttribute('data-active', '1');
-      ui.countdown.textContent = 'Tiempo restante: ' + csfxFormatCountdown(csfxCustomModalState.countdown);
+      if (ui && ui.countdown) {
+        ui.countdown.setAttribute('data-active', '1');
+        ui.countdown.textContent = 'Tiempo restante: ' + csfxFormatCountdown(csfxCustomModalState.countdown);
+      }
+      csfxUpdateAuthWidgetCountdown();
     };
     updateCountdown();
+    csfxCloseCustomDiscountModal({ keepAuthorized: true, silent: true });
     csfxCustomModalState.countdownInterval = setInterval(function () {
       if (!csfxCustomModalState.authorized) {
         csfxClearDiscountCountdown();
@@ -228,14 +479,14 @@
       updateCountdown();
       if (csfxCustomModalState.countdown <= 0) {
         csfxClearDiscountCountdown();
-        csfxDeactivateNativeDiscountControls({ ui: ui, silent: true });
+        csfxDeactivateNativeDiscountControls({ ui: ui });
         csfxCloseCustomDiscountModal();
       }
     }, 1000);
     csfxCustomModalState.countdownTimeout = setTimeout(function () {
-      csfxDeactivateNativeDiscountControls({ ui: ui, silent: true });
+      csfxDeactivateNativeDiscountControls({ ui: ui });
       csfxCloseCustomDiscountModal();
-    }, 120000);
+    }, CSFX_AUTH_DURATION_SECONDS * 1000);
   }
 
   function decodeSymbol(sym, fallback) {
@@ -398,10 +649,15 @@
   function csfxScanForRegisterId() {
     var now = Date.now();
     if (csfxCachedRegisterId && csfxCachedRegisterId.trim()) {
+      csfxUpdateAuthorizationReferenceText();
       return { id: csfxCachedRegisterId, source: csfxRegisterIdSource || 'cache' };
     }
     if (now - csfxRegisterScanAt < CSFX_REGISTER_SCAN_COOLDOWN) {
-      return csfxCachedRegisterId ? { id: csfxCachedRegisterId, source: csfxRegisterIdSource || 'cache' } : null;
+      if (csfxCachedRegisterId) {
+        csfxUpdateAuthorizationReferenceText();
+        return { id: csfxCachedRegisterId, source: csfxRegisterIdSource || 'cache' };
+      }
+      return null;
     }
     csfxRegisterScanAt = now;
     var sources = [];
@@ -483,16 +739,82 @@
         var src = sources[s];
         var remembered = csfxRememberRegisterId(src.value, src.source);
         if (remembered) {
+          csfxUpdateAuthorizationReferenceText();
           return { id: remembered, source: csfxRegisterIdSource || src.source };
         }
       }
     }
-    return csfxCachedRegisterId ? { id: csfxCachedRegisterId, source: csfxRegisterIdSource || 'cache' } : null;
+    if (csfxCachedRegisterId) {
+      csfxUpdateAuthorizationReferenceText();
+      return { id: csfxCachedRegisterId, source: csfxRegisterIdSource || 'cache' };
+    }
+    csfxUpdateAuthorizationReferenceText();
+    return null;
   }
 
   function csfxGuessRegisterId() {
     var found = csfxScanForRegisterId();
     return found ? found.id : null;
+  }
+
+  function csfxAuthorizationReference() {
+    var sources = [];
+    try {
+      var reg = csfxGuessRegisterId();
+      if (reg) {
+        sources.push('POS #' + reg);
+      }
+    } catch (_errRegRef) {}
+    try {
+      if (FX && FX.session && FX.session.cashdrawer && FX.session.cashdrawer.name) {
+        var drawerName = String(FX.session.cashdrawer.name || '').trim();
+        if (drawerName) sources.push(drawerName);
+      }
+    } catch (_errDrawerRef) {}
+    try {
+      if (FX && FX.session && FX.session.register_name) {
+        var registerName = String(FX.session.register_name || '').trim();
+        if (registerName) sources.push(registerName);
+      }
+    } catch (_errSessReg) {}
+    try {
+      if (FX && FX.session && FX.session.staff && FX.session.staff.display_name) {
+        var staffName = String(FX.session.staff.display_name || '').trim();
+        if (staffName) sources.push('Supervisor ' + staffName);
+      }
+    } catch (_errStaffRef) {}
+    var seen = {};
+    for (var i = 0; i < sources.length; i++) {
+      var label = sources[i];
+      if (!label) continue;
+      if (seen[label]) continue;
+      seen[label] = true;
+      return label;
+    }
+    return '';
+  }
+
+  function csfxUpdateAuthorizationReferenceText() {
+    if (csfxUpdatingReference) return;
+    csfxUpdatingReference = true;
+    try {
+      var ref = csfxAuthorizationReference();
+      var headerLabel = ref ? 'Ref. ' + ref : 'Referencia POS';
+      if (csfxCustomModalUI) {
+        if (csfxCustomModalUI.headerRef) {
+          csfxCustomModalUI.headerRef.textContent = headerLabel;
+          csfxCustomModalUI.headerRef.setAttribute('data-empty', ref ? 'false' : 'true');
+        }
+        if (csfxCustomModalUI.refText) {
+        csfxCustomModalUI.refText.textContent = ref ? 'Ref. ' + ref : 'Escanea el QR del supervisor';
+        }
+      }
+      if (csfxAuthWidget && csfxAuthWidget.ref) {
+        csfxAuthWidget.ref.textContent = ref ? 'Ref. ' + ref : 'Ref. POS';
+      }
+    } finally {
+      csfxUpdatingReference = false;
+    }
   }
 
   function csfxCartStorageKeyList() {
@@ -642,8 +964,7 @@
     if (!Array.isArray(value)) {
       var normalized = csfxNormalizeCartCandidate(value);
       if (normalized && typeof normalized === 'object') {
-        var items = csfxCollectCartItems(normalized);
-        if (items && items.length) return normalized;
+        if (csfxCountCartItems(normalized) > 0) return normalized;
       }
       if (csfxLooksLikeCartSkeleton(value)) {
         return value;
@@ -673,6 +994,27 @@
     return null;
   }
 
+  function csfxCountCartItems(cart) {
+    if (!cart || typeof cart !== 'object') return 0;
+    var total = 0;
+    var keys = ['items', 'cart_items', 'cartItems', 'products', 'product_items', 'lines', 'line_items'];
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      var value = cart[key];
+      if (!value) continue;
+      if (Array.isArray(value)) {
+        total += value.length;
+      } else if (typeof value === 'object') {
+        total += Object.keys(value).length;
+      }
+      if (total > 0) break;
+    }
+    if (!total && cart.items && typeof cart.items === 'object' && !Array.isArray(cart.items)) {
+      total = Object.keys(cart.items).length;
+    }
+    return total;
+  }
+
   function csfxInspectCandidate(value, source, svcRef, debug) {
     var type = value == null ? String(value) : typeof value;
     var normalized = null;
@@ -685,8 +1027,7 @@
     }
     if (normalized && typeof normalized === 'object') {
       try {
-        var items = csfxCollectCartItems(normalized);
-        if (Array.isArray(items)) itemsCount = items.length;
+        itemsCount = csfxCountCartItems(normalized);
       } catch (errItems) {
         error = error || errItems;
       }
@@ -1162,14 +1503,14 @@
       '.csfx-dual-metrics-label{display:flex;align-items:center;gap:6px;}',
       '.csfx-dual-metrics-help{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:#0d5ad6;color:#fff;font-size:11px;box-shadow:0 2px 4px rgba(11,106,212,.25);position:relative;cursor:help;}',
       '.csfx-dual-metrics-help::after{content:attr(data-tooltip);position:absolute;left:50%;top:calc(100% + 8px);transform:translateX(-50%);background:#0f172a;color:#fff;font-size:11px;font-weight:500;line-height:1.35;padding:6px 8px;border-radius:6px;opacity:0;pointer-events:none;white-space:normal;width:180px;box-shadow:0 8px 16px rgba(15,23,42,.25);transition:opacity .15s ease .3s;}',
-      '.csfx-dual-metrics-help::before{content:\"\";position:absolute;left:50%;top:100%;transform:translateX(-50%);border:6px solid transparent;border-top-color:#0f172a;opacity:0;transition:opacity .15s ease .3s;}',
+      '.csfx-dual-metrics-help::before{content:"";position:absolute;left:50%;top:100%;transform:translateX(-50%);border:6px solid transparent;border-top-color:#0f172a;opacity:0;transition:opacity .15s ease .3s;}',
       '.csfx-dual-metrics-help:hover::after,.csfx-dual-metrics-help:focus::after{opacity:1;transition-delay:.25s;}',
       '.csfx-dual-metrics-help:hover::before,.csfx-dual-metrics-help:focus::before{opacity:1;transition-delay:.25s;}',
       '.csfx-dual-metrics-value{font-size:16px;font-weight:700;color:#052c65;}',
       '.csfx-dual-helper{margin-top:8px;display:flex;align-items:center;gap:8px;font-size:12px;color:#0f172a;background:rgba(0,87,183,.08);padding:6px 10px;border-radius:9px;border:1px dashed rgba(0,87,183,.2);cursor:pointer;}',
       '.csfx-dual-helper-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:#0b6ad4;color:#fff;font-size:11px;box-shadow:0 2px 4px rgba(11,106,212,.25);position:relative;cursor:help;}',
       '.csfx-dual-helper-icon::after{content:attr(data-tooltip);position:absolute;left:50%;top:calc(100% + 8px);transform:translateX(-50%);background:#0f172a;color:#fff;font-size:11px;font-weight:500;line-height:1.35;padding:6px 8px;border-radius:6px;opacity:0;pointer-events:none;white-space:normal;width:200px;box-shadow:0 8px 16px rgba(15,23,42,.25);transition:opacity .15s ease .3s;}',
-      '.csfx-dual-helper-icon::before{content:\"\";position:absolute;left:50%;top:100%;transform:translateX(-50%);border:6px solid transparent;border-top-color:#0f172a;opacity:0;transition:opacity .15s ease .3s;}',
+      '.csfx-dual-helper-icon::before{content:"";position:absolute;left:50%;top:100%;transform:translateX(-50%);border:6px solid transparent;border-top-color:#0f172a;opacity:0;transition:opacity .15s ease .3s;}',
       '.csfx-dual-helper-icon:hover::after,.csfx-dual-helper-icon:focus::after{opacity:1;transition-delay:.25s;}',
       '.csfx-dual-helper-icon:hover::before,.csfx-dual-helper-icon:focus::before{opacity:1;transition-delay:.25s;}',
       '.csfx-dual-helper-label{font-size:12px;font-weight:600;color:#0f172a;}',
@@ -1208,27 +1549,33 @@
       '.csfx-badge-label{font-size:13px;font-weight:600;}',
       '.csfx-badge-content{background:#ffffff;color:#0f172a;padding:12px 14px;border-radius:0 0 12px 12px;display:none;font-size:13px;white-space:nowrap;box-shadow:0 16px 32px rgba(15,23,42,.25);border:1px solid rgba(15,23,42,.06);min-width:260px;}',
        '.csfx-badge.open .csfx-badge-content{display:block;}',
-      '.csfx-modal-backdrop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(15,23,42,.45);backdrop-filter:blur(3px);z-index:10001;}',
-      '.csfx-modal-backdrop[data-open=\"true\"]{display:flex;}',
-      '.csfx-modal{background:#ffffff;border-radius:16px;min-width:320px;max-width:520px;width:90%;box-shadow:0 18px 48px rgba(15,23,42,.35);overflow:hidden;font-family:inherit;}',
-      '.csfx-modal-header{background:#0057b7;color:#fff;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;}',
-      '.csfx-modal-header-title{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700;}',
-      '.csfx-modal-header-icon{display:inline-flex;width:28px;height:28px;border-radius:8px;background:rgba(255,255,255,.18);align-items:center;justify-content:center;font-size:16px;}',
-      '.csfx-modal-header-ref{font-size:12px;font-weight:600;opacity:.85;}',
-      '.csfx-modal-body{padding:18px 20px;display:flex;flex-direction:column;gap:16px;}',
-      '.csfx-auth-card{border:1px solid rgba(0,87,183,.22);background:rgba(0,87,183,.06);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;}',
-      '.csfx-auth-title{font-size:13px;font-weight:700;color:#0f172a;}',
-      '.csfx-auth-row{display:flex;gap:10px;align-items:center;}',
-      '.csfx-auth-row input{flex:1;padding:8px 12px;border-radius:8px;border:1px solid rgba(15,23,42,.12);font-size:14px;}',
-      '.csfx-auth-row input:focus{outline:none;border-color:#0057b7;box-shadow:0 0 0 2px rgba(0,87,183,.2);}',
-      '.csfx-auth-hint{font-size:12px;color:#334155;}',
+      '.csfx-modal-backdrop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(15,23,42,.45);backdrop-filter:blur(3px);padding:16px;z-index:10001;}',
+      '.csfx-modal-backdrop[data-open="true"]{display:flex;}',
+      '.csfx-modal-backdrop--custom{z-index:10002;background:rgba(15,23,42,.55);backdrop-filter:blur(5px);}',
+      '.csfx-modal-backdrop--custom .csfx-modal{pointer-events:auto;max-width:360px;width:min(360px,calc(100vw - 48px));box-shadow:0 26px 58px rgba(15,23,42,.32);}',
+      '.csfx-modal{background:#ffffff;border-radius:20px;width:min(360px,calc(100vw - 48px));box-shadow:0 18px 48px rgba(15,23,42,.35);overflow:hidden;font-family:inherit;}',
+      '.csfx-modal-header{background:linear-gradient(135deg,#0057b7,#0b6ad4);color:#fff;padding:18px 22px;display:flex;align-items:center;justify-content:space-between;gap:16px;cursor:pointer;}',
+      '.csfx-modal-header-title{display:flex;align-items:center;gap:12px;font-size:17px;font-weight:700;}',
+      '.csfx-modal-header-icon{display:inline-flex;width:32px;height:32px;border-radius:10px;background:rgba(255,255,255,.22);align-items:center;justify-content:center;font-size:18px;box-shadow:0 4px 12px rgba(0,0,0,.18);}',
+      '.csfx-modal-header-ref{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:rgba(15,23,42,.18);padding:4px 10px;border-radius:999px;white-space:nowrap;}',
+      '.csfx-modal-header-ref[data-empty="true"]{opacity:.75;background:rgba(255,255,255,.12);}',
+      '.csfx-modal-body{padding:22px 24px 24px;display:flex;flex-direction:column;gap:18px;}',
+      '.csfx-auth-card{border:1px solid rgba(15,23,42,.08);background:linear-gradient(135deg,rgba(0,87,183,.08),#fff);border-radius:16px;padding:16px 18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 14px 32px rgba(15,23,42,.12);}',
+      '.csfx-auth-title{font-size:14px;font-weight:700;color:#0f172a;}',
+      '.csfx-auth-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center;}',
+      '.csfx-auth-row input{flex:1 1 180px;padding:10px 14px;border-radius:12px;border:1px solid rgba(15,23,42,.12);font-size:15px;font-weight:600;background:#fff;transition:border-color .2s ease,box-shadow .2s ease;}',
+      '.csfx-auth-row input:focus{outline:none;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.18);}',
+      '.csfx-auth-hint{font-size:12px;color:#334155;line-height:1.5;}',
+      '.csfx-auth-ref-chip{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#0f172a;background:rgba(15,23,42,.06);padding:6px 12px;border-radius:999px;border:1px dashed rgba(15,23,42,.12);}',
+      '.csfx-auth-ref-icon{font-size:15px;}',
       '.csfx-auth-status{font-size:12px;font-weight:600;color:#334155;}',
       '.csfx-auth-status--ok{color:#0f766e;}',
       '.csfx-auth-status--error{color:#b91c1c;}',
-      '.csfx-auth-info{font-size:12px;color:#475569;line-height:1.4;}',
+      '.csfx-auth-info{font-size:12px;color:#475569;line-height:1.5;}',
       '.csfx-countdown{font-size:14px;font-weight:700;color:#0f172a;}',
-      '.csfx-countdown[data-active=\"1\"]{color:#b91c1c;}',
-      '.csfx-modal--info{max-width:420px;}',
+      '.csfx-countdown[data-active="1"]{color:#b91c1c;}',
+      '.csfx-guarded{display:none!important;pointer-events:none!important;}',
+      '.csfx-modal--info{max-width:420px;width:420px;min-width:320px;}',
       '.csfx-modal--info .csfx-modal-body{gap:14px;}',
       '.csfx-explain-body{display:flex;flex-direction:column;gap:12px;font-size:13px;color:#0f172a;}',
       '.csfx-explain-head{font-weight:700;color:#0b1f3a;}',
@@ -1237,7 +1584,28 @@
       '.csfx-explain-steps strong{color:#0b6ad4;}',
       '.csfx-explain-inline{font-weight:600;color:#072c59;}',
       '.csfx-explain-foot{font-size:12px;color:#475569;line-height:1.4;}',
-      '.csfx-modal-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:8px;}',
+      '.csfx-modal-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:4px;}',
+      '.csfx-btn--wide{padding:11px 20px;font-size:13px;font-weight:700;min-width:148px;}',
+      '.csfx-btn--link{background:rgba(37,99,235,.08);color:#0b6ad4;border:1px dashed rgba(37,99,235,.35);}',
+      '.csfx-btn--link:hover:not(:disabled){background:rgba(37,99,235,.14);}',
+      '.csfx-btn--primary{background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;box-shadow:0 10px 24px rgba(37,99,235,.28);}',
+      '.csfx-btn--primary:hover:not(:disabled){background:linear-gradient(135deg,#1d4ed8,#1e40af);box-shadow:0 12px 28px rgba(30,64,175,.32);}',
+      '.csfx-btn--ghost{background:rgba(15,23,42,.04);color:#0f172a;border:1px solid rgba(15,23,42,.12);}',
+      '.csfx-btn--ghost:hover:not(:disabled){background:rgba(15,23,42,.08);}',
+      '.csfx-auth-widget{position:fixed;top:20px;right:20px;z-index:10003;background:rgba(15,23,42,.94);color:#f8fafc;padding:12px 16px;border-radius:16px;box-shadow:0 22px 48px rgba(15,23,42,.35);display:none;align-items:center;gap:14px;font-size:13px;font-family:inherit;pointer-events:auto;min-width:220px;}',
+      '.csfx-auth-widget[data-open=\"true\"]{display:flex;}',
+      '.csfx-auth-widget[data-tone=\"safe\"]{background:rgba(15,23,42,.94);}',
+      '.csfx-auth-widget[data-tone=\"warn\"]{background:rgba(251,191,36,.18);color:#1f2937;}',
+      '.csfx-auth-widget[data-tone=\"danger\"]{background:rgba(239,68,68,.22);color:#1f2937;}',
+      '.csfx-auth-widget__icon{font-size:18px;opacity:.9;}',
+      '.csfx-auth-widget__info{display:flex;flex-direction:column;gap:2px;min-width:0;}',
+      '.csfx-auth-widget__ref{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#cbd5f5;font-weight:600;}',
+      '.csfx-auth-widget__timer{font-weight:700;font-size:14px;color:#38bdf8;}',
+      '.csfx-auth-widget[data-tone=\"safe\"] .csfx-auth-widget__timer{color:#34d399;}',
+      '.csfx-auth-widget[data-tone=\"warn\"] .csfx-auth-widget__timer{color:#f97316;}',
+      '.csfx-auth-widget[data-tone=\"danger\"] .csfx-auth-widget__timer{color:#ef4444;}',
+      '.csfx-auth-widget__close{background:rgba(248,250,252,.08);border:1px solid rgba(148,163,184,.45);color:#e2e8f0;border-radius:999px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s ease;white-space:nowrap;}',
+      '.csfx-auth-widget__close:hover{background:rgba(248,250,252,.18);color:#f8fafc;border-color:rgba(255,255,255,.55);}',
       // especificidad para evitar conflictos con CSS del POS
         /* Reglas específicas para el buscador (sin romper layout nativo) */
       '.csfx-chip{font-family:inherit;font-size:16px;font-weight:700;}',
@@ -2007,8 +2375,7 @@
       promise.then(function (payload) {
         var normalized = csfxNormalizeCartCandidate(payload);
         if (!normalized) return;
-        var items = csfxCollectCartItems(normalized);
-        if (items && items.length) {
+        if (csfxCountCartItems(normalized) > 0) {
           csfxRememberAsyncCart(normalized, sourceLabel);
         }
       }).catch(function () {});
@@ -2682,6 +3049,7 @@
       csfxDualLog('ui-discount:no-trigger', { amount: amount });
       return false;
     }
+    csfxManualDiscountBypassUntil = Date.now() + 1500;
     try { trigger.click(); } catch (_errClick) {}
     csfxDualLog('ui-discount:open', { amount: amount });
     var formatted = amount.toFixed(2).replace('.', ',');
@@ -3335,7 +3703,7 @@
       csfxUpdateDualPanel(panel);
     });
     confirm.addEventListener('click', function () { csfxHandleDualConfirm(panel); });
-    customBtn.addEventListener('click', function () { csfxOpenCustomDiscountModal(); });
+    customBtn.addEventListener('click', function () { csfxOpenCustomDiscountModal({ fromDualPanel: panel }); });
 
     csfxUpdateDualPanel(panel);
     return panel;
@@ -3641,7 +4009,7 @@
       return csfxCustomModalUI;
     }
     var backdrop = document.createElement('div');
-    backdrop.className = 'csfx-modal-backdrop';
+    backdrop.className = 'csfx-modal-backdrop csfx-modal-backdrop--custom';
     var modal = document.createElement('div');
     modal.className = 'csfx-modal';
     var header = document.createElement('div');
@@ -3658,6 +4026,7 @@
     var headerRef = document.createElement('span');
     headerRef.className = 'csfx-modal-header-ref';
     headerRef.textContent = 'Referencia POS';
+    headerRef.setAttribute('data-empty', 'true');
     header.appendChild(headerTitle);
     header.appendChild(headerRef);
     var body = document.createElement('div');
@@ -3671,21 +4040,31 @@
     var authHint = document.createElement('div');
     authHint.className = 'csfx-auth-hint';
     authHint.textContent = 'El encargado puede escanear su QR o ingresar la contraseña para habilitar descuentos por producto.';
+    var refChip = document.createElement('div');
+    refChip.className = 'csfx-auth-ref-chip';
+    var refIcon = document.createElement('span');
+    refIcon.className = 'csfx-auth-ref-icon';
+    refIcon.textContent = '🔐';
+    var refText = document.createElement('span');
+    refText.className = 'csfx-auth-ref-text';
+    refText.textContent = 'Escanea el QR del supervisor';
+    refChip.appendChild(refIcon);
+    refChip.appendChild(refText);
     var authRow = document.createElement('div');
     authRow.className = 'csfx-auth-row';
     var pinInput = document.createElement('input');
     pinInput.type = 'password';
-    pinInput.placeholder = 'Contraseña del encargado';
+    pinInput.placeholder = 'PIN o código del supervisor';
     pinInput.autocomplete = 'one-time-code';
     pinInput.inputMode = 'numeric';
     pinInput.maxLength = 12;
     var validateBtn = document.createElement('button');
     validateBtn.type = 'button';
-    validateBtn.className = 'csfx-btn csfx-btn--primary';
+    validateBtn.className = 'csfx-btn csfx-btn--primary csfx-btn--wide';
     validateBtn.textContent = 'Validar';
     var scanBtn = document.createElement('button');
     scanBtn.type = 'button';
-    scanBtn.className = 'csfx-btn csfx-btn--ghost';
+    scanBtn.className = 'csfx-btn csfx-btn--link';
     scanBtn.textContent = 'Escanear QR';
     authRow.appendChild(pinInput);
     authRow.appendChild(validateBtn);
@@ -3695,12 +4074,13 @@
     authStatus.textContent = 'Requiere autorización del encargado.';
     authCard.appendChild(authTitle);
     authCard.appendChild(authHint);
+    authCard.appendChild(refChip);
     authCard.appendChild(authRow);
     authCard.appendChild(authStatus);
 
     var infoMessage = document.createElement('div');
     infoMessage.className = 'csfx-auth-info';
-    infoMessage.textContent = 'Tras la autorización, los botones nativos de descuento estarán disponibles durante dos minutos.';
+    infoMessage.textContent = CSFX_AUTH_INFO_DEFAULT;
     var countdown = document.createElement('div');
     countdown.className = 'csfx-countdown';
     countdown.textContent = '';
@@ -3711,7 +4091,7 @@
     footer.className = 'csfx-modal-footer';
     var closeBtn = document.createElement('button');
     closeBtn.type = 'button';
-    closeBtn.className = 'csfx-btn csfx-btn--ghost';
+    closeBtn.className = 'csfx-btn csfx-btn--ghost csfx-btn--wide';
     closeBtn.textContent = 'Cerrar';
     footer.appendChild(closeBtn);
 
@@ -3726,13 +4106,16 @@
       backdrop: backdrop,
       modal: modal,
       header: header,
+      headerRef: headerRef,
       pinInput: pinInput,
       validateBtn: validateBtn,
       scanBtn: scanBtn,
       authStatus: authStatus,
       infoMessage: infoMessage,
       countdown: countdown,
-      closeBtn: closeBtn
+      closeBtn: closeBtn,
+      refChip: refChip,
+      refText: refText
     };
 
     backdrop.addEventListener('click', function (ev) {
@@ -3775,17 +4158,29 @@
       }
     });
 
+    csfxUpdateAuthorizationReferenceText();
     return csfxCustomModalUI;
   }
 
-  function csfxCloseCustomDiscountModal() {
+  function csfxCloseCustomDiscountModal(options) {
+    options = options || {};
     if (!csfxCustomModalUI || !csfxCustomModalUI.backdrop) return;
-    csfxDeactivateNativeDiscountControls({ ui: csfxCustomModalUI, silent: true });
+    if (!options.keepAuthorized) {
+      var silent = typeof options.silent === 'boolean' ? options.silent : true;
+      csfxDeactivateNativeDiscountControls({ ui: csfxCustomModalUI, silent: silent });
+    }
     csfxCustomModalUI.backdrop.removeAttribute('data-open');
     csfxCustomModalState.open = false;
   }
 
-  function csfxOpenCustomDiscountModal() {
+  function csfxOpenCustomDiscountModal(options) {
+    options = options || {};
+    csfxHideAuthWidget();
+    if (options.fromDualPanel) {
+      csfxCollapseDualPanel(options.fromDualPanel);
+    } else {
+      csfxCollapseDualPanel();
+    }
     var ui = csfxEnsureCustomDiscountModal();
     csfxCustomModalState.open = true;
     csfxDeactivateNativeDiscountControls({ ui: ui, silent: true });
@@ -3795,78 +4190,18 @@
     ui.scanBtn.disabled = false;
     csfxShowCustomFeedback(ui.authStatus, 'Requiere autorización del encargado.', null);
     if (ui.infoMessage) {
-      ui.infoMessage.textContent = 'Tras la autorización, los descuentos nativos estarán disponibles durante dos minutos.';
+      ui.infoMessage.textContent = CSFX_AUTH_INFO_DEFAULT;
     }
     if (ui.countdown) {
       ui.countdown.textContent = '';
       ui.countdown.removeAttribute('data-active');
     }
     ui.backdrop.setAttribute('data-open', 'true');
+    csfxUpdateAuthorizationReferenceText();
     setTimeout(function () {
       try { ui.pinInput.focus(); } catch (_errFocus) {}
     }, 60);
   }
-
-  function csfxCollectCartItems(cart) {
-    var items = [];
-    if (!cart || typeof cart !== 'object') return items;
-    var rawLists = [];
-    var keys = ['items', 'cart_items', 'cartItems', 'products', 'product_items', 'lines', 'line_items'];
-    for (var i = 0; i < keys.length; i++) {
-      var value = cart[keys[i]];
-      if (!value) continue;
-      if (Array.isArray(value)) {
-        rawLists = rawLists.concat(value);
-      } else if (typeof value === 'object') {
-        Object.keys(value).forEach(function (k) {
-          rawLists.push(value[k]);
-        });
-      }
-    }
-    if (!rawLists.length && cart.items && typeof cart.items === 'object') {
-      Object.keys(cart.items).forEach(function (k) { rawLists.push(cart.items[k]); });
-    }
-    rawLists.forEach(function (entry, idx) {
-      if (!entry || typeof entry !== 'object') return;
-      var unwrapKeys = ['item', 'item_data', 'data', 'product', 'product_data', 'cart_item'];
-      for (var u = 0; u < unwrapKeys.length; u++) {
-        var candidate = unwrapKeys[u];
-        if (entry && entry[candidate] && typeof entry[candidate] === 'object' && !Array.isArray(entry[candidate])) {
-          entry = Object.assign({}, entry, entry[candidate]);
-        }
-      }
-      var name = String(entry.name || entry.title || entry.label || entry.product_name || 'Producto sin nombre');
-      var sku = entry.sku || entry.product_sku || entry.productId || entry.id || entry.item_id || '';
-      var quantity = Number(entry.qty || entry.quantity || entry.qty_ordered || entry.qtyInCart || entry.qtyOrdered || 1);
-      if (!isFinite(quantity) || quantity <= 0) quantity = 1;
-      var unit = csfxToNumber(
-        entry.price || entry.base_price || entry.regular_price || entry.unit_price ||
-        entry.final_price || entry.base_final_price || entry.price_incl_tax ||
-        entry.priceInclTax || entry.price_inc_tax || entry.price_excl_tax || entry.priceExclTax
-      );
-      var total = csfxToNumber(
-        entry.row_total || entry.total || entry.row_total_incl_tax || entry.rowTotal ||
-        entry.line_total || entry.grand_total || entry.total_price || entry.lineTotal
-      );
-      if (isNaN(unit) && !isNaN(total) && quantity) {
-        unit = total / quantity;
-      }
-      if (isNaN(unit)) unit = csfxToNumber(entry.base_row_total) / (quantity || 1);
-      if (isNaN(unit)) unit = 0;
-      if (isNaN(total)) total = round(unit * quantity, FX.decimals);
-      items.push({
-        id: entry.item_id || entry.id || entry.product_id || entry.cart_item_id || ('item-' + idx),
-        name: name,
-        sku: sku && String(sku),
-        qty: quantity,
-        unit: round(unit, FX.decimals),
-        total: round(total, FX.decimals),
-        original: entry
-      });
-    });
-    return items;
-  }
-
   function csfxValidateCustomDiscountPin(pin) {
     return new Promise(function (resolve) {
       var resolved = false;
@@ -3926,7 +4261,7 @@
         ui.validateBtn.disabled = false;
         ui.scanBtn.disabled = false;
         if (ui.infoMessage) {
-          ui.infoMessage.textContent = 'Tras la autorización, los descuentos nativos estarán disponibles durante dos minutos.';
+          ui.infoMessage.textContent = CSFX_AUTH_INFO_DEFAULT;
         }
         try { ui.pinInput.focus(); } catch (_errFocus) {}
       }
