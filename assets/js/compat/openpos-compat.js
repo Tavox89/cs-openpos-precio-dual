@@ -328,3 +328,76 @@
 
   global.OpenPOSCompat = compat;
 })(typeof window !== 'undefined' ? window : this);
+
+// === CSFX: Interceptor de checkout para inyectar nota de supervisor ===
+(function injectCsfxCheckoutInterceptor(){
+  var FLAG = '__csfxFetchPatched__';
+  if (typeof window === 'undefined' || !window.fetch || window.fetch[FLAG]) {
+    return;
+  }
+
+  function getCsfxSupervisorNote() {
+    try {
+      var raw = null;
+      if (typeof sessionStorage !== 'undefined') {
+        raw = sessionStorage.getItem('csfx_last_supervisor');
+      }
+      if (!raw && typeof localStorage !== 'undefined') {
+        raw = localStorage.getItem('csfx_last_supervisor');
+      }
+      if (!raw) return null;
+      var sup = JSON.parse(raw);
+      if (!sup || typeof sup !== 'object') return null;
+      var label = sup.name || sup.email || (sup.id ? ('ID ' + sup.id) : '');
+      if (!label) return null;
+      return 'CSFX · Supervisor ' + label + ' autorizó descuentos personalizados.';
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function shouldIntercept(url, method) {
+    if (!url || typeof url !== 'string') return false;
+    if (method && method.toUpperCase() !== 'POST') return false;
+    return /\/(openpos|op|wp-json)\//i.test(url) && /(order|checkout|create)/i.test(url);
+  }
+
+  var origFetch = window.fetch;
+  window.fetch = function(input, init){
+    try {
+      var url = typeof input === 'string' ? input : (input && input.url) || '';
+      var method = (init && init.method) || (typeof input === 'object' && input && input.method) || 'GET';
+      if (shouldIntercept(url, method) && init && typeof init.body === 'string') {
+        var bodyStr = init.body.trim();
+        if (bodyStr.charAt(0) === '{') {
+          var json = JSON.parse(bodyStr);
+          var note = getCsfxSupervisorNote();
+          if (note) {
+            var keyName = 'csfx_auth_supervisor_note';
+            var meta = Array.isArray(json.meta_data) ? json.meta_data.slice() : [];
+            meta = meta.filter(function(item){
+              if (!item) return false;
+              var k = item.key || item.name || item.code;
+              return k ? k !== keyName : true;
+            });
+            meta.push({ key: keyName, value: note });
+            json.meta_data = meta;
+            init.body = JSON.stringify(json);
+            if (window.CSFX_DEBUG_LOGS) {
+              try {
+                console.info('[CSFX] Nota de supervisor inyectada en checkout', { url: url, meta_data: meta });
+              } catch (_logErr) {}
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if (window.CSFX_DEBUG_LOGS) {
+        try { console.warn('[CSFX] Interceptor checkout error', String(err)); } catch (_warnErr) {}
+      }
+    }
+    return origFetch.apply(this, arguments);
+  };
+
+  window.fetch[FLAG] = true;
+})();
