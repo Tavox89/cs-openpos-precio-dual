@@ -704,9 +704,6 @@ class CSFX_Access_Manager {
               if (typeof sessionStorage !== 'undefined') {
                 raw = sessionStorage.getItem(supervisorStorageKey);
               }
-              if (!raw && typeof localStorage !== 'undefined') {
-                raw = localStorage.getItem(supervisorStorageKey);
-              }
               if (!raw) return null;
               return JSON.parse(raw);
             } catch (err) {
@@ -722,11 +719,6 @@ class CSFX_Access_Manager {
                 sessionStorage.setItem(supervisorStorageKey, JSON.stringify(record));
               }
             } catch (errSess) {}
-            try {
-              if (typeof localStorage !== 'undefined') {
-                localStorage.setItem(supervisorStorageKey, JSON.stringify(record));
-              }
-            } catch (errLocal) {}
             try {
               document.dispatchEvent(new CustomEvent('csfx:supervisor-authorized', { detail: { supervisor: record } }));
             } catch (errEvt) {}

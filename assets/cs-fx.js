@@ -113,13 +113,15 @@
     'csfx_auth_supervisor_name',
     'csfx_auth_supervisor_email',
     'csfx_auth_supervisor_source',
-    'csfx_auth_supervisor_method',
-    'csfx_auth_supervisor_ref',
-    'csfx_auth_supervisor_time',
-    'csfx_auth_supervisor_expires',
-    'csfx_auth_session_id'
-  ];
-  var csfxSupervisorCache = null;
+  'csfx_auth_supervisor_method',
+  'csfx_auth_supervisor_ref',
+  'csfx_auth_supervisor_time',
+  'csfx_auth_supervisor_expires',
+  'csfx_auth_session_id',
+  'csfx_auth_supervisor_note'
+];
+var csfxSupervisorCache = null;
+var csfxLastLoggedSupervisorNote = '';
 
   function csfxReadSupervisorStorage() {
     try {
@@ -181,6 +183,21 @@
       var supervisor = Object.assign({}, ev.detail.supervisor);
       if (!supervisor.reference) {
         try { supervisor.reference = csfxAuthorizationReference(); } catch (_errRefAssign) {}
+      }
+      var label = supervisor.name ? supervisor.name : 'Supervisor sin nombre';
+      if (supervisor.id) {
+        label += ' (ID ' + supervisor.id + ')';
+      }
+      var preview = 'CSFX · Supervisor ' + label + ' autorizó descuentos personalizados.';
+      if (csfxLastLoggedSupervisorNote !== preview) {
+        csfxLastLoggedSupervisorNote = preview;
+        try {
+          console.info('[CSFX] Nota esperada: ' + preview, {
+            reference: supervisor.reference || null,
+            method: supervisor.method || supervisor.via || null,
+            time: supervisor.authorized_at || supervisor.authorizedAt || null
+          });
+        } catch (_errConsole) {}
       }
       csfxRememberSupervisor(supervisor);
     });
@@ -265,13 +282,13 @@
   }
 
   function csfxShowNativeDiscountButtons() {
-    if (typeof document === 'undefined') return;
-    var style = document.getElementById(CSFX_NATIVE_STYLE_ID);
-    if (style && style.parentNode) {
-      style.parentNode.removeChild(style);
-    }
-    csfxApplyDiscountRowGuard(document, false);
-    csfxStopDiscountObserver();
+  if (typeof document === 'undefined') return;
+  var style = document.getElementById(CSFX_NATIVE_STYLE_ID);
+  if (style && style.parentNode) {
+    style.parentNode.removeChild(style);
+  }
+  csfxApplyDiscountRowGuard(document, false);
+  csfxStopDiscountObserver();
   }
 
   function csfxMatchesDiscountTarget(node) {
@@ -533,10 +550,18 @@
       }
       if (ui.validateBtn) ui.validateBtn.disabled = false;
       if (ui.scanBtn) ui.scanBtn.disabled = false;
-      if (ui.authStatus && !options.silent) {
-        csfxShowCustomFeedback(ui.authStatus, 'Los descuentos nativos fueron deshabilitados.', null);
-      }
+    if (ui.authStatus && !options.silent) {
+      csfxShowCustomFeedback(ui.authStatus, 'Los descuentos nativos fueron deshabilitados.', null);
     }
+  }
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.removeItem(CSFX_SUPERVISOR_STORAGE_KEY);
+      }
+    } catch (_errClearStore) {}
+    csfxSupervisorCache = null;
+    csfxLastLoggedSupervisorNote = '';
+    try { window.CSFX_LAST_SUPERVISOR = null; } catch (_errWin) {}
     csfxUpdateAuthWidgetCountdown();
   }
 
@@ -1517,25 +1542,49 @@
   }
   function parsePrice(s) {
     /**
-     * Extrae un precio con decimales de una cadena. Se ignoran los
-     * identificadores numéricos sin decimales (IDs, SKUs) y los valores
-     * precedidos por el texto "Bs". Sólo se consideran números que
-     * contienen un separador decimal (punto o coma).
+     * Extrae un precio decimal de una cadena tomando el último separador
+     * encontrado (coma o punto) como separador decimal y eliminando el
+     * resto de separadores de miles. Se ignoran cadenas que representen
+     * montos en bolívares para evitar duplicar conversiones.
      * @param {string} s
      * @returns {number}
      */
     if (!s) return NaN;
-    var text = '' + s;
-    // descarta si aparece "Bs" cerca del número
+    var text = String(s).trim();
+    if (!/[0-9]/.test(text)) return NaN;
     if (/bs\s*[\d.,]/i.test(text)) return NaN;
-    // normaliza separadores de miles y decimales
-    var t = text.replace(/[^0-9,\.\-]/g, '');
-    // convierte coma decimal a punto decimal
-    t = t.replace(/,(\d{1,2})(?=\D|$)/, '.$1');
-    // sólo números con decimales (punto o coma)
-    var m = t.match(/-?\d+[\.,]\d{1,2}/);
-    if (!m) return NaN;
-    return parseFloat(m[0].replace(/,/g, '.'));
+
+    var sign = 1;
+    if (/^-/.test(text)) sign = -1;
+
+    var cleaned = text.replace(/[^0-9,.\-]/g, '');
+    cleaned = cleaned.replace(/-/g, '');
+    if (!cleaned) return NaN;
+
+    var lastComma = cleaned.lastIndexOf(',');
+    var lastDot = cleaned.lastIndexOf('.');
+    var sepIndex = Math.max(lastComma, lastDot);
+
+    if (sepIndex === -1) return NaN;
+
+    var integerPart = cleaned;
+    var decimalPart = '';
+    if (sepIndex !== -1) {
+      decimalPart = cleaned.substring(sepIndex + 1).replace(/[.,]/g, '');
+      integerPart = cleaned.substring(0, sepIndex);
+    }
+
+    integerPart = integerPart.replace(/[.,]/g, '');
+    if (!decimalPart) return NaN;
+
+    var normalised = integerPart || '0';
+    if (decimalPart) {
+      normalised += '.' + decimalPart;
+    }
+
+    var result = parseFloat(normalised);
+    if (!isFinite(result)) return NaN;
+    return sign * result;
   }
   function fmtBs(n) {
     try {
@@ -2852,7 +2901,7 @@
     return list.filter(function (item) {
       if (!item) return false;
       var key = item.key || item.name || item.code;
-      return key ? key.indexOf('csfx_') !== 0 : true;
+      return !!key;
     });
   }
 
@@ -2899,9 +2948,52 @@
       }
       targetCart.csfx_auth_supervisor_id = typeof supervisor.id !== 'undefined' ? supervisor.id : '';
       targetCart.csfx_auth_supervisor_name = supervisor.name || '';
+      var label = supervisor.name ? supervisor.name : 'Supervisor sin nombre';
+      if (supervisor.id) {
+        label += ' (ID ' + supervisor.id + ')';
+      }
+      var parts = [];
+      if (supervisor.via || supervisor.source) {
+        parts.push((supervisor.via || supervisor.source).charAt(0).toUpperCase() + (supervisor.via || supervisor.source).slice(1));
+      }
+      if (supervisor.method) {
+        parts.push(supervisor.method.charAt(0).toUpperCase() + supervisor.method.slice(1));
+      }
+      if (supervisor.reference) {
+        parts.push('Ref: ' + supervisor.reference);
+      }
+      if (supervisor.authorized_at || supervisor.authorizedAt) {
+        parts.push('Hora: ' + (supervisor.authorized_at || supervisor.authorizedAt));
+      }
+      var noteMessage = 'CSFX · Supervisor ' + label + ' autorizó descuentos personalizados.';
+      if (parts.length) {
+        noteMessage += ' (' + parts.join(' · ') + ')';
+      }
+      pushMeta('csfx_auth_supervisor_note', noteMessage);
+      targetCart.csfx_auth_supervisor_note = noteMessage;
+      if (!targetCart.meta || typeof targetCart.meta !== 'object') {
+        targetCart.meta = {};
+      }
+      targetCart.meta.csfx_auth_supervisor_note = noteMessage;
+      targetCart.meta.csfx_auth_supervisor_id = typeof supervisor.id !== 'undefined' ? supervisor.id : '';
+      targetCart.meta.csfx_auth_supervisor_name = supervisor.name || '';
+      if (csfxLastLoggedSupervisorNote !== noteMessage) {
+        csfxLastLoggedSupervisorNote = noteMessage;
+        try {
+          console.info('[CSFX] Nota preparada para supervisor: ' + noteMessage);
+        } catch (_errNoteConsole) {}
+      }
     } else {
       delete targetCart.csfx_auth_supervisor_id;
       delete targetCart.csfx_auth_supervisor_name;
+      delete targetCart.csfx_auth_supervisor_note;
+      meta = csfxRemoveMeta(meta, 'csfx_auth_supervisor_note');
+      if (targetCart.meta && typeof targetCart.meta === 'object') {
+        delete targetCart.meta.csfx_auth_supervisor_note;
+        delete targetCart.meta.csfx_auth_supervisor_id;
+        delete targetCart.meta.csfx_auth_supervisor_name;
+      }
+      csfxLastLoggedSupervisorNote = '';
     }
     targetCart.meta_data = meta;
     targetCart.metaData = meta;
@@ -3159,8 +3251,17 @@
         break;
       }
     }
-    if (!found) arr.push({ key: key, value: value });
-    return arr;
+  if (!found) arr.push({ key: key, value: value });
+  return arr;
+}
+
+  function csfxRemoveMeta(list, key) {
+    if (!Array.isArray(list)) return [];
+    return list.filter(function (item) {
+      if (!item) return false;
+      var itemKey = item.key || item.name || item.code;
+      return itemKey !== key;
+    });
   }
 
   /**
@@ -3428,6 +3529,16 @@
     if (cart) {
       csfxEnrichCartWithSupervisor(cart);
     }
+    if (cart && cart.csfx_auth_supervisor_note) {
+      if (csfxLastLoggedSupervisorNote !== cart.csfx_auth_supervisor_note) {
+        csfxLastLoggedSupervisorNote = cart.csfx_auth_supervisor_note;
+        try {
+          console.info('[CSFX] Persistiendo nota de supervisor en carrito:', cart.csfx_auth_supervisor_note);
+        } catch (_errPersistLog) {}
+      }
+    } else {
+      csfxLastLoggedSupervisorNote = '';
+    }
     var snapshot = {
       discount_amount: cart.discount_amount,
       final_discount_amount: cart.final_discount_amount,
@@ -3440,9 +3551,11 @@
       csfx_usd_paid: cart.csfx_usd_paid,
       csfx_discount_pct: cart.csfx_discount_pct,
       csfx_discount_value: cart.csfx_discount_value,
-      csfx_base_total: cart.csfx_base_total
+      csfx_base_total: cart.csfx_base_total,
+      csfx_auth_supervisor_note: cart.csfx_auth_supervisor_note
     };
     var keys = ['op_cart', 'op_cache_cart', 'op_local_cart', '_op_cart_data', 'op_cart_data', 'op_cart_v8', 'op_v5_cart', 'op_cart_backup', 'op_cart_latest', 'op_cart_store'];
+    var loggedStorageWrite = false;
     for (var k = 0; k < keys.length; k++) {
       try {
         var raw = localStorage.getItem(keys[k]);
@@ -3452,7 +3565,24 @@
         Object.keys(snapshot).forEach(function (prop) {
           if (typeof snapshot[prop] !== 'undefined') stored[prop] = snapshot[prop];
         });
+        var storedMeta = csfxRemoveMeta(stored.meta_data || stored.metaData || [], 'csfx_auth_supervisor_note');
+        if (cart.csfx_auth_supervisor_note) {
+          storedMeta = csfxUpsertMeta(storedMeta, 'csfx_auth_supervisor_note', cart.csfx_auth_supervisor_note);
+        }
+        stored.meta_data = storedMeta;
+        stored.metaData = storedMeta;
+        if (cart.csfx_auth_supervisor_note) {
+          stored.csfx_auth_supervisor_note = cart.csfx_auth_supervisor_note;
+        } else {
+          delete stored.csfx_auth_supervisor_note;
+        }
         localStorage.setItem(keys[k], JSON.stringify(stored));
+        if (!loggedStorageWrite) {
+          loggedStorageWrite = true;
+          try {
+            console.info('[CSFX] Actualizado localStorage (' + keys[k] + ') con nota de supervisor:', cart.csfx_auth_supervisor_note || null);
+          } catch (_errStorageLog) {}
+        }
       } catch (_err) {}
     }
     persistFxOfflineState({
@@ -4723,13 +4853,22 @@
   function refreshDiscount(cb){
     var url = (window.CSFX_DISCOUNT_ENDPOINT || '/wp-json/csfx/v1/discount') + '?ts=' + Date.now();
     fetch(url, { cache: 'no-store', credentials: 'same-origin' })
-      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(r){
+        if (!r || !r.ok) throw new Error('discount_fetch_failed');
+        return r.json();
+      })
       .then(function(j){
-        FX.disc = {
-          active: !!(j && j.active && Number(j.percent) > 0),
-          percent: Number(j && j.percent || 0)
-        };
-        persistFxOfflineState({ disc: FX.disc });
+        var hasPercent = j && typeof j.percent !== 'undefined';
+        var percent = hasPercent ? Number(j.percent) : NaN;
+        if (hasPercent && isFinite(percent)) {
+          FX.disc = {
+            active: !!(j.active && percent > 0),
+            percent: percent
+          };
+          persistFxOfflineState({ disc: FX.disc });
+        } else {
+          hydrateFxDiscountFromOffline();
+        }
         ensureBadge();
         cb && cb();
       })

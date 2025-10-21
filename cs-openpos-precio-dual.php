@@ -330,282 +330,116 @@ function csfx_parse_decimal($value){
   return (float) $value;
 }
 
-function csfx_collect_dual_discount_request(){
-  $pairs = csfx_extract_request_meta_pairs('csfx_');
-  if (empty($pairs)) return null;
-  $meta_out = array();
-  foreach ($pairs as $key => $value) {
-    $meta_out[$key] = is_scalar($value) ? wc_clean((string) $value) : '';
+function csfx_collect_supervisor_request_meta() {
+  $pairs = csfx_extract_request_meta_pairs( 'csfx_' );
+  if ( empty( $pairs ) ) {
+    return array();
   }
-  $usd_paid = isset($meta_out['csfx_usd_paid']) ? csfx_parse_decimal($meta_out['csfx_usd_paid']) : null;
-  $pct_raw = isset($meta_out['csfx_discount_pct']) ? csfx_parse_decimal($meta_out['csfx_discount_pct']) : null;
-  $disc_val = isset($meta_out['csfx_discount_value']) ? csfx_parse_decimal($meta_out['csfx_discount_value']) : null;
-  $base_total = isset($meta_out['csfx_base_total']) ? csfx_parse_decimal($meta_out['csfx_base_total']) : null;
-
-  if ($usd_paid !== null) {
-    $meta_out['csfx_usd_paid'] = wc_format_decimal($usd_paid, 4);
-  } else {
-    unset($meta_out['csfx_usd_paid']);
-  }
-  $pct_display = null;
-  $pct_decimal = null;
-  if ($pct_raw !== null) {
-    $pct_display = $pct_raw;
-    if ($pct_display > 1) {
-      $pct_decimal = $pct_display / 100;
-    } else {
-      $pct_decimal = $pct_display;
-      $pct_display = $pct_decimal * 100;
-    }
-    $meta_out['csfx_discount_pct'] = wc_format_decimal($pct_display, 4);
-  } else {
-    unset($meta_out['csfx_discount_pct']);
-  }
-  if ($disc_val !== null) {
-    $meta_out['csfx_discount_value'] = wc_format_decimal($disc_val, 4);
-  } else {
-    unset($meta_out['csfx_discount_value']);
-  }
-  if ($base_total !== null) {
-    $meta_out['csfx_base_total'] = wc_format_decimal($base_total, 4);
-  } else {
-    unset($meta_out['csfx_base_total']);
-  }
-
-  $note = '';
-  if ($usd_paid !== null && $disc_val !== null && $pct_display !== null) {
-    $gross = $usd_paid + $disc_val;
-    $note = sprintf(
-      'Descuento de precio dual: %s %% sobre %s USD, cliente pagó %s USD en divisas.',
-      wc_format_decimal($pct_display, 2),
-      wc_format_decimal($gross, 2),
-      wc_format_decimal($usd_paid, 2)
-    );
-  }
-
-  $warning = '';
-  if ($usd_paid !== null && $pct_decimal !== null && $disc_val !== null && $pct_decimal > 0 && $pct_decimal < 1) {
-    $expected = ($usd_paid / (1 - $pct_decimal)) - $usd_paid;
-    if (abs($expected - $disc_val) > 0.5) {
-      $warning = sprintf(
-        'CSFX dual discount mismatch: expected %.4f vs received %.4f (pct %.4f, paid %.4f)',
-        $expected,
-        $disc_val,
-        $pct_display,
-        $usd_paid
-      );
-    }
-  }
-
-  return array(
-    'meta' => $meta_out,
-    'note' => $note,
-    'warning' => $warning
+  $allowed = array(
+    'csfx_auth_supervisor_id',
+    'csfx_auth_supervisor_name',
+    'csfx_auth_supervisor_email',
+    'csfx_auth_supervisor_source',
+    'csfx_auth_supervisor_method',
+    'csfx_auth_supervisor_ref',
+    'csfx_auth_supervisor_time',
+    'csfx_auth_supervisor_expires',
+    'csfx_auth_session_id',
+    'csfx_auth_supervisor_note',
   );
-}
-
-if ( ! function_exists( 'csfx_price_plain' ) ) {
-  function csfx_price_plain( $amount, $currency = null ) {
-    if ( ! function_exists( 'wc_price' ) ) {
-      return (string) $amount;
+  $out = array();
+  foreach ( $allowed as $key ) {
+    if ( isset( $pairs[ $key ] ) ) {
+      $value = is_scalar( $pairs[ $key ] ) ? (string) $pairs[ $key ] : '';
+      $out[ $key ] = wc_clean( $value );
     }
-    $currency  = $currency ? $currency : get_woocommerce_currency();
-    $formatted = wc_price( $amount, array( 'currency' => $currency ) );
-    return trim( html_entity_decode( wp_strip_all_tags( $formatted ) ) );
   }
+  return $out;
 }
 
-if ( ! function_exists( 'csfx_format_usd_amount' ) ) {
-  function csfx_format_usd_amount( $amount ) {
-    return 'USD ' . wc_format_decimal( (float) $amount, 2 );
-  }
-}
-
-if ( ! function_exists( 'csfx_order_has_dual_discount' ) ) {
-  function csfx_order_has_dual_discount( $order ) {
+if ( ! function_exists( 'csfx_add_supervisor_note' ) ) {
+  function csfx_add_supervisor_note( WC_Order $order ) {
     if ( ! $order instanceof WC_Order ) {
-      return false;
-    }
-    $value = (float) $order->get_meta( 'csfx_discount_value', true );
-    $pct   = (float) $order->get_meta( 'csfx_discount_pct', true );
-    $note  = $order->get_meta( 'csfx_discount_note', true );
-    return $value > 0 || $pct > 0 || ! empty( $note );
-  }
-}
-
-if ( ! function_exists( 'csfx_add_dual_discount_note' ) ) {
-  function csfx_add_dual_discount_note( WC_Order $order ) {
-    if ( $order->get_meta( '_csfx_dual_note_logged', true ) ) {
       return;
     }
-    $value = (float) $order->get_meta( 'csfx_discount_value', true );
-    $pct   = (float) $order->get_meta( 'csfx_discount_pct', true );
-    $paid  = (float) $order->get_meta( 'csfx_usd_paid', true );
-    $base  = (float) $order->get_meta( 'csfx_base_total', true );
-    $note  = $order->get_meta( 'csfx_discount_note', true );
-    if ( $value <= 0 && $pct <= 0 && $paid <= 0 && $base <= 0 && empty( $note ) ) {
-      return;
+    $is_debug = defined( 'CS_FX_DEBUG' ) && CS_FX_DEBUG;
+    $logger   = null;
+    if ( $is_debug && function_exists( 'wc_get_logger' ) ) {
+      $logger = wc_get_logger();
     }
-    $lines = array();
-    if ( $pct > 0 ) {
-      $lines[] = '- Porcentaje aplicado: ' . wc_format_decimal( $pct, 2 ) . ' %';
-    }
-    if ( $base > 0 ) {
-      $lines[] = '- Base cubierta: ' . csfx_format_usd_amount( $base );
-    }
-    if ( $value > 0 ) {
-      $lines[] = '- Descuento otorgado: ' . csfx_format_usd_amount( $value );
-    }
-    if ( $paid > 0 ) {
-      $lines[] = '- Pago registrado en divisas: ' . csfx_format_usd_amount( $paid );
-    }
-    if ( $base > 0 && ( $value > 0 || $paid > 0 ) ) {
-      $remainder = $base - $value - $paid;
-      if ( abs( $remainder ) > 0.01 ) {
-        $lines[] = '- Saldo restante tras descuento: ' . csfx_format_usd_amount( max( 0, $remainder ) );
-      }
-      $net_total = $base - $value;
-      if ( $net_total > 0 ) {
-        $lines[] = '- Total luego del descuento: ' . csfx_format_usd_amount( $net_total );
-      }
-    }
-    if ( $note ) {
-      $lines[] = '- Nota POS: ' . $note;
-    }
-    if ( empty( $lines ) ) {
-      return;
-    }
-    $message = "CSFX · Resumen de descuento dual\n" . implode( "\n", $lines );
-    $order->add_order_note( $message, false, true );
-    $order->update_meta_data( '_csfx_dual_note_logged', 1 );
-  }
-}
-
-if ( ! function_exists( 'csfx_order_has_supervisor_meta' ) ) {
-  function csfx_order_has_supervisor_meta( WC_Order $order ) {
-    $name = trim( (string) $order->get_meta( 'csfx_auth_supervisor_name', true ) );
-    $id   = trim( (string) $order->get_meta( 'csfx_auth_supervisor_id', true ) );
-    return $name !== '' || $id !== '';
-  }
-}
-
-if ( ! function_exists( 'csfx_add_custom_discount_note' ) ) {
-  function csfx_add_custom_discount_note( WC_Order $order ) {
-    if ( $order->get_meta( '_csfx_custom_note_logged', true ) ) {
-      return;
-    }
-    if ( ! csfx_order_has_supervisor_meta( $order ) ) {
-      return;
-    }
-    $currency = $order->get_currency();
-    $supervisor = array(
-      'name'   => trim( (string) $order->get_meta( 'csfx_auth_supervisor_name', true ) ),
-      'id'     => trim( (string) $order->get_meta( 'csfx_auth_supervisor_id', true ) ),
-      'email'  => trim( (string) $order->get_meta( 'csfx_auth_supervisor_email', true ) ),
-      'source' => trim( (string) $order->get_meta( 'csfx_auth_supervisor_source', true ) ),
-      'method' => trim( (string) $order->get_meta( 'csfx_auth_supervisor_method', true ) ),
-      'ref'    => trim( (string) $order->get_meta( 'csfx_auth_supervisor_ref', true ) ),
-      'time'   => trim( (string) $order->get_meta( 'csfx_auth_supervisor_time', true ) ),
+    $context = array(
+      'source'   => 'csfx-supervisor',
+      'order_id' => $order->get_id(),
     );
-    $line_discounts = array();
-    $line_total     = 0.0;
-    foreach ( $order->get_items( 'line_item' ) as $item ) {
-      $subtotal = (float) $item->get_subtotal();
-      $total    = (float) $item->get_total();
-      $discount = $subtotal - $total;
-      if ( $discount <= 0.01 ) {
-        continue;
+    if ( $order->get_meta( '_csfx_supervisor_note_logged', true ) ) {
+      if ( $is_debug && $logger ) {
+        $logger->info( 'Nota ya registrada anteriormente.', $context );
       }
-      $line_total += $discount;
-      $product = $item->get_product();
-      $sku     = $product ? $product->get_sku() : '';
-      $line_discounts[] = array(
-        'name'     => $item->get_name(),
-        'sku'      => $sku,
-        'qty'      => $item->get_quantity(),
-        'subtotal' => $subtotal,
-        'total'    => $total,
-        'discount' => $discount,
+      return;
+    }
+    $name   = trim( (string) $order->get_meta( 'csfx_auth_supervisor_name', true ) );
+    $id     = trim( (string) $order->get_meta( 'csfx_auth_supervisor_id', true ) );
+    $source = trim( (string) $order->get_meta( 'csfx_auth_supervisor_source', true ) );
+    $method = trim( (string) $order->get_meta( 'csfx_auth_supervisor_method', true ) );
+    $ref    = trim( (string) $order->get_meta( 'csfx_auth_supervisor_ref', true ) );
+    $time   = trim( (string) $order->get_meta( 'csfx_auth_supervisor_time', true ) );
+    $prepared_message = trim( (string) $order->get_meta( 'csfx_auth_supervisor_note', true ) );
+
+    if ( $is_debug && $logger ) {
+      $logger->info(
+        'Metadatos capturados para supervisor.',
+        $context + array(
+          'name'   => $name,
+          'id'     => $id,
+          'source' => $source,
+          'method' => $method,
+          'ref'    => $ref,
+          'time'   => $time,
+        )
       );
     }
-    $order_discount_total = max( 0.0, (float) $order->get_discount_total() );
-    $dual_value           = max( 0.0, (float) $order->get_meta( 'csfx_discount_value', true ) );
-    $custom_total         = max( 0.0, $order_discount_total - $dual_value );
-    $global_manual        = max( 0.0, $custom_total - $line_total );
-    $supervised_total     = max( $custom_total, $line_total + $global_manual );
-    if ( $line_total <= 0.01 && $global_manual <= 0.01 && $supervised_total <= 0.01 ) {
+
+    if ( '' === $name && '' === $id ) {
+      if ( $is_debug && $logger ) {
+        $logger->warning( 'No se encontraron metadatos de supervisor. No se agregará nota.', $context );
+      }
       return;
     }
-    $lines = array();
-    $label = $supervisor['name'] ? $supervisor['name'] : __( 'Supervisor sin nombre', 'csfx' );
-    if ( $supervisor['id'] !== '' ) {
-      $label .= ' (ID ' . $supervisor['id'] . ')';
-    }
-    $lines[] = 'Supervisor: ' . $label;
-    if ( $supervisor['email'] ) {
-      $lines[] = 'Contacto: ' . $supervisor['email'];
-    }
-    $meta_parts = array();
-    if ( $supervisor['source'] ) {
-      $meta_parts[] = ucfirst( $supervisor['source'] );
-    }
-    if ( $supervisor['method'] ) {
-      $meta_parts[] = ucfirst( $supervisor['method'] );
-    }
-    if ( ! empty( $meta_parts ) ) {
-      $lines[] = 'Origen autorización: ' . implode( ' · ', $meta_parts );
-    }
-    if ( $supervisor['ref'] ) {
-      $lines[] = 'Referencia POS: ' . $supervisor['ref'];
-    }
-    if ( $supervisor['time'] ) {
-      $timestamp = strtotime( $supervisor['time'] );
-      if ( $timestamp ) {
-        $lines[] = 'Autorizado en: ' . wp_date( 'Y-m-d H:i', $timestamp );
+
+    if ( '' === $prepared_message ) {
+      $label = $name ? $name : __( 'Supervisor sin nombre', 'csfx' );
+      if ( $id !== '' ) {
+        $label .= ' (ID ' . $id . ')';
       }
-    }
-    if ( ! empty( $line_discounts ) ) {
-      $lines[] = 'Ajustes por producto:';
-      foreach ( $line_discounts as $ld ) {
-        $entry = '- ' . $ld['name'];
-        if ( $ld['sku'] ) {
-          $entry .= ' (SKU ' . $ld['sku'] . ')';
+
+      $details = array();
+      if ( $source ) {
+        $details[] = ucfirst( $source );
+      }
+      if ( $method ) {
+        $details[] = ucfirst( $method );
+      }
+      if ( $ref ) {
+        $details[] = 'Ref: ' . $ref;
+      }
+      if ( $time ) {
+        $timestamp = strtotime( $time );
+        if ( $timestamp ) {
+          $details[] = 'Hora: ' . wp_date( 'Y-m-d H:i', $timestamp );
         }
-        if ( $ld['qty'] && abs( $ld['qty'] - 1 ) > 0.001 ) {
-          $entry .= ' x' . wc_format_decimal( $ld['qty'], 2 );
-        }
-        $entry .= ': ' . csfx_price_plain( $ld['subtotal'], $currency ) . ' → ' . csfx_price_plain( $ld['total'], $currency );
-        $entry .= ' (desc ' . csfx_price_plain( $ld['discount'], $currency ) . ')';
-        $lines[] = $entry;
       }
-    } else {
-      $lines[] = 'Ajustes por producto: sin variaciones detectadas.';
-    }
-    if ( $global_manual > 0.01 ) {
-      $lines[] = 'Descuento global autorizado: ' . csfx_price_plain( $global_manual, $currency );
-    }
-    if ( $dual_value > 0.01 ) {
-      $lines[] = 'Descuento dual registrado aparte: ' . csfx_format_usd_amount( $dual_value );
-    }
-    if ( $supervised_total > 0.01 ) {
-      $lines[] = 'Total descuentos supervisados (POS): ' . csfx_price_plain( $supervised_total, $currency );
-    }
-    $lines[] = 'Total descuentos en la orden: ' . csfx_price_plain( $order_discount_total, $currency );
-    $coupons = $order->get_items( 'coupon' );
-    if ( ! empty( $coupons ) ) {
-      $coupon_labels = array();
-      foreach ( $coupons as $coupon_item ) {
-        $amount = abs( (float) $coupon_item->get_discount() );
-        $coupon_labels[] = $coupon_item->get_name() . ' (' . csfx_price_plain( $amount, $currency ) . ')';
-      }
-      if ( ! empty( $coupon_labels ) ) {
-        $lines[] = 'Cupones aplicados: ' . implode( ', ', $coupon_labels );
+
+      $prepared_message = 'CSFX · Supervisor ' . $label . ' autorizó descuentos personalizados.';
+      if ( ! empty( $details ) ) {
+        $prepared_message .= ' (' . implode( ' · ', $details ) . ')';
       }
     }
-    $lines[] = 'Observación: los montos reflejan todos los ajustes registrados por OpenPOS.';
-    $message = "CSFX · Descuento personalizado autorizado\n" . implode( "\n", $lines );
-    $order->add_order_note( $message, false, true );
-    $order->update_meta_data( '_csfx_custom_note_logged', 1 );
+
+    $order->add_order_note( $prepared_message, false, true );
+    $order->update_meta_data( '_csfx_supervisor_note_logged', 1 );
+    if ( $is_debug && $logger ) {
+      $logger->info( 'Nota de supervisor agregada.', $context + array( 'message' => $prepared_message ) );
+    }
   }
 }
 
@@ -613,28 +447,13 @@ function csfx_checkout_store_dual_discount_meta( $order, $data = null ){
   if ( ! is_a( $order, 'WC_Order' ) ) {
     return;
   }
-  $collected = csfx_collect_dual_discount_request();
-  if ( ! $collected ) {
-    return;
-  }
-  foreach ( $collected['meta'] as $key => $value ) {
-    $order->update_meta_data( $key, $value );
-  }
-  csfx_add_dual_discount_note( $order );
-  csfx_add_custom_discount_note( $order );
-  if ( ! empty( $collected['warning'] ) ) {
-    $logger = function_exists( 'wc_get_logger' ) ? wc_get_logger() : null;
-    if ( $logger ) {
-      $logger->warning(
-        $collected['warning'],
-        array(
-          'source'   => 'csfx-dual-discount',
-          'order_id' => $order->get_id(),
-        )
-      );
+  $request_meta = csfx_collect_supervisor_request_meta();
+  if ( ! empty( $request_meta ) ) {
+    foreach ( $request_meta as $key => $value ) {
+      $order->update_meta_data( $key, $value );
     }
-    $order->add_order_note( 'CSFX · Advertencia descuento dual: ' . $collected['warning'], false, true );
   }
+  csfx_add_supervisor_note( $order );
 }
 add_action( 'woocommerce_checkout_create_order', 'csfx_checkout_store_dual_discount_meta', 21, 2 );
 // csfx: fin descuento dual (backend)
