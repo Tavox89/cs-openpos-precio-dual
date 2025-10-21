@@ -365,28 +365,16 @@
     return proto === Object.prototype || proto === null;
   }
 
-  function extractBodyObject(payload) {
-    if (!payload) return null;
-    if (typeof payload === 'string') {
-      var trimmed = payload.trim();
-      if (!trimmed || trimmed.charAt(0) !== '{') return null;
-      try {
-        return { parsed: JSON.parse(trimmed), source: 'string' };
-      } catch (_parseErr) {
-        return null;
-      }
+  function parseJsonObject(value) {
+    if (typeof value !== 'string') return null;
+    var trimmed = value.trim();
+    if (!trimmed || trimmed.charAt(0) !== '{') return null;
+    try {
+      var parsed = JSON.parse(trimmed);
+      return (parsed && typeof parsed === 'object') ? parsed : null;
+    } catch (_errParse) {
+      return null;
     }
-    if (typeof payload === 'object') {
-      if (typeof FormData !== 'undefined' && payload instanceof FormData) return null;
-      if (typeof Blob !== 'undefined' && payload instanceof Blob) return null;
-      if (typeof ArrayBuffer !== 'undefined' && payload instanceof ArrayBuffer) return null;
-      if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView && ArrayBuffer.isView(payload)) return null;
-      if (typeof URLSearchParams !== 'undefined' && payload instanceof URLSearchParams) return null;
-      if (typeof ReadableStream !== 'undefined' && payload instanceof ReadableStream) return null;
-      if (!isPlainObject(payload)) return null;
-      return { parsed: payload, source: 'object' };
-    }
-    return null;
   }
 
   function shouldIntercept(method, obj) {
@@ -399,6 +387,139 @@
       }
     }
     return false;
+  }
+
+  function findOrderContext(method, payload) {
+    if (!method || method.toUpperCase() !== 'POST') return null;
+    if (!payload) return null;
+
+    function buildJsonContextFromObject(obj, source) {
+      if (!obj || typeof obj !== 'object') return null;
+      if (!shouldIntercept(method, obj)) return null;
+      return {
+        type: source,
+        target: obj,
+        ensureJson: true,
+        serialize: function() {
+          return JSON.stringify(obj);
+        }
+      };
+    }
+
+    function buildNestedOrderContext(container, nested, sourceLabel, stringifyNested) {
+      if (!nested || typeof nested !== 'object') return null;
+      if (!shouldIntercept(method, nested)) return null;
+      return {
+        type: sourceLabel,
+        target: nested,
+        ensureJson: true,
+        serialize: function() {
+          if (stringifyNested) {
+            container.order = JSON.stringify(nested);
+          } else {
+            container.order = nested;
+          }
+          return JSON.stringify(container);
+        }
+      };
+    }
+
+    function buildFormDataContext(form) {
+      if (typeof form.has !== 'function' || !form.has('order')) return null;
+      var raw = form.get('order');
+      if (typeof raw !== 'string') return null;
+      var orderObj = parseJsonObject(raw);
+      if (!orderObj || !shouldIntercept(method, orderObj)) return null;
+      return {
+        type: 'formdata',
+        target: orderObj,
+        ensureJson: false,
+        serialize: function() {
+          form.set('order', JSON.stringify(orderObj));
+          return form;
+        }
+      };
+    }
+
+    function buildUrlEncodedContext(params, shouldStringify) {
+      if (typeof params.has !== 'function' || !params.has('order')) return null;
+      var raw = params.get('order');
+      if (typeof raw !== 'string') return null;
+      var orderObj = parseJsonObject(raw);
+      if (!orderObj || !shouldIntercept(method, orderObj)) return null;
+      return {
+        type: shouldStringify ? 'urlencoded-string' : 'urlencoded-params',
+        target: orderObj,
+        ensureJson: false,
+        serialize: function() {
+          params.set('order', JSON.stringify(orderObj));
+          return shouldStringify ? params.toString() : params;
+        }
+      };
+    }
+
+    if (typeof payload === 'string') {
+      var jsonObj = parseJsonObject(payload);
+      if (jsonObj) {
+        var ctxFromJson = buildJsonContextFromObject(jsonObj, 'json-string');
+        if (ctxFromJson) return ctxFromJson;
+        if (jsonObj.order) {
+          if (typeof jsonObj.order === 'string') {
+            var nestedFromString = parseJsonObject(jsonObj.order);
+            if (nestedFromString) {
+              var nestedCtxString = buildNestedOrderContext(jsonObj, nestedFromString, 'json-nested-string', true);
+              if (nestedCtxString) return nestedCtxString;
+            }
+          } else if (isPlainObject(jsonObj.order)) {
+            var nestedCtxObj = buildNestedOrderContext(jsonObj, jsonObj.order, 'json-nested-object', false);
+            if (nestedCtxObj) return nestedCtxObj;
+          }
+        }
+      }
+      if (typeof URLSearchParams !== 'undefined') {
+        try {
+          var paramsFromString = new URLSearchParams(payload);
+          return buildUrlEncodedContext(paramsFromString, true);
+        } catch (_errParams) {
+          return null;
+        }
+      }
+      return null;
+    }
+
+    if (typeof payload === 'object') {
+      if (typeof FormData !== 'undefined' && payload instanceof FormData) {
+        return buildFormDataContext(payload);
+      }
+      if (typeof Blob !== 'undefined' && payload instanceof Blob) return null;
+      if (typeof ArrayBuffer !== 'undefined') {
+        if (payload instanceof ArrayBuffer) return null;
+        if (typeof ArrayBuffer.isView === 'function' && ArrayBuffer.isView(payload)) return null;
+      }
+      if (typeof URLSearchParams !== 'undefined' && payload instanceof URLSearchParams) {
+        return buildUrlEncodedContext(payload, false);
+      }
+      if (typeof ReadableStream !== 'undefined' && payload instanceof ReadableStream) return null;
+      if (!isPlainObject(payload)) return null;
+
+      var directContext = buildJsonContextFromObject(payload, 'json-object');
+      if (directContext) {
+        return directContext;
+      }
+
+      if (payload.order) {
+        if (typeof payload.order === 'string') {
+          var nestedParsed = parseJsonObject(payload.order);
+          if (nestedParsed) {
+            return buildNestedOrderContext(payload, nestedParsed, 'json-nested-string', true);
+          }
+        } else if (isPlainObject(payload.order)) {
+          return buildNestedOrderContext(payload, payload.order, 'json-nested-object', false);
+        }
+      }
+    }
+
+    return null;
   }
 
   function getSupervisorNote() {
@@ -484,17 +605,19 @@
       try {
         var method = (init && init.method) || (input && input.method) || 'GET';
         var bodyPayload = init && typeof init.body !== 'undefined' ? init.body : null;
-        var bodyInfo = extractBodyObject(bodyPayload);
-        if (bodyInfo && shouldIntercept(method, bodyInfo.parsed)) {
+        var context = bodyPayload ? findOrderContext(method, bodyPayload) : null;
+        if (context) {
           var note = getSupervisorNote();
           if (note) {
-            injectSupervisorMeta(bodyInfo.parsed, note);
+            injectSupervisorMeta(context.target, note);
             var nextInit = init ? Object.assign({}, init) : {};
-            nextInit.body = JSON.stringify(bodyInfo.parsed);
-            ensureJsonContentType(nextInit);
+            nextInit.body = context.serialize();
+            if (context.ensureJson) {
+              ensureJsonContentType(nextInit);
+            }
             arguments[1] = nextInit;
             var url = typeof input === 'string' ? input : (input && input.url) || '';
-            logInjection('fetch', url, bodyInfo.parsed.meta_data);
+            logInjection('fetch', url, context.target.meta_data);
           }
         }
       } catch (_errFetch) {
@@ -520,14 +643,16 @@
       var transformedBody = body;
       try {
         var method = this.__csfxMethod || 'GET';
-        var bodyInfo = extractBodyObject(body);
-        if (bodyInfo && shouldIntercept(method, bodyInfo.parsed)) {
+        var context = findOrderContext(method, body);
+        if (context) {
           var note = getSupervisorNote();
           if (note) {
-            injectSupervisorMeta(bodyInfo.parsed, note);
-            transformedBody = JSON.stringify(bodyInfo.parsed);
-            try { this.setRequestHeader('Content-Type', 'application/json'); } catch (_errHeader) {}
-            logInjection('xhr', this.__csfxUrl, bodyInfo.parsed.meta_data);
+            injectSupervisorMeta(context.target, note);
+            transformedBody = context.serialize();
+            if (context.ensureJson) {
+              try { this.setRequestHeader('Content-Type', 'application/json'); } catch (_errHeader) {}
+            }
+            logInjection('xhr', this.__csfxUrl, context.target.meta_data);
           }
         }
       } catch (_errSend) {
