@@ -356,10 +356,17 @@
     }
   }
 
-  function shouldIntercept(url, method) {
-    if (!url || typeof url !== 'string') return false;
-    if (method && method.toUpperCase() !== 'POST') return false;
-    return /\/(openpos|op|wp-json)\//i.test(url) && /(order|checkout|create)/i.test(url);
+  function shouldIntercept(method, bodyObj) {
+    if (!method || method.toUpperCase() !== 'POST') return false;
+    if (!bodyObj || typeof bodyObj !== 'object') return false;
+    var keys = Object.keys(bodyObj);
+    var markers = ['items', 'totals', 'grand_total', 'line_items', 'order_id'];
+    for (var i = 0; i < keys.length; i++) {
+      if (markers.indexOf(keys[i]) !== -1) {
+        return true;
+      }
+    }
+    return false;
   }
 
   var origFetch = window.fetch;
@@ -367,27 +374,37 @@
     try {
       var url = typeof input === 'string' ? input : (input && input.url) || '';
       var method = (init && init.method) || (typeof input === 'object' && input && input.method) || 'GET';
-      if (shouldIntercept(url, method) && init && typeof init.body === 'string') {
-        var bodyStr = init.body.trim();
+      var bodyObj = null;
+      var bodyStr = null;
+      if (init && typeof init.body === 'string') {
+        bodyStr = init.body.trim();
         if (bodyStr.charAt(0) === '{') {
-          var json = JSON.parse(bodyStr);
-          var note = getCsfxSupervisorNote();
-          if (note) {
-            var keyName = 'csfx_auth_supervisor_note';
-            var meta = Array.isArray(json.meta_data) ? json.meta_data.slice() : [];
-            meta = meta.filter(function(item){
-              if (!item) return false;
-              var k = item.key || item.name || item.code;
-              return k ? k !== keyName : true;
-            });
-            meta.push({ key: keyName, value: note });
-            json.meta_data = meta;
-            init.body = JSON.stringify(json);
-            if (window.CSFX_DEBUG_LOGS) {
-              try {
-                console.info('[CSFX] Nota de supervisor inyectada en checkout', { url: url, meta_data: meta });
-              } catch (_logErr) {}
-            }
+          try {
+            bodyObj = JSON.parse(bodyStr);
+          } catch (_parseErr) {
+            bodyObj = null;
+          }
+        }
+      }
+      if (shouldIntercept(method, bodyObj)) {
+        var note = getCsfxSupervisorNote();
+        if (note) {
+          var keyName = 'csfx_auth_supervisor_note';
+          var meta = Array.isArray(bodyObj.meta_data) ? bodyObj.meta_data.slice() : [];
+          meta = meta.filter(function(item){
+            if (!item) return false;
+            var k = item.key || item.name || item.code;
+            return k ? k !== keyName : true;
+          });
+          meta.push({ key: keyName, value: note });
+          bodyObj.meta_data = meta;
+          init = init || {};
+          init.body = JSON.stringify(bodyObj);
+          arguments[1] = init;
+          if (window.CSFX_DEBUG_LOGS) {
+            try {
+              console.info('[CSFX] Nota de supervisor inyectada en checkout', { url: url, meta_data: meta });
+            } catch (_logErr) {}
           }
         }
       }
