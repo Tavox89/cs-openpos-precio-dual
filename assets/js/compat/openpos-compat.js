@@ -341,6 +341,8 @@
   var FLAG_XHR = '__csfxXHRPatched__';
   var ORDER_MARKERS = ['items', 'line_items', 'totals', 'grand_total', 'order_id', 'discount_amount'];
   var NOTE_KEY = 'csfx_auth_supervisor_note';
+  var NOTE_QUEUE_KEY = 'csfx_note_queue';
+  var csfxNativeFetch = null;
 
   function markPatched(flag) {
     try { window[flag] = true; } catch (_errMark) {}
@@ -599,12 +601,246 @@
     } catch (_errLog) {}
   }
 
+  function logFallback(label, data) {
+    if (!window.CSFX_DEBUG_LOGS) return;
+    try {
+      console.info('[CSFX] ' + label, data || {});
+    } catch (_errFallbackLog) {}
+  }
+
+  function sanitizeId(value) {
+    if (value === undefined || value === null) return null;
+    var str = String(value);
+    return str === '' ? null : str;
+  }
+
+  function extractLocalOrderId(order) {
+    if (!order || typeof order !== 'object') return null;
+    var candidates = [
+      order.local_order_id,
+      order.localOrderId,
+      order.order_id,
+      order.orderId,
+      order.id,
+      order.increment_id,
+      order.incrementId,
+      order.reference_id,
+      order.referenceId
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      var id = sanitizeId(candidates[i]);
+      if (id) return id;
+    }
+    if (order.order && typeof order.order === 'object') {
+      return extractLocalOrderId(order.order);
+    }
+    return null;
+  }
+
+  function readQueue() {
+    if (typeof localStorage === 'undefined') return [];
+    try {
+      var raw = localStorage.getItem(NOTE_QUEUE_KEY);
+      if (!raw) return [];
+      var parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_errQueueRead) {
+      return [];
+    }
+  }
+
+  function saveQueue(queue) {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(NOTE_QUEUE_KEY, JSON.stringify(queue));
+    } catch (_errQueueSave) {}
+  }
+
+  function enqueueOfflineNote(note, localId) {
+    if (!note || typeof localStorage === 'undefined') return;
+    var entry = { note: note };
+    var id = sanitizeId(localId);
+    if (id) entry.local_order_id = id;
+    entry.timestamp = Date.now();
+    var queue = readQueue();
+    queue.push(entry);
+    saveQueue(queue);
+    logFallback('Nota de supervisor ENCOLADA offline', entry);
+  }
+
+  function isRestUrl(url) {
+    return typeof url === 'string' && url.indexOf('/wp-json/op/v1/') !== -1;
+  }
+
+  function isAdminAjaxUrl(url) {
+    return typeof url === 'string' && url.indexOf('admin-ajax.php') !== -1;
+  }
+
+  function csfxRequest(url, options) {
+    if (typeof csfxNativeFetch === 'function') {
+      return csfxNativeFetch.call(window, url, options || {});
+    }
+    if (typeof window.fetch === 'function') {
+      return window.fetch(url, options || {});
+    }
+    return new Promise(function(resolve, reject){
+      try {
+        var xhr = new XMLHttpRequest();
+        var opts = options || {};
+        var method = opts.method || 'GET';
+        xhr.open(method, url, true);
+        if (opts.headers && typeof opts.headers === 'object') {
+          for (var key in opts.headers) {
+            if (!Object.prototype.hasOwnProperty.call(opts.headers, key)) continue;
+            xhr.setRequestHeader(key, opts.headers[key]);
+          }
+        }
+        xhr.onload = function(){
+          var response = {
+            ok: xhr.status >= 200 && xhr.status < 300,
+            status: xhr.status,
+            json: function(){
+              try {
+                return Promise.resolve(JSON.parse(xhr.responseText || '{}'));
+              } catch (_errJson) {
+                return Promise.reject(_errJson);
+              }
+            }
+          };
+          resolve(response);
+        };
+        xhr.onerror = function(){ reject(new Error('Network error')); };
+        xhr.send(opts.body || null);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  function sendNoteViaRest(orderId, note, sourceTag, retryLocalId) {
+    var id = sanitizeId(orderId);
+    if (!id || !note) return Promise.resolve();
+    var payload = { order_id: id, note: note };
+    return csfxRequest('/wp-json/op/v1/order/add-note', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function(response){
+      logFallback('add-note fallback (REST)', { orderId: id, note: note, source: sourceTag || 'immediate', status: response && response.status });
+      return response;
+    }).catch(function(err){
+      if (window.CSFX_DEBUG_LOGS) {
+        try { console.warn('[CSFX] Error en fallback REST', err); } catch (_warnRest) {}
+      }
+      enqueueOfflineNote(note, retryLocalId || id);
+    });
+  }
+
+  function sendNoteViaAjax(orderId, note, sourceTag, retryLocalId) {
+    var id = sanitizeId(orderId);
+    if (!id || !note) return Promise.resolve();
+    var bodyString = '';
+    if (typeof URLSearchParams !== 'undefined') {
+      var params = new URLSearchParams();
+      params.set('action', 'openpos');
+      params.set('pos_action', 'save-order-note');
+      params.set('order_id', id);
+      params.set('note', note);
+      bodyString = params.toString();
+    } else {
+      bodyString = 'action=openpos&pos_action=save-order-note&order_id=' + encodeURIComponent(id) + '&note=' + encodeURIComponent(note);
+    }
+    return csfxRequest('/wp-admin/admin-ajax.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: bodyString
+    }).then(function(response){
+      logFallback('add-note fallback (AJAX)', { orderId: id, note: note, source: sourceTag || 'immediate', status: response && response.status });
+      return response;
+    }).catch(function(err){
+      if (window.CSFX_DEBUG_LOGS) {
+        try { console.warn('[CSFX] Error en fallback AJAX', err); } catch (_warnAjax) {}
+      }
+      enqueueOfflineNote(note, retryLocalId || id);
+    });
+  }
+
+  function flushOfflineNote(localId, systemId) {
+    var localKey = sanitizeId(localId);
+    var systemKey = sanitizeId(systemId);
+    if (!localKey || !systemKey) return;
+    var queue = readQueue();
+    if (!queue.length) return;
+    var remaining = [];
+    var flushed = [];
+    for (var i = 0; i < queue.length; i++) {
+      var entry = queue[i];
+      var entryLocal = entry && sanitizeId(entry.local_order_id);
+      if (entry && entryLocal && entryLocal === localKey) {
+        flushed.push(entry);
+      } else {
+        remaining.push(entry);
+      }
+    }
+    if (!flushed.length) return;
+    saveQueue(remaining);
+    for (var j = 0; j < flushed.length; j++) {
+      var item = flushed[j];
+      logFallback('add-note fallback (cola offline)', { local: localKey, system: systemKey, note: item.note });
+      sendNoteViaRest(systemKey, item.note, 'cola offline', localKey);
+    }
+  }
+
+  function extractResponseInfo(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    var root = payload;
+    if (root.response && typeof root.response === 'object') {
+      root = root.response;
+    }
+    var data = root;
+    if (data.data && typeof data.data === 'object') {
+      data = data.data;
+    }
+    var order = data.order && typeof data.order === 'object' ? data.order : data;
+    if (!order || typeof order !== 'object') return null;
+    var systemId = sanitizeId(order.system_order_id) || sanitizeId(data.system_order_id);
+    var orderId = sanitizeId(order.order_id) || sanitizeId(data.order_id) || systemId;
+    if (!orderId && !systemId) return null;
+    var localId = sanitizeId(order.order_id) || sanitizeId(data.order_id) || sanitizeId(order.local_order_id);
+    return {
+      orderId: systemId || orderId,
+      systemOrderId: systemId || null,
+      localOrderId: localId || null
+    };
+  }
+
+  function handleResponseForNote(state, payload) {
+    if (!state || !state.note) return;
+    var info = extractResponseInfo(payload);
+    if (!info) return;
+    if (isRestUrl(state.url)) {
+      sendNoteViaRest(info.orderId, state.note, state.transport || 'response', state.localOrderId || info.localOrderId);
+    } else if (isAdminAjaxUrl(state.url)) {
+      sendNoteViaAjax(info.orderId, state.note, state.transport || 'response', state.localOrderId || info.localOrderId);
+    } else {
+      sendNoteViaRest(info.orderId, state.note, state.transport || 'response', state.localOrderId || info.localOrderId);
+    }
+    if (info.systemOrderId && info.localOrderId) {
+      flushOfflineNote(info.localOrderId, info.systemOrderId);
+    } else if (info.systemOrderId && state.localOrderId) {
+      flushOfflineNote(state.localOrderId, info.systemOrderId);
+    }
+  }
+
   if (window.fetch && !hasBeenPatched(FLAG_FETCH)) {
+    csfxNativeFetch = window.fetch;
     var originalFetch = window.fetch;
     window.fetch = function(input, init) {
+      var noteState = null;
+      var url = typeof input === 'string' ? input : (input && input.url) || '';
       try {
         var method = (init && init.method) || (input && input.method) || 'GET';
-        var bodyPayload = init && typeof init.body !== 'undefined' ? init.body : null;
+        var bodyPayload = init && Object.prototype.hasOwnProperty.call(init, 'body') ? init.body : null;
         var context = bodyPayload ? findOrderContext(method, bodyPayload) : null;
         if (context) {
           var note = getSupervisorNote();
@@ -616,8 +852,13 @@
               ensureJsonContentType(nextInit);
             }
             arguments[1] = nextInit;
-            var url = typeof input === 'string' ? input : (input && input.url) || '';
             logInjection('fetch', url, context.target.meta_data);
+            noteState = {
+              note: note,
+              url: url,
+              localOrderId: extractLocalOrderId(context.target),
+              transport: 'fetch'
+            };
           }
         }
       } catch (_errFetch) {
@@ -625,7 +866,37 @@
           try { console.warn('[CSFX] Error interceptando fetch', _errFetch); } catch (_warnErr) {}
         }
       }
-      return originalFetch.apply(this, arguments);
+      var fetchPromise = originalFetch.apply(this, arguments);
+      if (!noteState) {
+        return fetchPromise;
+      }
+      return fetchPromise.then(function(response){
+        if (!response) return response;
+        if (response.ok) {
+          try {
+            var cloned = response.clone();
+            if (typeof cloned.json === 'function') {
+              cloned.json().then(function(data){
+                handleResponseForNote(noteState, data);
+              }).catch(function(err){
+                if (window.CSFX_DEBUG_LOGS) {
+                  try { console.warn('[CSFX] Respuesta fetch sin JSON utilizable', err); } catch (_warnJson) {}
+                }
+              });
+            }
+          } catch (_errClone) {
+            if (window.CSFX_DEBUG_LOGS) {
+              try { console.warn('[CSFX] No se pudo clonar respuesta fetch', _errClone); } catch (_warnClone) {}
+            }
+          }
+        } else {
+          enqueueOfflineNote(noteState.note, noteState.localOrderId);
+        }
+        return response;
+      }).catch(function(error){
+        enqueueOfflineNote(noteState.note, noteState.localOrderId);
+        throw error;
+      });
     };
     window.fetch[FLAG_FETCH] = true;
     markPatched(FLAG_FETCH);
@@ -634,13 +905,60 @@
   if (window.XMLHttpRequest && window.XMLHttpRequest.prototype && !hasBeenPatched(FLAG_XHR)) {
     var xhrOpen = XMLHttpRequest.prototype.open;
     var xhrSend = XMLHttpRequest.prototype.send;
+
+    function attachXhrLifecycle(xhr) {
+      if (xhr.__csfxLifecycleAttached) return;
+      xhr.addEventListener('load', onXhrLoad);
+      xhr.addEventListener('error', onXhrError);
+      xhr.addEventListener('abort', onXhrError);
+      xhr.__csfxLifecycleAttached = true;
+    }
+
+    function parseXhrJSON(xhr) {
+      var text = '';
+      try { text = xhr.responseText; } catch (_errText) { return null; }
+      if (!text) return null;
+      try {
+        return JSON.parse(text);
+      } catch (_errParse) {
+        return null;
+      }
+    }
+
+    function onXhrLoad() {
+      var state = this.__csfxNoteState;
+      this.__csfxNoteState = null;
+      if (!state || !state.note) return;
+      if (this.status < 200 || this.status >= 300) {
+        enqueueOfflineNote(state.note, state.localOrderId);
+        return;
+      }
+      var payload = parseXhrJSON(this);
+      if (!payload) {
+        if (window.CSFX_DEBUG_LOGS) {
+          try { console.warn('[CSFX] Respuesta XHR sin JSON para fallback', state); } catch (_warnNoJson) {}
+        }
+        return;
+      }
+      handleResponseForNote(state, payload);
+    }
+
+    function onXhrError() {
+      var state = this.__csfxNoteState;
+      this.__csfxNoteState = null;
+      if (!state || !state.note) return;
+      enqueueOfflineNote(state.note, state.localOrderId);
+    }
+
     XMLHttpRequest.prototype.open = function(method, url) {
       this.__csfxMethod = method;
       this.__csfxUrl = url;
       return xhrOpen.apply(this, arguments);
     };
+
     XMLHttpRequest.prototype.send = function(body) {
       var transformedBody = body;
+      var noteState = null;
       try {
         var method = this.__csfxMethod || 'GET';
         var context = findOrderContext(method, body);
@@ -653,6 +971,12 @@
               try { this.setRequestHeader('Content-Type', 'application/json'); } catch (_errHeader) {}
             }
             logInjection('xhr', this.__csfxUrl, context.target.meta_data);
+            noteState = {
+              note: note,
+              url: this.__csfxUrl,
+              localOrderId: extractLocalOrderId(context.target),
+              transport: 'xhr'
+            };
           }
         }
       } catch (_errSend) {
@@ -661,6 +985,12 @@
         }
       } finally {
         this.__csfxMethod = null;
+      }
+      if (noteState) {
+        attachXhrLifecycle(this);
+        this.__csfxNoteState = noteState;
+      } else {
+        this.__csfxNoteState = null;
       }
       return xhrSend.call(this, transformedBody);
     };

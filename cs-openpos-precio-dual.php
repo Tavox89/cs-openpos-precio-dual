@@ -886,16 +886,26 @@ add_filter('op_get_login_cashdrawer_data', function($session){
 }, 50);
 
 /* ====== Encolar scripts sólo en la página del POS ====== */
-add_filter('openpos_pos_footer_js', function($handles){
-        // archivo de compatibilidad con cambios de la API 7.3.x
+add_filter('openpos_pos_header_js', function($handles){
     $compat_path = plugin_dir_path(__FILE__) . 'assets/js/compat/openpos-compat.js';
     $compat_ver  = '1.0.0';
-    if ( file_exists( $compat_path ) ) {
-        $compat_ver .= '.' . filemtime( $compat_path );
+    if (file_exists($compat_path)) {
+        $compat_ver .= '.' . filemtime($compat_path);
     }
     $compat_asset = plugins_url('assets/js/compat/openpos-compat.js', __FILE__);
-    wp_register_script('cs-openpos-compat', $compat_asset, [], $compat_ver, true);
-    wp_script_add_data('cs-openpos-compat', 'defer', true);
+    wp_register_script('cs-openpos-compat', $compat_asset, [], $compat_ver, false);
+    wp_script_add_data('cs-openpos-compat', 'defer', false);
+    wp_add_inline_script(
+        'cs-openpos-compat',
+        'if(window.CSFX_DEBUG_LOGS){console.info("[CSFX] bootstrap compat antes del POS");}',
+        'before'
+    );
+    array_unshift($handles, 'cs-openpos-compat');
+    return $handles;
+}, 5);
+
+add_filter('openpos_pos_footer_js', function($handles){
+        // archivo de compatibilidad con cambios de la API 7.3.x
     // versionado basado en filemtime para busting de cache
     $asset_path = plugin_dir_path(__FILE__) . 'assets/cs-fx.js';
     $ver = '1.0.0';
@@ -960,7 +970,6 @@ add_filter('openpos_pos_footer_js', function($handles){
     }, 99);
 
     // al final del POS añádeme
-    $handles[] = 'cs-openpos-compat';
     $handles[] = 'cs-fx';
     return $handles;
 }, 50);
