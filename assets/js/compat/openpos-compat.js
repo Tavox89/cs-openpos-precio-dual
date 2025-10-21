@@ -329,14 +329,79 @@
   global.OpenPOSCompat = compat;
 })(typeof window !== 'undefined' ? window : this);
 
-// === CSFX: Interceptor de checkout para inyectar nota de supervisor ===
-(function injectCsfxCheckoutInterceptor(){
-  var FLAG = '__csfxFetchPatched__';
-  if (typeof window === 'undefined' || !window.fetch || window.fetch[FLAG]) {
+// === CSFX: Interceptor robusto para inyectar nota de supervisor ===
+(function setupCsfxSupervisorInjection(){
+  'use strict';
+
+  if (typeof window === 'undefined') {
     return;
   }
 
-  function getCsfxSupervisorNote() {
+  var FLAG_FETCH = '__csfxFetchPatched__';
+  var FLAG_XHR = '__csfxXHRPatched__';
+  var ORDER_MARKERS = ['items', 'line_items', 'totals', 'grand_total', 'order_id', 'discount_amount'];
+  var NOTE_KEY = 'csfx_auth_supervisor_note';
+
+  function markPatched(flag) {
+    try { window[flag] = true; } catch (_errMark) {}
+  }
+
+  function hasBeenPatched(flag) {
+    if (flag === FLAG_FETCH) {
+      if (window[flag]) return true;
+      return Boolean(window.fetch && window.fetch[flag]);
+    }
+    if (flag === FLAG_XHR) {
+      if (window[flag]) return true;
+      var proto = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
+      return Boolean(proto && proto[flag]);
+    }
+    return Boolean(window[flag]);
+  }
+
+  function isPlainObject(value) {
+    if (!value || typeof value !== 'object') return false;
+    var proto = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+  }
+
+  function extractBodyObject(payload) {
+    if (!payload) return null;
+    if (typeof payload === 'string') {
+      var trimmed = payload.trim();
+      if (!trimmed || trimmed.charAt(0) !== '{') return null;
+      try {
+        return { parsed: JSON.parse(trimmed), source: 'string' };
+      } catch (_parseErr) {
+        return null;
+      }
+    }
+    if (typeof payload === 'object') {
+      if (typeof FormData !== 'undefined' && payload instanceof FormData) return null;
+      if (typeof Blob !== 'undefined' && payload instanceof Blob) return null;
+      if (typeof ArrayBuffer !== 'undefined' && payload instanceof ArrayBuffer) return null;
+      if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView && ArrayBuffer.isView(payload)) return null;
+      if (typeof URLSearchParams !== 'undefined' && payload instanceof URLSearchParams) return null;
+      if (typeof ReadableStream !== 'undefined' && payload instanceof ReadableStream) return null;
+      if (!isPlainObject(payload)) return null;
+      return { parsed: payload, source: 'object' };
+    }
+    return null;
+  }
+
+  function shouldIntercept(method, obj) {
+    if (!method || method.toUpperCase() !== 'POST') return false;
+    if (!obj || typeof obj !== 'object') return false;
+    var keys = Object.keys(obj);
+    for (var i = 0; i < keys.length; i++) {
+      if (ORDER_MARKERS.indexOf(keys[i]) !== -1) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function getSupervisorNote() {
     try {
       var raw = null;
       if (typeof sessionStorage !== 'undefined') {
@@ -351,70 +416,130 @@
       var label = sup.name || sup.email || (sup.id ? ('ID ' + sup.id) : '');
       if (!label) return null;
       return 'CSFX · Supervisor ' + label + ' autorizó descuentos personalizados.';
-    } catch (_e) {
+    } catch (_errNote) {
       return null;
     }
   }
 
-  function shouldIntercept(method, bodyObj) {
-    if (!method || method.toUpperCase() !== 'POST') return false;
-    if (!bodyObj || typeof bodyObj !== 'object') return false;
-    var keys = Object.keys(bodyObj);
-    var markers = ['items', 'totals', 'grand_total', 'line_items', 'order_id'];
-    for (var i = 0; i < keys.length; i++) {
-      if (markers.indexOf(keys[i]) !== -1) {
-        return true;
-      }
-    }
-    return false;
+  function injectSupervisorMeta(payload, note) {
+    var meta = Array.isArray(payload.meta_data) ? payload.meta_data.slice() : [];
+    meta = meta.filter(function(item){
+      if (!item) return false;
+      var key = item.key || item.name || item.code;
+      return key ? key !== NOTE_KEY : true;
+    });
+    meta.push({ key: NOTE_KEY, value: note });
+    payload.meta_data = meta;
   }
 
-  var origFetch = window.fetch;
-  window.fetch = function(input, init){
-    try {
-      var url = typeof input === 'string' ? input : (input && input.url) || '';
-      var method = (init && init.method) || (typeof input === 'object' && input && input.method) || 'GET';
-      var bodyObj = null;
-      var bodyStr = null;
-      if (init && typeof init.body === 'string') {
-        bodyStr = init.body.trim();
-        if (bodyStr.charAt(0) === '{') {
-          try {
-            bodyObj = JSON.parse(bodyStr);
-          } catch (_parseErr) {
-            bodyObj = null;
-          }
+  function ensureJsonContentType(init) {
+    if (!init) return;
+    if (!init.headers) {
+      init.headers = { 'Content-Type': 'application/json' };
+      return;
+    }
+    var headers = init.headers;
+    if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+      if (!headers.has('Content-Type')) {
+        headers.set('Content-Type', 'application/json');
+      }
+      return;
+    }
+    if (Array.isArray(headers)) {
+      var found = false;
+      for (var i = 0; i < headers.length; i++) {
+        var pair = headers[i];
+        if (pair && typeof pair[0] === 'string' && pair[0].toLowerCase() === 'content-type') {
+          found = true;
+          break;
         }
       }
-      if (shouldIntercept(method, bodyObj)) {
-        var note = getCsfxSupervisorNote();
-        if (note) {
-          var keyName = 'csfx_auth_supervisor_note';
-          var meta = Array.isArray(bodyObj.meta_data) ? bodyObj.meta_data.slice() : [];
-          meta = meta.filter(function(item){
-            if (!item) return false;
-            var k = item.key || item.name || item.code;
-            return k ? k !== keyName : true;
-          });
-          meta.push({ key: keyName, value: note });
-          bodyObj.meta_data = meta;
-          init = init || {};
-          init.body = JSON.stringify(bodyObj);
-          arguments[1] = init;
-          if (window.CSFX_DEBUG_LOGS) {
-            try {
-              console.info('[CSFX] Nota de supervisor inyectada en checkout', { url: url, meta_data: meta });
-            } catch (_logErr) {}
-          }
-        }
+      if (!found) {
+        headers = headers.slice();
+        headers.push(['Content-Type', 'application/json']);
+        init.headers = headers;
       }
-    } catch (err) {
-      if (window.CSFX_DEBUG_LOGS) {
-        try { console.warn('[CSFX] Interceptor checkout error', String(err)); } catch (_warnErr) {}
+      return;
+    }
+    var own = Object.prototype.hasOwnProperty;
+    for (var key in headers) {
+      if (!own.call(headers, key)) continue;
+      if (key && key.toLowerCase() === 'content-type') {
+        return;
       }
     }
-    return origFetch.apply(this, arguments);
-  };
+    init.headers = Object.assign({}, headers, { 'Content-Type': 'application/json' });
+  }
 
-  window.fetch[FLAG] = true;
+  function logInjection(source, url, meta) {
+    if (!window.CSFX_DEBUG_LOGS) return;
+    try {
+      console.info('[CSFX] Nota de supervisor inyectada', { transport: source, url: url || '', meta_data: meta });
+    } catch (_errLog) {}
+  }
+
+  if (window.fetch && !hasBeenPatched(FLAG_FETCH)) {
+    var originalFetch = window.fetch;
+    window.fetch = function(input, init) {
+      try {
+        var method = (init && init.method) || (input && input.method) || 'GET';
+        var bodyPayload = init && typeof init.body !== 'undefined' ? init.body : null;
+        var bodyInfo = extractBodyObject(bodyPayload);
+        if (bodyInfo && shouldIntercept(method, bodyInfo.parsed)) {
+          var note = getSupervisorNote();
+          if (note) {
+            injectSupervisorMeta(bodyInfo.parsed, note);
+            var nextInit = init ? Object.assign({}, init) : {};
+            nextInit.body = JSON.stringify(bodyInfo.parsed);
+            ensureJsonContentType(nextInit);
+            arguments[1] = nextInit;
+            var url = typeof input === 'string' ? input : (input && input.url) || '';
+            logInjection('fetch', url, bodyInfo.parsed.meta_data);
+          }
+        }
+      } catch (_errFetch) {
+        if (window.CSFX_DEBUG_LOGS) {
+          try { console.warn('[CSFX] Error interceptando fetch', _errFetch); } catch (_warnErr) {}
+        }
+      }
+      return originalFetch.apply(this, arguments);
+    };
+    window.fetch[FLAG_FETCH] = true;
+    markPatched(FLAG_FETCH);
+  }
+
+  if (window.XMLHttpRequest && window.XMLHttpRequest.prototype && !hasBeenPatched(FLAG_XHR)) {
+    var xhrOpen = XMLHttpRequest.prototype.open;
+    var xhrSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url) {
+      this.__csfxMethod = method;
+      this.__csfxUrl = url;
+      return xhrOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function(body) {
+      var transformedBody = body;
+      try {
+        var method = this.__csfxMethod || 'GET';
+        var bodyInfo = extractBodyObject(body);
+        if (bodyInfo && shouldIntercept(method, bodyInfo.parsed)) {
+          var note = getSupervisorNote();
+          if (note) {
+            injectSupervisorMeta(bodyInfo.parsed, note);
+            transformedBody = JSON.stringify(bodyInfo.parsed);
+            try { this.setRequestHeader('Content-Type', 'application/json'); } catch (_errHeader) {}
+            logInjection('xhr', this.__csfxUrl, bodyInfo.parsed.meta_data);
+          }
+        }
+      } catch (_errSend) {
+        if (window.CSFX_DEBUG_LOGS) {
+          try { console.warn('[CSFX] Error interceptando XHR', _errSend); } catch (_warn2) {}
+        }
+      } finally {
+        this.__csfxMethod = null;
+      }
+      return xhrSend.call(this, transformedBody);
+    };
+    XMLHttpRequest.prototype[FLAG_XHR] = true;
+    markPatched(FLAG_XHR);
+  }
 })();
