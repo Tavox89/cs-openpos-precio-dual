@@ -329,8 +329,8 @@
   global.OpenPOSCompat = compat;
 })(typeof window !== 'undefined' ? window : this);
 
-// === CSFX: Interceptor robusto para inyectar nota de supervisor ===
-(function setupCsfxSupervisorInjection(){
+// === CSFX: Interceptor para adjuntar nota de supervisor en addition_information ===
+(function setupCsfxSupervisorAddition(){
   'use strict';
 
   if (typeof window === 'undefined') {
@@ -340,9 +340,7 @@
   var FLAG_FETCH = '__csfxFetchPatched__';
   var FLAG_XHR = '__csfxXHRPatched__';
   var ORDER_MARKERS = ['items', 'line_items', 'totals', 'grand_total', 'order_id', 'discount_amount'];
-  var NOTE_KEY = 'csfx_auth_supervisor_note';
-  var NOTE_QUEUE_KEY = 'csfx_note_queue';
-  var csfxNativeFetch = null;
+  var INFO_LABEL = 'Supervisor';
 
   function markPatched(flag) {
     try { window[flag] = true; } catch (_errMark) {}
@@ -391,168 +389,37 @@
     return false;
   }
 
-  function findOrderContext(method, payload) {
-    if (!method || method.toUpperCase() !== 'POST') return null;
-    if (!payload) return null;
-
-    function buildJsonContextFromObject(obj, source) {
-      if (!obj || typeof obj !== 'object') return null;
-      if (!shouldIntercept(method, obj)) return null;
-      return {
-        type: source,
-        target: obj,
-        ensureJson: true,
-        serialize: function() {
-          return JSON.stringify(obj);
-        }
-      };
+  function normalizeAdditionEntry(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    var label = typeof entry.label === 'string' ? entry.label : '';
+    if (!label) return null;
+    var value = entry.value;
+    if (value === null || typeof value === 'undefined') {
+      value = '';
+    } else if (typeof value !== 'string') {
+      value = String(value);
     }
-
-    function buildNestedOrderContext(container, nested, sourceLabel, stringifyNested) {
-      if (!nested || typeof nested !== 'object') return null;
-      if (!shouldIntercept(method, nested)) return null;
-      return {
-        type: sourceLabel,
-        target: nested,
-        ensureJson: true,
-        serialize: function() {
-          if (stringifyNested) {
-            container.order = JSON.stringify(nested);
-          } else {
-            container.order = nested;
-          }
-          return JSON.stringify(container);
-        }
-      };
-    }
-
-    function buildFormDataContext(form) {
-      if (typeof form.has !== 'function' || !form.has('order')) return null;
-      var raw = form.get('order');
-      if (typeof raw !== 'string') return null;
-      var orderObj = parseJsonObject(raw);
-      if (!orderObj || !shouldIntercept(method, orderObj)) return null;
-      return {
-        type: 'formdata',
-        target: orderObj,
-        ensureJson: false,
-        serialize: function() {
-          form.set('order', JSON.stringify(orderObj));
-          return form;
-        }
-      };
-    }
-
-    function buildUrlEncodedContext(params, shouldStringify) {
-      if (typeof params.has !== 'function' || !params.has('order')) return null;
-      var raw = params.get('order');
-      if (typeof raw !== 'string') return null;
-      var orderObj = parseJsonObject(raw);
-      if (!orderObj || !shouldIntercept(method, orderObj)) return null;
-      return {
-        type: shouldStringify ? 'urlencoded-string' : 'urlencoded-params',
-        target: orderObj,
-        ensureJson: false,
-        serialize: function() {
-          params.set('order', JSON.stringify(orderObj));
-          return shouldStringify ? params.toString() : params;
-        }
-      };
-    }
-
-    if (typeof payload === 'string') {
-      var jsonObj = parseJsonObject(payload);
-      if (jsonObj) {
-        var ctxFromJson = buildJsonContextFromObject(jsonObj, 'json-string');
-        if (ctxFromJson) return ctxFromJson;
-        if (jsonObj.order) {
-          if (typeof jsonObj.order === 'string') {
-            var nestedFromString = parseJsonObject(jsonObj.order);
-            if (nestedFromString) {
-              var nestedCtxString = buildNestedOrderContext(jsonObj, nestedFromString, 'json-nested-string', true);
-              if (nestedCtxString) return nestedCtxString;
-            }
-          } else if (isPlainObject(jsonObj.order)) {
-            var nestedCtxObj = buildNestedOrderContext(jsonObj, jsonObj.order, 'json-nested-object', false);
-            if (nestedCtxObj) return nestedCtxObj;
-          }
-        }
-      }
-      if (typeof URLSearchParams !== 'undefined') {
-        try {
-          var paramsFromString = new URLSearchParams(payload);
-          return buildUrlEncodedContext(paramsFromString, true);
-        } catch (_errParams) {
-          return null;
-        }
-      }
-      return null;
-    }
-
-    if (typeof payload === 'object') {
-      if (typeof FormData !== 'undefined' && payload instanceof FormData) {
-        return buildFormDataContext(payload);
-      }
-      if (typeof Blob !== 'undefined' && payload instanceof Blob) return null;
-      if (typeof ArrayBuffer !== 'undefined') {
-        if (payload instanceof ArrayBuffer) return null;
-        if (typeof ArrayBuffer.isView === 'function' && ArrayBuffer.isView(payload)) return null;
-      }
-      if (typeof URLSearchParams !== 'undefined' && payload instanceof URLSearchParams) {
-        return buildUrlEncodedContext(payload, false);
-      }
-      if (typeof ReadableStream !== 'undefined' && payload instanceof ReadableStream) return null;
-      if (!isPlainObject(payload)) return null;
-
-      var directContext = buildJsonContextFromObject(payload, 'json-object');
-      if (directContext) {
-        return directContext;
-      }
-
-      if (payload.order) {
-        if (typeof payload.order === 'string') {
-          var nestedParsed = parseJsonObject(payload.order);
-          if (nestedParsed) {
-            return buildNestedOrderContext(payload, nestedParsed, 'json-nested-string', true);
-          }
-        } else if (isPlainObject(payload.order)) {
-          return buildNestedOrderContext(payload, payload.order, 'json-nested-object', false);
-        }
-      }
-    }
-
-    return null;
+    return { label: label, value: value };
   }
 
-  function getSupervisorNote() {
-    try {
-      var raw = null;
-      if (typeof sessionStorage !== 'undefined') {
-        raw = sessionStorage.getItem('csfx_last_supervisor');
+  function injectAdditionInformation(target, note) {
+    if (!target || typeof target !== 'object' || !note) return;
+    var combined = [];
+    var sources = [];
+    if (Array.isArray(target.addition_information)) sources.push(target.addition_information);
+    if (Array.isArray(target.additionInformation)) sources.push(target.additionInformation);
+    for (var i = 0; i < sources.length; i++) {
+      var list = sources[i];
+      for (var j = 0; j < list.length; j++) {
+        var normalized = normalizeAdditionEntry(list[j]);
+        if (normalized && normalized.label !== INFO_LABEL) {
+          combined.push(normalized);
+        }
       }
-      if (!raw && typeof localStorage !== 'undefined') {
-        raw = localStorage.getItem('csfx_last_supervisor');
-      }
-      if (!raw) return null;
-      var sup = JSON.parse(raw);
-      if (!sup || typeof sup !== 'object') return null;
-      var label = sup.name || sup.email || (sup.id ? ('ID ' + sup.id) : '');
-      if (!label) return null;
-      return 'CSFX · Supervisor ' + label + ' autorizó descuentos personalizados.';
-    } catch (_errNote) {
-      return null;
     }
-  }
-
-  function injectSupervisorMeta(payload, note) {
-    var meta = Array.isArray(payload.meta_data) ? payload.meta_data.slice() : [];
-    meta = meta.filter(function(item){
-      if (!item) return false;
-      var key = item.key || item.name || item.code;
-      return key ? key !== NOTE_KEY : true;
-    });
-    meta.push({ key: NOTE_KEY, value: note });
-    payload.meta_data = meta;
+    combined.push({ label: INFO_LABEL, value: note });
+    target.addition_information = combined;
+    target.additionInformation = combined.slice();
   }
 
   function ensureJsonContentType(init) {
@@ -594,250 +461,158 @@
     init.headers = Object.assign({}, headers, { 'Content-Type': 'application/json' });
   }
 
-  function logInjection(source, url, meta) {
-    if (!window.CSFX_DEBUG_LOGS) return;
+  function getSupervisorNote() {
     try {
-      console.info('[CSFX] Nota de supervisor inyectada', { transport: source, url: url || '', meta_data: meta });
-    } catch (_errLog) {}
-  }
-
-  function logFallback(label, data) {
-    if (!window.CSFX_DEBUG_LOGS) return;
-    try {
-      console.info('[CSFX] ' + label, data || {});
-    } catch (_errFallbackLog) {}
-  }
-
-  function sanitizeId(value) {
-    if (value === undefined || value === null) return null;
-    var str = String(value);
-    return str === '' ? null : str;
-  }
-
-  function extractLocalOrderId(order) {
-    if (!order || typeof order !== 'object') return null;
-    var candidates = [
-      order.local_order_id,
-      order.localOrderId,
-      order.order_id,
-      order.orderId,
-      order.id,
-      order.increment_id,
-      order.incrementId,
-      order.reference_id,
-      order.referenceId
-    ];
-    for (var i = 0; i < candidates.length; i++) {
-      var id = sanitizeId(candidates[i]);
-      if (id) return id;
+      var raw = null;
+      if (typeof sessionStorage !== 'undefined') {
+        raw = sessionStorage.getItem('csfx_last_supervisor');
+      }
+      if (!raw && typeof localStorage !== 'undefined') {
+        raw = localStorage.getItem('csfx_last_supervisor');
+      }
+      if (!raw) return null;
+      var sup = JSON.parse(raw);
+      if (!sup || typeof sup !== 'object') return null;
+      var label = sup.name || sup.email || (sup.id ? ('ID ' + sup.id) : '');
+      if (!label) return null;
+      return 'CSFX · Supervisor ' + label + ' autorizó descuentos personalizados.';
+    } catch (_errNote) {
+      return null;
     }
-    if (order.order && typeof order.order === 'object') {
-      return extractLocalOrderId(order.order);
+  }
+
+  function findOrderContext(method, payload) {
+    if (!method || method.toUpperCase() !== 'POST') return null;
+    if (!payload) return null;
+
+    function buildJsonContextFromObject(obj) {
+      if (!obj || typeof obj !== 'object') return null;
+      if (!shouldIntercept(method, obj)) return null;
+      return {
+        target: obj,
+        ensureJson: true,
+        serialize: function() {
+          return JSON.stringify(obj);
+        }
+      };
     }
+
+    function buildNestedOrderContext(container, nested, stringifyNested) {
+      if (!nested || typeof nested !== 'object') return null;
+      if (!shouldIntercept(method, nested)) return null;
+      return {
+        target: nested,
+        ensureJson: true,
+        serialize: function() {
+          if (stringifyNested) {
+            container.order = JSON.stringify(nested);
+          } else {
+            container.order = nested;
+          }
+          return JSON.stringify(container);
+        }
+      };
+    }
+
+    function buildFormDataContext(form) {
+      if (typeof form.has !== 'function' || !form.has('order')) return null;
+      var raw = form.get('order');
+      if (typeof raw !== 'string') return null;
+      var orderObj = parseJsonObject(raw);
+      if (!orderObj || !shouldIntercept(method, orderObj)) return null;
+      return {
+        target: orderObj,
+        ensureJson: false,
+        serialize: function() {
+          form.set('order', JSON.stringify(orderObj));
+          return form;
+        }
+      };
+    }
+
+    function buildUrlEncodedContext(params, shouldStringify) {
+      if (typeof params.has !== 'function' || !params.has('order')) return null;
+      var raw = params.get('order');
+      if (typeof raw !== 'string') return null;
+      var orderObj = parseJsonObject(raw);
+      if (!orderObj || !shouldIntercept(method, orderObj)) return null;
+      return {
+        target: orderObj,
+        ensureJson: false,
+        serialize: function() {
+          params.set('order', JSON.stringify(orderObj));
+          return shouldStringify ? params.toString() : params;
+        }
+      };
+    }
+
+    if (typeof payload === 'string') {
+      var jsonObj = parseJsonObject(payload);
+      if (jsonObj) {
+        var ctx = buildJsonContextFromObject(jsonObj);
+        if (ctx) return ctx;
+        if (jsonObj.order) {
+          if (typeof jsonObj.order === 'string') {
+            var nestedString = parseJsonObject(jsonObj.order);
+            if (nestedString) {
+              var nestedCtx = buildNestedOrderContext(jsonObj, nestedString, true);
+              if (nestedCtx) return nestedCtx;
+            }
+          } else if (isPlainObject(jsonObj.order)) {
+            var nestedObjCtx = buildNestedOrderContext(jsonObj, jsonObj.order, false);
+            if (nestedObjCtx) return nestedObjCtx;
+          }
+        }
+      }
+      if (typeof URLSearchParams !== 'undefined') {
+        try {
+          var paramsFromString = new URLSearchParams(payload);
+          return buildUrlEncodedContext(paramsFromString, true);
+        } catch (_errParams) {
+          return null;
+        }
+      }
+      return null;
+    }
+
+    if (typeof payload === 'object') {
+      if (typeof FormData !== 'undefined' && payload instanceof FormData) {
+        return buildFormDataContext(payload);
+      }
+      if (typeof Blob !== 'undefined' && payload instanceof Blob) return null;
+      if (typeof ArrayBuffer !== 'undefined') {
+        if (payload instanceof ArrayBuffer) return null;
+        if (typeof ArrayBuffer.isView === 'function' && ArrayBuffer.isView(payload)) return null;
+      }
+      if (typeof URLSearchParams !== 'undefined' && payload instanceof URLSearchParams) {
+        return buildUrlEncodedContext(payload, false);
+      }
+      if (typeof ReadableStream !== 'undefined' && payload instanceof ReadableStream) return null;
+      if (!isPlainObject(payload)) return null;
+
+      var directContext = buildJsonContextFromObject(payload);
+      if (directContext) {
+        return directContext;
+      }
+
+      if (payload.order) {
+        if (typeof payload.order === 'string') {
+          var nestedParsed = parseJsonObject(payload.order);
+          if (nestedParsed) {
+            return buildNestedOrderContext(payload, nestedParsed, true);
+          }
+        } else if (isPlainObject(payload.order)) {
+          return buildNestedOrderContext(payload, payload.order, false);
+        }
+      }
+    }
+
     return null;
   }
 
-  function readQueue() {
-    if (typeof localStorage === 'undefined') return [];
-    try {
-      var raw = localStorage.getItem(NOTE_QUEUE_KEY);
-      if (!raw) return [];
-      var parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (_errQueueRead) {
-      return [];
-    }
-  }
-
-  function saveQueue(queue) {
-    if (typeof localStorage === 'undefined') return;
-    try {
-      localStorage.setItem(NOTE_QUEUE_KEY, JSON.stringify(queue));
-    } catch (_errQueueSave) {}
-  }
-
-  function enqueueOfflineNote(note, localId) {
-    if (!note || typeof localStorage === 'undefined') return;
-    var entry = { note: note };
-    var id = sanitizeId(localId);
-    if (id) entry.local_order_id = id;
-    entry.timestamp = Date.now();
-    var queue = readQueue();
-    queue.push(entry);
-    saveQueue(queue);
-    logFallback('Nota de supervisor ENCOLADA offline', entry);
-  }
-
-  function isRestUrl(url) {
-    return typeof url === 'string' && url.indexOf('/wp-json/op/v1/') !== -1;
-  }
-
-  function isAdminAjaxUrl(url) {
-    return typeof url === 'string' && url.indexOf('admin-ajax.php') !== -1;
-  }
-
-  function csfxRequest(url, options) {
-    if (typeof csfxNativeFetch === 'function') {
-      return csfxNativeFetch.call(window, url, options || {});
-    }
-    if (typeof window.fetch === 'function') {
-      return window.fetch(url, options || {});
-    }
-    return new Promise(function(resolve, reject){
-      try {
-        var xhr = new XMLHttpRequest();
-        var opts = options || {};
-        var method = opts.method || 'GET';
-        xhr.open(method, url, true);
-        if (opts.headers && typeof opts.headers === 'object') {
-          for (var key in opts.headers) {
-            if (!Object.prototype.hasOwnProperty.call(opts.headers, key)) continue;
-            xhr.setRequestHeader(key, opts.headers[key]);
-          }
-        }
-        xhr.onload = function(){
-          var response = {
-            ok: xhr.status >= 200 && xhr.status < 300,
-            status: xhr.status,
-            json: function(){
-              try {
-                return Promise.resolve(JSON.parse(xhr.responseText || '{}'));
-              } catch (_errJson) {
-                return Promise.reject(_errJson);
-              }
-            }
-          };
-          resolve(response);
-        };
-        xhr.onerror = function(){ reject(new Error('Network error')); };
-        xhr.send(opts.body || null);
-      } catch (err) {
-        reject(err);
-      }
-    });
-  }
-
-  function sendNoteViaRest(orderId, note, sourceTag, retryLocalId) {
-    var id = sanitizeId(orderId);
-    if (!id || !note) return Promise.resolve();
-    var payload = { order_id: id, note: note };
-    return csfxRequest('/wp-json/op/v1/order/add-note', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    }).then(function(response){
-      logFallback('add-note fallback (REST)', { orderId: id, note: note, source: sourceTag || 'immediate', status: response && response.status });
-      return response;
-    }).catch(function(err){
-      if (window.CSFX_DEBUG_LOGS) {
-        try { console.warn('[CSFX] Error en fallback REST', err); } catch (_warnRest) {}
-      }
-      enqueueOfflineNote(note, retryLocalId || id);
-    });
-  }
-
-  function sendNoteViaAjax(orderId, note, sourceTag, retryLocalId) {
-    var id = sanitizeId(orderId);
-    if (!id || !note) return Promise.resolve();
-    var bodyString = '';
-    if (typeof URLSearchParams !== 'undefined') {
-      var params = new URLSearchParams();
-      params.set('action', 'openpos');
-      params.set('pos_action', 'save-order-note');
-      params.set('order_id', id);
-      params.set('note', note);
-      bodyString = params.toString();
-    } else {
-      bodyString = 'action=openpos&pos_action=save-order-note&order_id=' + encodeURIComponent(id) + '&note=' + encodeURIComponent(note);
-    }
-    return csfxRequest('/wp-admin/admin-ajax.php', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: bodyString
-    }).then(function(response){
-      logFallback('add-note fallback (AJAX)', { orderId: id, note: note, source: sourceTag || 'immediate', status: response && response.status });
-      return response;
-    }).catch(function(err){
-      if (window.CSFX_DEBUG_LOGS) {
-        try { console.warn('[CSFX] Error en fallback AJAX', err); } catch (_warnAjax) {}
-      }
-      enqueueOfflineNote(note, retryLocalId || id);
-    });
-  }
-
-  function flushOfflineNote(localId, systemId) {
-    var localKey = sanitizeId(localId);
-    var systemKey = sanitizeId(systemId);
-    if (!localKey || !systemKey) return;
-    var queue = readQueue();
-    if (!queue.length) return;
-    var remaining = [];
-    var flushed = [];
-    for (var i = 0; i < queue.length; i++) {
-      var entry = queue[i];
-      var entryLocal = entry && sanitizeId(entry.local_order_id);
-      if (entry && entryLocal && entryLocal === localKey) {
-        flushed.push(entry);
-      } else {
-        remaining.push(entry);
-      }
-    }
-    if (!flushed.length) return;
-    saveQueue(remaining);
-    for (var j = 0; j < flushed.length; j++) {
-      var item = flushed[j];
-      logFallback('add-note fallback (cola offline)', { local: localKey, system: systemKey, note: item.note });
-      sendNoteViaRest(systemKey, item.note, 'cola offline', localKey);
-    }
-  }
-
-  function extractResponseInfo(payload) {
-    if (!payload || typeof payload !== 'object') return null;
-    var root = payload;
-    if (root.response && typeof root.response === 'object') {
-      root = root.response;
-    }
-    var data = root;
-    if (data.data && typeof data.data === 'object') {
-      data = data.data;
-    }
-    var order = data.order && typeof data.order === 'object' ? data.order : data;
-    if (!order || typeof order !== 'object') return null;
-    var systemId = sanitizeId(order.system_order_id) || sanitizeId(data.system_order_id);
-    var orderId = sanitizeId(order.order_id) || sanitizeId(data.order_id) || systemId;
-    if (!orderId && !systemId) return null;
-    var localId = sanitizeId(order.order_id) || sanitizeId(data.order_id) || sanitizeId(order.local_order_id);
-    return {
-      orderId: systemId || orderId,
-      systemOrderId: systemId || null,
-      localOrderId: localId || null
-    };
-  }
-
-  function handleResponseForNote(state, payload) {
-    if (!state || !state.note) return;
-    var info = extractResponseInfo(payload);
-    if (!info) return;
-    if (isRestUrl(state.url)) {
-      sendNoteViaRest(info.orderId, state.note, state.transport || 'response', state.localOrderId || info.localOrderId);
-    } else if (isAdminAjaxUrl(state.url)) {
-      sendNoteViaAjax(info.orderId, state.note, state.transport || 'response', state.localOrderId || info.localOrderId);
-    } else {
-      sendNoteViaRest(info.orderId, state.note, state.transport || 'response', state.localOrderId || info.localOrderId);
-    }
-    if (info.systemOrderId && info.localOrderId) {
-      flushOfflineNote(info.localOrderId, info.systemOrderId);
-    } else if (info.systemOrderId && state.localOrderId) {
-      flushOfflineNote(state.localOrderId, info.systemOrderId);
-    }
-  }
-
   if (window.fetch && !hasBeenPatched(FLAG_FETCH)) {
-    csfxNativeFetch = window.fetch;
     var originalFetch = window.fetch;
     window.fetch = function(input, init) {
-      var noteState = null;
-      var url = typeof input === 'string' ? input : (input && input.url) || '';
       try {
         var method = (init && init.method) || (input && input.method) || 'GET';
         var bodyPayload = init && Object.prototype.hasOwnProperty.call(init, 'body') ? init.body : null;
@@ -845,58 +620,19 @@
         if (context) {
           var note = getSupervisorNote();
           if (note) {
-            injectSupervisorMeta(context.target, note);
+            injectAdditionInformation(context.target, note);
             var nextInit = init ? Object.assign({}, init) : {};
             nextInit.body = context.serialize();
             if (context.ensureJson) {
               ensureJsonContentType(nextInit);
             }
             arguments[1] = nextInit;
-            logInjection('fetch', url, context.target.meta_data);
-            noteState = {
-              note: note,
-              url: url,
-              localOrderId: extractLocalOrderId(context.target),
-              transport: 'fetch'
-            };
           }
         }
       } catch (_errFetch) {
-        if (window.CSFX_DEBUG_LOGS) {
-          try { console.warn('[CSFX] Error interceptando fetch', _errFetch); } catch (_warnErr) {}
-        }
+        // swallow
       }
-      var fetchPromise = originalFetch.apply(this, arguments);
-      if (!noteState) {
-        return fetchPromise;
-      }
-      return fetchPromise.then(function(response){
-        if (!response) return response;
-        if (response.ok) {
-          try {
-            var cloned = response.clone();
-            if (typeof cloned.json === 'function') {
-              cloned.json().then(function(data){
-                handleResponseForNote(noteState, data);
-              }).catch(function(err){
-                if (window.CSFX_DEBUG_LOGS) {
-                  try { console.warn('[CSFX] Respuesta fetch sin JSON utilizable', err); } catch (_warnJson) {}
-                }
-              });
-            }
-          } catch (_errClone) {
-            if (window.CSFX_DEBUG_LOGS) {
-              try { console.warn('[CSFX] No se pudo clonar respuesta fetch', _errClone); } catch (_warnClone) {}
-            }
-          }
-        } else {
-          enqueueOfflineNote(noteState.note, noteState.localOrderId);
-        }
-        return response;
-      }).catch(function(error){
-        enqueueOfflineNote(noteState.note, noteState.localOrderId);
-        throw error;
-      });
+      return originalFetch.apply(this, arguments);
     };
     window.fetch[FLAG_FETCH] = true;
     markPatched(FLAG_FETCH);
@@ -905,92 +641,29 @@
   if (window.XMLHttpRequest && window.XMLHttpRequest.prototype && !hasBeenPatched(FLAG_XHR)) {
     var xhrOpen = XMLHttpRequest.prototype.open;
     var xhrSend = XMLHttpRequest.prototype.send;
-
-    function attachXhrLifecycle(xhr) {
-      if (xhr.__csfxLifecycleAttached) return;
-      xhr.addEventListener('load', onXhrLoad);
-      xhr.addEventListener('error', onXhrError);
-      xhr.addEventListener('abort', onXhrError);
-      xhr.__csfxLifecycleAttached = true;
-    }
-
-    function parseXhrJSON(xhr) {
-      var text = '';
-      try { text = xhr.responseText; } catch (_errText) { return null; }
-      if (!text) return null;
-      try {
-        return JSON.parse(text);
-      } catch (_errParse) {
-        return null;
-      }
-    }
-
-    function onXhrLoad() {
-      var state = this.__csfxNoteState;
-      this.__csfxNoteState = null;
-      if (!state || !state.note) return;
-      if (this.status < 200 || this.status >= 300) {
-        enqueueOfflineNote(state.note, state.localOrderId);
-        return;
-      }
-      var payload = parseXhrJSON(this);
-      if (!payload) {
-        if (window.CSFX_DEBUG_LOGS) {
-          try { console.warn('[CSFX] Respuesta XHR sin JSON para fallback', state); } catch (_warnNoJson) {}
-        }
-        return;
-      }
-      handleResponseForNote(state, payload);
-    }
-
-    function onXhrError() {
-      var state = this.__csfxNoteState;
-      this.__csfxNoteState = null;
-      if (!state || !state.note) return;
-      enqueueOfflineNote(state.note, state.localOrderId);
-    }
-
     XMLHttpRequest.prototype.open = function(method, url) {
       this.__csfxMethod = method;
-      this.__csfxUrl = url;
       return xhrOpen.apply(this, arguments);
     };
-
     XMLHttpRequest.prototype.send = function(body) {
       var transformedBody = body;
-      var noteState = null;
       try {
         var method = this.__csfxMethod || 'GET';
         var context = findOrderContext(method, body);
         if (context) {
           var note = getSupervisorNote();
           if (note) {
-            injectSupervisorMeta(context.target, note);
+            injectAdditionInformation(context.target, note);
             transformedBody = context.serialize();
             if (context.ensureJson) {
               try { this.setRequestHeader('Content-Type', 'application/json'); } catch (_errHeader) {}
             }
-            logInjection('xhr', this.__csfxUrl, context.target.meta_data);
-            noteState = {
-              note: note,
-              url: this.__csfxUrl,
-              localOrderId: extractLocalOrderId(context.target),
-              transport: 'xhr'
-            };
           }
         }
       } catch (_errSend) {
-        if (window.CSFX_DEBUG_LOGS) {
-          try { console.warn('[CSFX] Error interceptando XHR', _errSend); } catch (_warn2) {}
-        }
+        // swallow
       } finally {
         this.__csfxMethod = null;
-      }
-      if (noteState) {
-        attachXhrLifecycle(this);
-        this.__csfxNoteState = noteState;
-      } else {
-        this.__csfxNoteState = null;
       }
       return xhrSend.call(this, transformedBody);
     };

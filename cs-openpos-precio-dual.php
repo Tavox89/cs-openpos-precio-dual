@@ -345,7 +345,6 @@ function csfx_collect_supervisor_request_meta() {
     'csfx_auth_supervisor_time',
     'csfx_auth_supervisor_expires',
     'csfx_auth_session_id',
-    'csfx_auth_supervisor_note',
   );
   $out = array();
   foreach ( $allowed as $key ) {
@@ -357,89 +356,59 @@ function csfx_collect_supervisor_request_meta() {
   return $out;
 }
 
-if ( ! function_exists( 'csfx_add_supervisor_note' ) ) {
-  function csfx_add_supervisor_note( WC_Order $order ) {
+if ( ! function_exists( 'csfx_sync_supervisor_addition_information' ) ) {
+  function csfx_sync_supervisor_addition_information( WC_Order $order, array $meta = array() ) {
     if ( ! $order instanceof WC_Order ) {
       return;
     }
-    $is_debug = defined( 'CS_FX_DEBUG' ) && CS_FX_DEBUG;
-    $logger   = null;
-    if ( $is_debug && function_exists( 'wc_get_logger' ) ) {
-      $logger = wc_get_logger();
-    }
-    $context = array(
-      'source'   => 'csfx-supervisor',
-      'order_id' => $order->get_id(),
-    );
-    if ( $order->get_meta( '_csfx_supervisor_note_logged', true ) ) {
-      if ( $is_debug && $logger ) {
-        $logger->info( 'Nota ya registrada anteriormente.', $context );
-      }
-      return;
-    }
-    $name   = trim( (string) $order->get_meta( 'csfx_auth_supervisor_name', true ) );
-    $id     = trim( (string) $order->get_meta( 'csfx_auth_supervisor_id', true ) );
-    $source = trim( (string) $order->get_meta( 'csfx_auth_supervisor_source', true ) );
-    $method = trim( (string) $order->get_meta( 'csfx_auth_supervisor_method', true ) );
-    $ref    = trim( (string) $order->get_meta( 'csfx_auth_supervisor_ref', true ) );
-    $time   = trim( (string) $order->get_meta( 'csfx_auth_supervisor_time', true ) );
-    $prepared_message = trim( (string) $order->get_meta( 'csfx_auth_supervisor_note', true ) );
+    $meta = is_array( $meta ) ? $meta : array();
+    $name  = trim( (string) ( $meta['csfx_auth_supervisor_name'] ?? $order->get_meta( 'csfx_auth_supervisor_name', true ) ) );
+    $email = trim( (string) ( $meta['csfx_auth_supervisor_email'] ?? $order->get_meta( 'csfx_auth_supervisor_email', true ) ) );
+    $id    = trim( (string) ( $meta['csfx_auth_supervisor_id'] ?? $order->get_meta( 'csfx_auth_supervisor_id', true ) ) );
 
-    if ( $is_debug && $logger ) {
-      $logger->info(
-        'Metadatos capturados para supervisor.',
-        $context + array(
-          'name'   => $name,
-          'id'     => $id,
-          'source' => $source,
-          'method' => $method,
-          'ref'    => $ref,
-          'time'   => $time,
-        )
+    $label = '';
+    if ( '' !== $name ) {
+      $label = $name;
+    } elseif ( '' !== $email ) {
+      $label = $email;
+    } elseif ( '' !== $id ) {
+      $label = 'ID ' . $id;
+    }
+    if ( '' !== $label ) {
+      $label = wc_clean( $label );
+    }
+
+    $existing = $order->get_meta( '_op_order_addition_information', true );
+    if ( ! is_array( $existing ) ) {
+      $existing = array();
+    }
+    $normalized = array();
+    foreach ( $existing as $entry ) {
+      if ( ! is_array( $entry ) ) {
+        continue;
+      }
+      $entry_label = isset( $entry['label'] ) ? (string) $entry['label'] : '';
+      if ( '' === $entry_label || 'Supervisor' === $entry_label ) {
+        continue;
+      }
+      $normalized[] = array(
+        'label' => $entry_label,
+        'value' => isset( $entry['value'] ) ? $entry['value'] : '',
       );
     }
 
-    if ( '' === $name && '' === $id ) {
-      if ( $is_debug && $logger ) {
-        $logger->warning( 'No se encontraron metadatos de supervisor. No se agregará nota.', $context );
-      }
-      return;
+    if ( '' !== $label ) {
+      $note = sprintf(
+        'CSFX · Supervisor %s autorizó descuentos personalizados.',
+        $label
+      );
+      $normalized[] = array(
+        'label' => 'Supervisor',
+        'value' => $note,
+      );
     }
 
-    if ( '' === $prepared_message ) {
-      $label = $name ? $name : __( 'Supervisor sin nombre', 'csfx' );
-      if ( $id !== '' ) {
-        $label .= ' (ID ' . $id . ')';
-      }
-
-      $details = array();
-      if ( $source ) {
-        $details[] = ucfirst( $source );
-      }
-      if ( $method ) {
-        $details[] = ucfirst( $method );
-      }
-      if ( $ref ) {
-        $details[] = 'Ref: ' . $ref;
-      }
-      if ( $time ) {
-        $timestamp = strtotime( $time );
-        if ( $timestamp ) {
-          $details[] = 'Hora: ' . wp_date( 'Y-m-d H:i', $timestamp );
-        }
-      }
-
-      $prepared_message = 'CSFX · Supervisor ' . $label . ' autorizó descuentos personalizados.';
-      if ( ! empty( $details ) ) {
-        $prepared_message .= ' (' . implode( ' · ', $details ) . ')';
-      }
-    }
-
-    $order->add_order_note( $prepared_message, false, true );
-    $order->update_meta_data( '_csfx_supervisor_note_logged', 1 );
-    if ( $is_debug && $logger ) {
-      $logger->info( 'Nota de supervisor agregada.', $context + array( 'message' => $prepared_message ) );
-    }
+    $order->update_meta_data( '_op_order_addition_information', array_values( $normalized ) );
   }
 }
 
@@ -453,7 +422,7 @@ function csfx_checkout_store_dual_discount_meta( $order, $data = null ){
       $order->update_meta_data( $key, $value );
     }
   }
-  csfx_add_supervisor_note( $order );
+  csfx_sync_supervisor_addition_information( $order, $request_meta );
 }
 add_action( 'woocommerce_checkout_create_order', 'csfx_checkout_store_dual_discount_meta', 21, 2 );
 // csfx: fin descuento dual (backend)
@@ -895,11 +864,6 @@ add_filter('openpos_pos_header_js', function($handles){
     $compat_asset = plugins_url('assets/js/compat/openpos-compat.js', __FILE__);
     wp_register_script('cs-openpos-compat', $compat_asset, [], $compat_ver, false);
     wp_script_add_data('cs-openpos-compat', 'defer', false);
-    wp_add_inline_script(
-        'cs-openpos-compat',
-        'if(window.CSFX_DEBUG_LOGS){console.info("[CSFX] bootstrap compat antes del POS");}',
-        'before'
-    );
     array_unshift($handles, 'cs-openpos-compat');
     return $handles;
 }, 5);

@@ -19,6 +19,14 @@
 
     // Compatibilidad con distintas versiones de OpenPOS
   var OPCompat = window.OpenPOSCompat || {};
+  var csfxInitialSources = [];
+  var csfxLastGoodRate = null;
+  var csfxConnectionStatus = { status: 'unknown', reason: '', lastChange: Date.now() };
+  var CSFX_DEFAULT_FETCH_TIMEOUT = 7000;
+  var CSFX_HEALTH_INTERVAL_MS = 20000;
+  var CSFX_HEALTH_TIMEOUT_MS = 5000;
+  var csfxHealthTimer = null;
+  var csfxLastHealthProbe = 0;
 
   // --- Config FX (mezcla BOOT + localStorage) ---
   var FX = window.CSFX = (function () {
@@ -51,7 +59,15 @@
     };
     // Datos inyectados por PHP antes de tener sesión
     if (window.__CS_FX_BOOT && typeof window.__CS_FX_BOOT === 'object') {
-       var boot = window.__CS_FX_BOOT;
+      var boot = window.__CS_FX_BOOT;
+      var bootRate = Number(boot.rate || 0);
+      if (bootRate > 0) {
+        csfxInitialSources.push({
+          rate: bootRate,
+          updated: boot.updated || boot.updated_at || boot.updatedAt || 0,
+          source: 'boot'
+        });
+      }
       if (boot.style && typeof boot.style === 'object') {
         Object.assign(def.style, boot.style);
       }
@@ -63,6 +79,16 @@
     try {
       var s = JSON.parse(localStorage.getItem('op_settings') || '{}');
       var fx = (s.setting && s.setting.cs_fx) || {};
+      if (fx && typeof fx === 'object') {
+        var fxRate = Number(fx.rate || 0);
+        if (fxRate > 0) {
+          csfxInitialSources.push({
+            rate: fxRate,
+            updated: fx.updated || fx.updated_at || fx.updatedAt || 0,
+            source: 'pos-settings'
+          });
+        }
+      }
       Object.keys(fx).forEach(function (k) {
              if (fx[k] != null) {
           if (k === 'style' && typeof fx[k] === 'object') {
@@ -73,8 +99,8 @@
         }
       });
     } catch (e) {}
-    def.rate = 0;
-    def.updated = 0;
+    def.rate = Number(def.rate) || 0;
+    if (typeof def.updated === 'undefined' || def.updated === null) def.updated = 0;
     def.decimals = Number(def.decimals) || 2;
 
     // AJAX: si no viene, lo armamos desde action_url global del POS
@@ -108,20 +134,20 @@
   };
 
   var CSFX_SUPERVISOR_STORAGE_KEY = 'csfx_last_supervisor';
-  var CSFX_SUPERVISOR_META_KEYS = [
-    'csfx_auth_supervisor_id',
-    'csfx_auth_supervisor_name',
-    'csfx_auth_supervisor_email',
-    'csfx_auth_supervisor_source',
+var CSFX_SUPERVISOR_META_KEYS = [
+  'csfx_auth_supervisor_id',
+  'csfx_auth_supervisor_name',
+  'csfx_auth_supervisor_email',
+  'csfx_auth_supervisor_source',
   'csfx_auth_supervisor_method',
   'csfx_auth_supervisor_ref',
   'csfx_auth_supervisor_time',
   'csfx_auth_supervisor_expires',
-  'csfx_auth_session_id',
-  'csfx_auth_supervisor_note'
+  'csfx_auth_session_id'
 ];
+var CSFX_SUPERVISOR_INFO_LABEL = 'Supervisor';
 var csfxSupervisorCache = null;
-var csfxLastLoggedSupervisorNote = '';
+var csfxLastLoggedSupervisorMessage = '';
 
   function csfxReadSupervisorStorage() {
     try {
@@ -189,8 +215,8 @@ var csfxLastLoggedSupervisorNote = '';
         label += ' (ID ' + supervisor.id + ')';
       }
       var preview = 'CSFX · Supervisor ' + label + ' autorizó descuentos personalizados.';
-      if (csfxLastLoggedSupervisorNote !== preview) {
-        csfxLastLoggedSupervisorNote = preview;
+      if (csfxLastLoggedSupervisorMessage !== preview) {
+        csfxLastLoggedSupervisorMessage = preview;
         try {
           console.info('[CSFX] Nota esperada: ' + preview, {
             reference: supervisor.reference || null,
@@ -246,8 +272,9 @@ var csfxLastLoggedSupervisorNote = '';
     '.mat-dialog-container .discount-details-sidenav'
   ];
   var CSFX_NATIVE_GUARD_SELECTOR = CSFX_NATIVE_GUARD_SELECTORS.join(', ');
+  var CSFX_DISCOUNT_REMOVE_ATTR = 'data-csfx-allow-discount-remove';
   var CSFX_NATIVE_STYLE_RULES = CSFX_NATIVE_STYLE_SELECTORS.join(', ') + ' { display: none !important; pointer-events: none !important; }' +
-    '\n.cart-discount button, button[mat-icon-button][aria-label*=\"Descu\"] { pointer-events: none !important; opacity: 0.35 !important; }';
+    '\n.cart-discount button:not([' + CSFX_DISCOUNT_REMOVE_ATTR + ']):not([data-action="remove"]):not(.remove):not([aria-label*="eliminar"]):not([aria-label*="Eliminar"]):not([aria-label*="remove"]):not([aria-label*="Remove"]), button[mat-icon-button][aria-label*="Descu"] { pointer-events: none !important; opacity: 0.35 !important; }';
   var csfxDiscountObserver = null;
   var csfxDiscountObserverPending = false;
   var csfxManualDiscountBypassUntil = 0;
@@ -319,6 +346,10 @@ var csfxLastLoggedSupervisorNote = '';
         return;
       }
       if (csfxMatchesDiscountTarget(target)) {
+        try {
+          var remover = target.closest('[' + CSFX_DISCOUNT_REMOVE_ATTR + '], [data-action="remove"], [data-role="remove"], .remove, .op-remove-discount, .cart-discount [class*="delete"], .cart-discount [class*="trash"], button[aria-label*="eliminar"], button[aria-label*="Eliminar"], button[aria-label*="remove"], button[aria-label*="Remove"], .mat-icon[aria-label*="eliminar"], .mat-icon[aria-label*="Eliminar"], .mat-icon-button[aria-label*="eliminar"], .mat-icon-button[aria-label*="Eliminar"]');
+          if (remover) return;
+        } catch (_errClosestRemove) {}
         ev.stopPropagation();
         ev.preventDefault();
       }
@@ -560,7 +591,7 @@ var csfxLastLoggedSupervisorNote = '';
       }
     } catch (_errClearStore) {}
     csfxSupervisorCache = null;
-    csfxLastLoggedSupervisorNote = '';
+    csfxLastLoggedSupervisorMessage = '';
     try { window.CSFX_LAST_SUPERVISOR = null; } catch (_errWin) {}
     csfxUpdateAuthWidgetCountdown();
   }
@@ -650,6 +681,16 @@ var csfxLastLoggedSupervisorNote = '';
       return {};
     }
   })();
+  if (fxOfflineState && typeof fxOfflineState === 'object') {
+    var cachedRate = Number(fxOfflineState.rate || 0);
+    if (cachedRate > 0) {
+      csfxInitialSources.push({
+        rate: cachedRate,
+        updated: fxOfflineState.updated || 0,
+        source: 'offline-cache'
+      });
+    }
+  }
 
   function persistFxOfflineState(partial){
     if (!partial || typeof partial !== 'object') return;
@@ -661,6 +702,190 @@ var csfxLastLoggedSupervisorNote = '';
       localStorage.setItem(FX_STATE_STORAGE_KEY, JSON.stringify(fxOfflineState));
     } catch (_err) { /* storage lleno/offline */ }
   }
+  function csfxParseUpdated(u){
+    if (u === undefined || u === null) return 0;
+    if (typeof u === 'number') {
+      if (!isFinite(u)) return 0;
+      return u < 1e12 ? u * 1000 : u;
+    }
+    if (typeof u === 'string') {
+      var trimmed = u.trim();
+      if (!trimmed) return 0;
+      var numeric = Number(trimmed);
+      if (!isNaN(numeric)) {
+        return numeric < 1e12 ? numeric * 1000 : numeric;
+      }
+      var parsed = Date.parse(trimmed);
+      return isNaN(parsed) ? 0 : parsed;
+    }
+    return 0;
+  }
+  function csfxPickBestCandidate(list){
+    if (!Array.isArray(list)) return null;
+    var best = null;
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i];
+      if (!item) continue;
+      var rate = Number(item.rate || 0);
+      if (!isFinite(rate) || rate <= 0) continue;
+      var candidate = {
+        rate: rate,
+        updated: item.updated,
+        source: item.source || '',
+        ts: csfxParseUpdated(item.updated)
+      };
+      if (!best || candidate.ts > best.ts || (!best.ts && !candidate.ts)) {
+        best = candidate;
+      }
+    }
+    return best;
+  }
+  function csfxRememberLastGood(rate, updated, source){
+    var numRate = Number(rate || 0);
+    if (!isFinite(numRate) || numRate <= 0) return;
+    var key = source || 'fallback';
+    csfxLastGoodRate = {
+      rate: numRate,
+      updated: updated,
+      source: key,
+      ts: csfxParseUpdated(updated) || Date.now()
+    };
+    var stored = { rate: numRate };
+    if (updated !== undefined && updated !== null) stored.updated = updated;
+    persistFxOfflineState(stored);
+    // refrescar arreglo de fuentes iniciales
+    var replaced = false;
+    for (var i = 0; i < csfxInitialSources.length; i++) {
+      var src = csfxInitialSources[i];
+      if (src && src.source === key) {
+        csfxInitialSources[i] = { rate: numRate, updated: updated, source: key };
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) {
+      csfxInitialSources.push({ rate: numRate, updated: updated, source: key });
+    }
+    if (FX) {
+      FX.rateSource = key;
+    }
+  }
+  function csfxEnsureBestInitialRate(){
+    if (FX.rate && FX.rate > 0) {
+      csfxRememberLastGood(FX.rate, FX.updated, FX.rateSource || 'initial');
+      return;
+    }
+    var candidate = csfxPickBestCandidate(csfxInitialSources);
+    if (candidate) {
+      FX.rate = candidate.rate;
+      if (candidate.updated !== undefined) FX.updated = candidate.updated;
+      FX.rateSource = candidate.source || FX.rateSource || 'initial';
+      csfxRememberLastGood(candidate.rate, candidate.updated, candidate.source || 'initial');
+    }
+  }
+  function csfxApplyFallbackRate(context){
+    if (FX.rate && FX.rate > 0) return false;
+    var pool = csfxInitialSources.slice();
+    if (csfxLastGoodRate && csfxLastGoodRate.rate > 0) {
+      pool.push(csfxLastGoodRate);
+    }
+    if (fxOfflineState && Number(fxOfflineState.rate || 0) > 0) {
+      pool.push({
+        rate: Number(fxOfflineState.rate),
+        updated: fxOfflineState.updated,
+        source: 'offline-cache'
+      });
+    }
+    var candidate = csfxPickBestCandidate(pool);
+    if (candidate) {
+      FX.rate = candidate.rate;
+      if (candidate.updated !== undefined) FX.updated = candidate.updated;
+      FX.rateSource = candidate.source || FX.rateSource || 'fallback';
+      csfxRememberLastGood(candidate.rate, candidate.updated, candidate.source || context || 'fallback');
+      return true;
+    }
+    return false;
+  }
+  function csfxCurrentBadgeIcon(){
+    if (csfxConnectionStatus.status === 'offline') return '🚫';
+    if (csfxConnectionStatus.status === 'degraded') return '⚠️';
+    return '🏷️';
+  }
+  function csfxSetConnectionStatus(status, reason){
+    var normalized = status || 'unknown';
+    var motive = reason || '';
+    if (csfxConnectionStatus.status === normalized && (csfxConnectionStatus.reason || '') === motive) {
+      return;
+    }
+    csfxConnectionStatus = {
+      status: normalized,
+      reason: motive,
+      lastChange: Date.now()
+    };
+    if (FX) {
+      FX.connectionStatus = normalized;
+    }
+    var badge = document.querySelector('.csfx-badge');
+    if (badge) {
+      badge.dataset.csfxStatus = normalized;
+      if (motive) badge.dataset.csfxStatusReason = motive; else delete badge.dataset.csfxStatusReason;
+      csfxUpdateBadgeHandle(badge);
+    }
+  }
+
+  function csfxProbeBackend(force){
+    var endpoint = window.CSFX_RATE_ENDPOINT || '/wp-json/csfx/v1/rate';
+    if (!endpoint) return;
+    var now = Date.now();
+    if (!force && now - csfxLastHealthProbe < 5000) return;
+    csfxLastHealthProbe = now;
+    var url = endpoint + (endpoint.indexOf('?') === -1 ? '?' : '&') + 'health=1&_ts=' + now;
+    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timeoutMs = Math.max(2000, Math.min(8000, Number(FX.healthTimeout || CSFX_HEALTH_TIMEOUT_MS)));
+    var timedOut = false;
+    var timeoutId = null;
+    var opts = { method: 'GET', cache: 'no-store', credentials: 'same-origin', headers: { 'Accept': 'application/json' } };
+    if (controller) {
+      opts.signal = controller.signal;
+      timeoutId = setTimeout(function(){
+        timedOut = true;
+        try { controller.abort(); } catch (_abortErr) {}
+      }, timeoutMs);
+    }
+    fetch(url, opts)
+      .then(function (r) {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (r && r.ok) {
+          if (csfxConnectionStatus.status !== 'degraded') {
+            csfxSetConnectionStatus('online', '');
+          } else {
+            var badge = document.querySelector('.csfx-badge');
+            if (badge) csfxUpdateBadgeHandle(badge);
+          }
+        } else {
+          throw new Error('health_http_' + (r ? r.status : '0'));
+        }
+      })
+      .catch(function (err) {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        var reason = timedOut ? 'health-timeout' : ((err && err.message) || 'health-error');
+        csfxSetConnectionStatus('offline', reason);
+      });
+  }
+
+  function csfxStartHealthMonitor(){
+    if (csfxHealthTimer) return;
+    var interval = Number(FX.healthInterval || 0);
+    if (!interval || !isFinite(interval) || interval < 10000) interval = CSFX_HEALTH_INTERVAL_MS;
+    interval = Math.min(Math.max(interval, 10000), 90000);
+    csfxHealthTimer = setInterval(function(){ csfxProbeBackend(false); }, interval);
+  }
 
   function hydrateFxRateFromOffline(){
     if (!fxOfflineState || typeof fxOfflineState !== 'object') return;
@@ -668,6 +893,7 @@ var csfxLastLoggedSupervisorNote = '';
     if (rate > 0 && (!FX.rate || FX.rate <= 0)) {
       FX.rate = rate;
       if (fxOfflineState.updated) FX.updated = fxOfflineState.updated;
+      csfxRememberLastGood(rate, FX.updated, 'offline-cache');
     }
   }
 
@@ -695,6 +921,22 @@ var csfxLastLoggedSupervisorNote = '';
 
   hydrateFxRateFromOffline();
   hydrateFxDiscountFromOffline();
+  csfxEnsureBestInitialRate();
+  schedule(runAll);
+  csfxProbeBackend(true);
+  csfxStartHealthMonitor();
+
+  if (typeof window !== 'undefined') {
+    try {
+      window.addEventListener('offline', function () {
+        csfxSetConnectionStatus('offline', 'browser-offline');
+      });
+      window.addEventListener('online', function () {
+        csfxProbeBackend(true);
+        refreshRate(function(){});
+      });
+    } catch (_errNetEvents) {}
+  }
 
     function csfxClearLegacyStores(){
     try { localStorage.removeItem('YU_BCV_RATE'); } catch(_){ }
@@ -1542,46 +1784,57 @@ var csfxLastLoggedSupervisorNote = '';
   }
   function parsePrice(s) {
     /**
-     * Extrae un precio decimal de una cadena tomando el último separador
-     * encontrado (coma o punto) como separador decimal y eliminando el
-     * resto de separadores de miles. Se ignoran cadenas que representen
-     * montos en bolívares para evitar duplicar conversiones.
+     * Extrae un precio decimal de una cadena buscando todos los tokens
+     * numéricos y quedándose con el último que no pertenezca a un monto en
+     * bolívares. De esta forma ignoramos expresiones como "22,69$ - 46,34$"
+     * sin reventar los decimales al concatenar dígitos.
      * @param {string} s
      * @returns {number}
      */
     if (!s) return NaN;
-    var text = String(s).trim();
+    var text = String(s).replace(/\s+/g, ' ').trim();
     if (!/[0-9]/.test(text)) return NaN;
-    if (/bs\s*[\d.,]/i.test(text)) return NaN;
 
+    var lastValue = NaN;
+    var match;
+    var re = /(-?\d[\d.,]*)/g;
+
+    while ((match = re.exec(text))) {
+      var token = match[1];
+      // Ignorar tokens precedidos por Bs/VES/VEF para evitar duplicar montos en Bs.
+      var prefix = text.slice(Math.max(0, match.index - 4), match.index).toUpperCase();
+      if (/(BS|VES|VEF)/.test(prefix)) continue;
+
+      var parsed = parsePriceToken(token);
+      if (!isNaN(parsed)) {
+        lastValue = parsed;
+      }
+    }
+
+    return lastValue;
+  }
+
+  function parsePriceToken(token) {
+    if (!token) return NaN;
     var sign = 1;
-    if (/^-/.test(text)) sign = -1;
-
-    var cleaned = text.replace(/[^0-9,.\-]/g, '');
+    var trimmed = token.trim();
+    if (/^-/.test(trimmed)) {
+      sign = -1;
+    }
+    var cleaned = trimmed.replace(/[^0-9,.\-]/g, '');
     cleaned = cleaned.replace(/-/g, '');
     if (!cleaned) return NaN;
 
     var lastComma = cleaned.lastIndexOf(',');
     var lastDot = cleaned.lastIndexOf('.');
     var sepIndex = Math.max(lastComma, lastDot);
-
     if (sepIndex === -1) return NaN;
 
-    var integerPart = cleaned;
-    var decimalPart = '';
-    if (sepIndex !== -1) {
-      decimalPart = cleaned.substring(sepIndex + 1).replace(/[.,]/g, '');
-      integerPart = cleaned.substring(0, sepIndex);
-    }
-
-    integerPart = integerPart.replace(/[.,]/g, '');
+    var integerPart = cleaned.substring(0, sepIndex).replace(/[.,]/g, '');
+    var decimalPart = cleaned.substring(sepIndex + 1).replace(/[.,]/g, '');
     if (!decimalPart) return NaN;
 
-    var normalised = integerPart || '0';
-    if (decimalPart) {
-      normalised += '.' + decimalPart;
-    }
-
+    var normalised = (integerPart || '0') + '.' + decimalPart;
     var result = parseFloat(normalised);
     if (!isFinite(result)) return NaN;
     return sign * result;
@@ -1667,10 +1920,12 @@ var csfxLastLoggedSupervisorNote = '';
       '.csfx-dual-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px;}',
       '.csfx-btn{appearance:none;border:0;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:transform .2s ease,box-shadow .2s ease,background .2s ease,color .2s ease;font-family:inherit;min-width:0;}',
       '.csfx-btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none;transform:none;}',
-      '.csfx-btn--primary{background:#0057b7;color:#fff;box-shadow:0 4px 12px rgba(0,87,183,.3);min-width:132px;}',
-      '.csfx-btn--primary:hover:not(:disabled){background:#0b6ad4;box-shadow:0 6px 16px rgba(0,87,183,.4);}',
-      '.csfx-btn--ghost{background:rgba(255,255,255,.65);color:#0f172a;border:1px solid rgba(15,23,42,.12);}',
-      '.csfx-btn--ghost:hover:not(:disabled){background:#f1f5f9;}',
+      '.csfx-btn--primary{background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;box-shadow:0 4px 12px rgba(37,99,235,.38);min-width:132px;}',
+      '.csfx-btn--primary:hover:not(:disabled){background:linear-gradient(135deg,#1d4ed8,#1e40af);box-shadow:0 6px 18px rgba(30,64,175,.45);}',
+      '.csfx-btn--secondary{background:rgba(59,130,246,.12);color:#1e40af;border:1px solid rgba(59,130,246,.35);box-shadow:0 3px 10px rgba(59,130,246,.18);}',
+      '.csfx-btn--secondary:hover:not(:disabled){background:rgba(59,130,246,.18);}',
+      '.csfx-btn--ghost{background:rgba(15,23,42,.04);color:#0f172a;border:1px solid rgba(15,23,42,.12);}',
+      '.csfx-btn--ghost:hover:not(:disabled){background:rgba(15,23,42,.08);}',
       '.csfx-btn--accent{background:#10b981;color:#fff;box-shadow:0 3px 12px rgba(16,185,129,.35);}',
       '.csfx-btn--accent:hover:not(:disabled){background:#0d9668;}',
       '.csfx-dual-status{margin-top:10px;font-size:13px;color:#0f172a;font-weight:600;}',
@@ -1690,12 +1945,17 @@ var csfxLastLoggedSupervisorNote = '';
       // badge colapsable para mostrar la tasa y hora
       '.csfx-badge{position:fixed;right:12px;bottom:96px;z-index:10000;font-family:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:stretch;width:auto;}', /* bottom se recalcula por JS */
       '.csfx-badge-handle{background:#0057b7;color:#fff;padding:10px 16px;border-radius:12px 12px 0 0;font-size:15px;display:flex;align-items:center;gap:10px;box-shadow:0 8px 18px rgba(0,87,183,.35);transition:background .2s ease,box-shadow .2s ease;width:100%;}',
+      '.csfx-badge[data-csfx-status=\"degraded\"] .csfx-badge-handle{background:#b45309;box-shadow:0 8px 18px rgba(180,83,9,.35);}',
+      '.csfx-badge[data-csfx-status=\"offline\"] .csfx-badge-handle{background:#b91c1c;box-shadow:0 8px 18px rgba(185,28,28,.35);}',
+      '.csfx-badge[data-csfx-status=\"degraded\"] .csfx-badge-handle:hover{background:#92400e;}',
+      '.csfx-badge[data-csfx-status=\"offline\"] .csfx-badge-handle:hover{background:#991b1b;}',
       '.csfx-badge-handle:hover{background:#0b6ad4;}',
       '.csfx-badge-handle *{pointer-events:none;}',
       '.csfx-badge:not(.open) .csfx-badge-handle{padding:8px 6px;font-size:13px;gap:4px;justify-content:flex-end;}',
       '.csfx-badge:not(.open) .csfx-badge-label{font-size:13px;text-align:right;display:inline-block;}',
       '.csfx-badge:not(.open) .csfx-badge-icon{width:20px;height:20px;}',
       '.csfx-badge-icon{display:inline-flex;width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,.3);align-items:center;justify-content:center;font-size:15px;box-shadow:0 4px 10px rgba(255,255,255,.2);}',
+      '.csfx-badge[data-csfx-status=\"degraded\"] .csfx-badge-icon, .csfx-badge[data-csfx-status=\"offline\"] .csfx-badge-icon{background:rgba(255,255,255,.18);}',
       '.csfx-badge-label{font-size:13px;font-weight:600;}',
       '.csfx-badge-content{background:#ffffff;color:#0f172a;padding:12px 14px;border-radius:0 0 12px 12px;display:none;font-size:13px;white-space:nowrap;box-shadow:0 16px 32px rgba(15,23,42,.25);border:1px solid rgba(15,23,42,.06);min-width:260px;}',
        '.csfx-badge.open .csfx-badge-content{display:block;}',
@@ -1724,7 +1984,7 @@ var csfxLastLoggedSupervisorNote = '';
       '.csfx-auth-info{font-size:12px;color:#475569;line-height:1.5;}',
       '.csfx-countdown{font-size:14px;font-weight:700;color:#0f172a;}',
       '.csfx-countdown[data-active="1"]{color:#b91c1c;}',
-      '.csfx-guarded{display:none!important;pointer-events:none!important;}',
+      '.csfx-guarded{cursor:not-allowed!important;color:#64748b!important;}',
       '.csfx-modal--info{max-width:420px;width:420px;min-width:320px;}',
       '.csfx-modal--info .csfx-modal-body{gap:14px;}',
       '.csfx-explain-body{display:flex;flex-direction:column;gap:12px;font-size:13px;color:#0f172a;}',
@@ -2288,12 +2548,59 @@ var csfxLastLoggedSupervisorNote = '';
     var subRow = findTotalsRow(container, /(^|\s)subtotal(\s|$)/i);
 
     var discRow = findTotalsRow(container, /descuento|discount/i);
-    var taxRow = findTotalsRow(container, /impuesto|tax/i);
+    if (discRow) {
+      if (!discRow.dataset.csfxDiscGuard) {
+        discRow.dataset.csfxDiscGuard = '1';
+        var guardHandler = function (ev) {
+          if (csfxCustomModalState && csfxCustomModalState.authorized) return;
+          if (ev && ev.target && typeof ev.target.closest === 'function') {
+            var bypassRemove = ev.target.closest('[' + CSFX_DISCOUNT_REMOVE_ATTR + '], [data-action="remove"], [data-role="remove"], .remove, .op-remove-discount');
+            if (bypassRemove) return;
+          }
+          ev.preventDefault();
+          ev.stopPropagation();
+          try { csfxShowAuthWidget(); } catch (_errShowAuth) {}
+        };
+        ['click', 'mousedown', 'touchstart'].forEach(function (evt) {
+          discRow.addEventListener(evt, guardHandler, true);
+        });
+      }
+      try {
+        var removeSelectors = '[' + CSFX_DISCOUNT_REMOVE_ATTR + '], [data-action="remove"], [data-role="remove"], .remove, .op-remove-discount, button[aria-label*="eliminar"], button[aria-label*="Eliminar"], button[aria-label*="remove"], button[aria-label*="Remove"], .mat-icon[aria-label*="eliminar"], .mat-icon[aria-label*="Eliminar"], .mat-icon-button[aria-label*="eliminar"], .mat-icon-button[aria-label*="Eliminar"], .mat-icon[fonticon*="delete"], .mat-icon-button';
+        var removeNodes = discRow.querySelectorAll(removeSelectors);
+        removeNodes.forEach(function (btn) {
+          if (!btn) return;
+          btn.setAttribute(CSFX_DISCOUNT_REMOVE_ATTR, '1');
+          var parent = btn.parentElement;
+          if (parent && parent !== discRow) parent.setAttribute(CSFX_DISCOUNT_REMOVE_ATTR, '1');
+          var inner = btn.querySelectorAll('*');
+          for (var k = 0; k < inner.length; k++) {
+            inner[k].setAttribute(CSFX_DISCOUNT_REMOVE_ATTR, '1');
+          }
+        });
+      } catch (_errMarkRemove) {}
+      if (csfxCustomModalState && csfxCustomModalState.authorized) {
+        discRow.classList.remove('csfx-guarded');
+      } else {
+        discRow.classList.add('csfx-guarded');
+      }
+    }
+  var taxRow = findTotalsRow(container, /impuesto|tax/i);
     var totRow = findTotalsRow(container, /^total(?!.*\(bs\))/i);
 
 
     var usdS = readUsdFromRow(subRow);
-    var usdD = Math.abs(readUsdFromRow(discRow)) || 0;
+    var readDiscount = readUsdFromRow(discRow);
+    var usdD = Math.abs(readDiscount || 0);
+    if (!discRow) {
+      window.__CSFX_LAST_DISCOUNT_USD = 0;
+    } else if (!isNaN(readDiscount)) {
+      if (usdD > 0.0001) {
+        window.__CSFX_LAST_DISCOUNT_USD = usdD;
+      } else {
+        window.__CSFX_LAST_DISCOUNT_USD = 0;
+      }
+    }
     var usdI = readUsdFromRow(taxRow);
     var usdT = readUsdFromRow(totRow);
 
@@ -2397,13 +2704,16 @@ var csfxLastLoggedSupervisorNote = '';
     if (!badge) return;
     var handle = badge.querySelector('.csfx-badge-handle');
     if (!handle) return;
+    var status = csfxConnectionStatus.status || 'unknown';
+    badge.dataset.csfxStatus = status;
     var rateText = '--';
     try {
       if (FX.rate) {
         rateText = Number(FX.rate).toFixed(FX.decimals);
       }
     } catch (_errRate) {}
-    handle.innerHTML = '<span class="csfx-badge-icon">🏷️</span><span class="csfx-badge-label">' + rateText + '</span>';
+    var icon = csfxCurrentBadgeIcon();
+    handle.innerHTML = '<span class="csfx-badge-icon">' + icon + '</span><span class="csfx-badge-label">' + rateText + '</span>';
   }
 
   /**
@@ -2420,6 +2730,7 @@ var csfxLastLoggedSupervisorNote = '';
     if (!badge) {
       badge = document.createElement('div');
       badge.className = 'csfx-badge';
+      badge.dataset.csfxStatus = csfxConnectionStatus.status || 'unknown';
       var handle = document.createElement('div');
       handle.className = 'csfx-badge-handle';
       handle.innerHTML = '';
@@ -2428,6 +2739,8 @@ var csfxLastLoggedSupervisorNote = '';
       badge.appendChild(handle);
       badge.appendChild(content);
       document.body.appendChild(badge);
+    } else {
+      badge.dataset.csfxStatus = csfxConnectionStatus.status || 'unknown';
     }
     var handle = badge.querySelector('.csfx-badge-handle');
     if (handle && !handle.dataset.csfxBound) {
@@ -2496,6 +2809,31 @@ var csfxLastLoggedSupervisorNote = '';
       if (typeof val.value !== 'undefined') return csfxToNumber(val.value);
     }
     return NaN;
+  }
+
+  function csfxReadCurrentDiscountUSD() {
+    var container = findTotalsContainer();
+    var amount = NaN;
+    if (container) {
+      var row = findTotalsRow(container, /descuento|discount/i);
+      amount = Math.abs(readUsdFromRow(row));
+    }
+    if (!isNaN(amount) && amount > 0.0001) {
+      window.__CSFX_LAST_DISCOUNT_USD = amount;
+      return amount;
+    }
+    var cached = Number(window.__CSFX_LAST_DISCOUNT_USD || 0);
+    return isFinite(cached) ? cached : 0;
+  }
+
+  function csfxHasGlobalDiscount(snapshot) {
+    if (snapshot && typeof snapshot === 'object') {
+      if (snapshot.applied && snapshot.discountAmount > 0.0001) return true;
+      var metaDisc = snapshot.meta ? csfxToNumber(snapshot.meta.csfx_discount_value) : NaN;
+      if (!isNaN(metaDisc) && metaDisc > 0.0001) return true;
+    }
+    var domDisc = csfxReadCurrentDiscountUSD();
+    return domDisc > 0.0001;
   }
 
   function csfxNormalizeCartCandidate(candidate) {
@@ -2749,6 +3087,10 @@ var csfxLastLoggedSupervisorNote = '';
       totalCandidates.push(compatTotals.grand, compatTotals.total);
     }
 
+    if (meta && typeof meta.csfx_discount_value !== 'undefined') {
+      discountCandidates.unshift(meta.csfx_discount_value);
+    }
+
     if (cart) {
       subtotalCandidates.push(cart.base_subtotal, cart.subtotal, cart.totals && cart.totals.base_subtotal, cart.totals && cart.totals.subtotal);
       discountCandidates.push(
@@ -2806,9 +3148,10 @@ var csfxLastLoggedSupervisorNote = '';
     }
 
     var baseTotal = pickCandidate([
-      compatTotals && compatTotals.subtotal,
-      compatTotals && compatTotals.baseSubtotal,
       meta && meta.csfx_base_total,
+      cart && cart.csfx_base_total,
+      compatTotals && compatTotals.baseSubtotal,
+      compatTotals && compatTotals.subtotal,
       cart && cart.base_subtotal,
       cart && cart.subtotal,
       cart && cart.totals && cart.totals.base_subtotal
@@ -2839,7 +3182,7 @@ var csfxLastLoggedSupervisorNote = '';
     var discountPctMeta = meta.csfx_discount_pct != null ? Number(meta.csfx_discount_pct) : null;
     var applied = Math.abs(discountAmount) > 0.0001;
 
-    return {
+    var snapshotResult = {
       cart: cart,
       cartService: cartService,
       cartSource: cartSource,
@@ -2852,6 +3195,13 @@ var csfxLastLoggedSupervisorNote = '';
       discountPct: discountPctMeta,
       applied: applied
     };
+    if (!snapshotResult.applied && csfxHasGlobalDiscount(snapshotResult)) {
+      snapshotResult.applied = true;
+      if (snapshotResult.discountAmount <= 0.0001) {
+        snapshotResult.discountAmount = csfxReadCurrentDiscountUSD();
+      }
+    }
+    return snapshotResult;
   }
 
   function csfxComputeDual(baseTotal, usdNet, pct) {
@@ -2905,6 +3255,46 @@ var csfxLastLoggedSupervisorNote = '';
     });
   }
 
+  function csfxNormalizeAdditionInfoItem(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    var label = entry.label;
+    if (typeof label !== 'string' || label.trim() === '') return null;
+    var value = entry.value;
+    if (value === null || typeof value === 'undefined') {
+      value = '';
+    } else if (typeof value !== 'string') {
+      value = String(value);
+    }
+    return { label: label, value: value };
+  }
+
+  function csfxApplySupervisorAdditionInfo(targetCart, noteMessage) {
+    if (!targetCart || typeof targetCart !== 'object') return;
+    var sourceList = [];
+    if (Array.isArray(targetCart.addition_information)) {
+      sourceList = targetCart.addition_information;
+    } else if (Array.isArray(targetCart.additionInformation)) {
+      sourceList = targetCart.additionInformation;
+    }
+    var preserved = [];
+    for (var i = 0; i < sourceList.length; i++) {
+      var normalized = csfxNormalizeAdditionInfoItem(sourceList[i]);
+      if (!normalized) continue;
+      if (normalized.label === CSFX_SUPERVISOR_INFO_LABEL) continue;
+      preserved.push(normalized);
+    }
+    if (noteMessage) {
+      preserved.push({ label: CSFX_SUPERVISOR_INFO_LABEL, value: noteMessage });
+    }
+    if (preserved.length) {
+      targetCart.addition_information = preserved;
+      targetCart.additionInformation = preserved.slice();
+    } else {
+      delete targetCart.addition_information;
+      delete targetCart.additionInformation;
+    }
+  }
+
   function csfxEnrichCartWithSupervisor(targetCart) {
     if (!targetCart || typeof targetCart !== 'object') return;
     var base = Array.isArray(targetCart.meta_data) ? targetCart.meta_data : (Array.isArray(targetCart.metaData) ? targetCart.metaData : []);
@@ -2913,7 +3303,12 @@ var csfxLastLoggedSupervisorNote = '';
       base.forEach(function (item) {
         if (!item) return;
         var key = item.key || item.name || item.code;
-        if (key && CSFX_SUPERVISOR_META_KEYS.indexOf(key) !== -1) return;
+        if (!key) {
+          meta.push(item);
+          return;
+        }
+        if (CSFX_SUPERVISOR_META_KEYS.indexOf(key) !== -1) return;
+        if (key.indexOf('csfx_auth_supervisor_') === 0) return;
         meta.push(item);
       });
     }
@@ -2932,6 +3327,7 @@ var csfxLastLoggedSupervisorNote = '';
       }
       meta.push({ key: key, value: normalized });
     };
+    var noteMessage = null;
     if (supervisor && typeof supervisor === 'object') {
       pushMeta('csfx_auth_supervisor_id', typeof supervisor.id !== 'undefined' ? supervisor.id : '');
       pushMeta('csfx_auth_supervisor_name', supervisor.name || '');
@@ -2948,37 +3344,18 @@ var csfxLastLoggedSupervisorNote = '';
       }
       targetCart.csfx_auth_supervisor_id = typeof supervisor.id !== 'undefined' ? supervisor.id : '';
       targetCart.csfx_auth_supervisor_name = supervisor.name || '';
-      var label = supervisor.name ? supervisor.name : 'Supervisor sin nombre';
-      if (supervisor.id) {
-        label += ' (ID ' + supervisor.id + ')';
+      var label = supervisor.name || supervisor.email || (supervisor.id ? ('ID ' + supervisor.id) : '');
+      if (!label) {
+        label = 'Supervisor sin nombre';
       }
-      var parts = [];
-      if (supervisor.via || supervisor.source) {
-        parts.push((supervisor.via || supervisor.source).charAt(0).toUpperCase() + (supervisor.via || supervisor.source).slice(1));
-      }
-      if (supervisor.method) {
-        parts.push(supervisor.method.charAt(0).toUpperCase() + supervisor.method.slice(1));
-      }
-      if (supervisor.reference) {
-        parts.push('Ref: ' + supervisor.reference);
-      }
-      if (supervisor.authorized_at || supervisor.authorizedAt) {
-        parts.push('Hora: ' + (supervisor.authorized_at || supervisor.authorizedAt));
-      }
-      var noteMessage = 'CSFX · Supervisor ' + label + ' autorizó descuentos personalizados.';
-      if (parts.length) {
-        noteMessage += ' (' + parts.join(' · ') + ')';
-      }
-      pushMeta('csfx_auth_supervisor_note', noteMessage);
-      targetCart.csfx_auth_supervisor_note = noteMessage;
+      noteMessage = 'CSFX · Supervisor ' + label + ' autorizó descuentos personalizados.';
       if (!targetCart.meta || typeof targetCart.meta !== 'object') {
         targetCart.meta = {};
       }
-      targetCart.meta.csfx_auth_supervisor_note = noteMessage;
       targetCart.meta.csfx_auth_supervisor_id = typeof supervisor.id !== 'undefined' ? supervisor.id : '';
       targetCart.meta.csfx_auth_supervisor_name = supervisor.name || '';
-      if (csfxLastLoggedSupervisorNote !== noteMessage) {
-        csfxLastLoggedSupervisorNote = noteMessage;
+      if (csfxLastLoggedSupervisorMessage !== noteMessage) {
+        csfxLastLoggedSupervisorMessage = noteMessage;
         try {
           console.info('[CSFX] Nota preparada para supervisor: ' + noteMessage);
         } catch (_errNoteConsole) {}
@@ -2986,15 +3363,13 @@ var csfxLastLoggedSupervisorNote = '';
     } else {
       delete targetCart.csfx_auth_supervisor_id;
       delete targetCart.csfx_auth_supervisor_name;
-      delete targetCart.csfx_auth_supervisor_note;
-      meta = csfxRemoveMeta(meta, 'csfx_auth_supervisor_note');
       if (targetCart.meta && typeof targetCart.meta === 'object') {
-        delete targetCart.meta.csfx_auth_supervisor_note;
         delete targetCart.meta.csfx_auth_supervisor_id;
         delete targetCart.meta.csfx_auth_supervisor_name;
       }
-      csfxLastLoggedSupervisorNote = '';
+      csfxLastLoggedSupervisorMessage = '';
     }
+    csfxApplySupervisorAdditionInfo(targetCart, noteMessage);
     targetCart.meta_data = meta;
     targetCart.metaData = meta;
   }
@@ -3254,15 +3629,6 @@ var csfxLastLoggedSupervisorNote = '';
   if (!found) arr.push({ key: key, value: value });
   return arr;
 }
-
-  function csfxRemoveMeta(list, key) {
-    if (!Array.isArray(list)) return [];
-    return list.filter(function (item) {
-      if (!item) return false;
-      var itemKey = item.key || item.name || item.code;
-      return itemKey !== key;
-    });
-  }
 
   /**
    * csfx: fallback UI para aplicar descuento manual cuando no hay CartService.
@@ -3526,18 +3892,20 @@ var csfxLastLoggedSupervisorNote = '';
   }
 
   function csfxPersistCart(cart) {
-    if (cart) {
-      csfxEnrichCartWithSupervisor(cart);
+    if (!cart || typeof cart !== 'object') return;
+    csfxEnrichCartWithSupervisor(cart);
+    var additionInfo = [];
+    if (Array.isArray(cart.addition_information)) {
+      additionInfo = cart.addition_information.slice();
+    } else if (Array.isArray(cart.additionInformation)) {
+      additionInfo = cart.additionInformation.slice();
     }
-    if (cart && cart.csfx_auth_supervisor_note) {
-      if (csfxLastLoggedSupervisorNote !== cart.csfx_auth_supervisor_note) {
-        csfxLastLoggedSupervisorNote = cart.csfx_auth_supervisor_note;
-        try {
-          console.info('[CSFX] Persistiendo nota de supervisor en carrito:', cart.csfx_auth_supervisor_note);
-        } catch (_errPersistLog) {}
-      }
+    if (additionInfo.length) {
+      cart.addition_information = additionInfo.slice();
+      cart.additionInformation = additionInfo.slice();
     } else {
-      csfxLastLoggedSupervisorNote = '';
+      delete cart.addition_information;
+      delete cart.additionInformation;
     }
     var snapshot = {
       discount_amount: cart.discount_amount,
@@ -3552,10 +3920,10 @@ var csfxLastLoggedSupervisorNote = '';
       csfx_discount_pct: cart.csfx_discount_pct,
       csfx_discount_value: cart.csfx_discount_value,
       csfx_base_total: cart.csfx_base_total,
-      csfx_auth_supervisor_note: cart.csfx_auth_supervisor_note
+      addition_information: additionInfo.slice(),
+      additionInformation: additionInfo.slice()
     };
     var keys = ['op_cart', 'op_cache_cart', 'op_local_cart', '_op_cart_data', 'op_cart_data', 'op_cart_v8', 'op_v5_cart', 'op_cart_backup', 'op_cart_latest', 'op_cart_store'];
-    var loggedStorageWrite = false;
     for (var k = 0; k < keys.length; k++) {
       try {
         var raw = localStorage.getItem(keys[k]);
@@ -3565,24 +3933,14 @@ var csfxLastLoggedSupervisorNote = '';
         Object.keys(snapshot).forEach(function (prop) {
           if (typeof snapshot[prop] !== 'undefined') stored[prop] = snapshot[prop];
         });
-        var storedMeta = csfxRemoveMeta(stored.meta_data || stored.metaData || [], 'csfx_auth_supervisor_note');
-        if (cart.csfx_auth_supervisor_note) {
-          storedMeta = csfxUpsertMeta(storedMeta, 'csfx_auth_supervisor_note', cart.csfx_auth_supervisor_note);
-        }
-        stored.meta_data = storedMeta;
-        stored.metaData = storedMeta;
-        if (cart.csfx_auth_supervisor_note) {
-          stored.csfx_auth_supervisor_note = cart.csfx_auth_supervisor_note;
+        if (additionInfo.length) {
+          stored.addition_information = additionInfo.slice();
+          stored.additionInformation = additionInfo.slice();
         } else {
-          delete stored.csfx_auth_supervisor_note;
+          delete stored.addition_information;
+          delete stored.additionInformation;
         }
         localStorage.setItem(keys[k], JSON.stringify(stored));
-        if (!loggedStorageWrite) {
-          loggedStorageWrite = true;
-          try {
-            console.info('[CSFX] Actualizado localStorage (' + keys[k] + ') con nota de supervisor:', cart.csfx_auth_supervisor_note || null);
-          } catch (_errStorageLog) {}
-        }
       } catch (_err) {}
     }
     persistFxOfflineState({
@@ -3592,7 +3950,7 @@ var csfxLastLoggedSupervisorNote = '';
     });
   }
 
-  function csfxApplyDualDiscount(snapshot, calc) {
+  function csfxApplyDualDiscount(snapshot, calc, replacingExisting) {
     if (!snapshot || !calc) return false;
     var cart = (snapshot.cart && typeof snapshot.cart === 'object') ? snapshot.cart : {};
     if (!cart.totals || typeof cart.totals !== 'object') cart.totals = {};
@@ -3603,6 +3961,14 @@ var csfxLastLoggedSupervisorNote = '';
       });
     }
     var baseTotal = round(snapshot.baseTotalUSD, FX.decimals);
+    if ((!isFinite(baseTotal) || baseTotal <= 0) && snapshot.meta && snapshot.meta.csfx_base_total) {
+      var metaBase = csfxToNumber(snapshot.meta.csfx_base_total);
+      if (isFinite(metaBase) && metaBase > 0) baseTotal = round(metaBase, FX.decimals);
+    }
+    if ((!isFinite(baseTotal) || baseTotal <= 0) && window.__CSFX_LAST_BASE_USD) {
+      var cachedBase = Number(window.__CSFX_LAST_BASE_USD);
+      if (isFinite(cachedBase) && cachedBase > 0) baseTotal = round(cachedBase, FX.decimals);
+    }
     if (!baseTotal || !isFinite(baseTotal)) {
       csfxDualLog('apply:no-base-total', {
         baseTotal: snapshot.baseTotalUSD,
@@ -3624,6 +3990,7 @@ var csfxLastLoggedSupervisorNote = '';
       existingFinalDiscount: cart.final_discount_amount,
       hasService: !!snapshot.cartService,
       cartSource: snapshot.cartSource,
+      replacingExisting: !!replacingExisting,
       manualVia: 'ui'
     });
     if (snapshot.cartDebug && typeof snapshot.cartDebug === 'object') {
@@ -3681,14 +4048,20 @@ var csfxLastLoggedSupervisorNote = '';
       targetMeta = csfxUpsertMeta(targetMeta, 'csfx_usd_paid', usdPaidRounded);
       targetMeta = csfxUpsertMeta(targetMeta, 'csfx_discount_pct', pctStored);
       targetMeta = csfxUpsertMeta(targetMeta, 'csfx_discount_value', discountValue);
-      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_base_total', baseTotal);
+      var basePersist = baseTotal;
+      var recBase = Number(window.__CSFX_LAST_BASE_USD || 0);
+      if (isFinite(recBase) && recBase > 0) basePersist = recBase;
+      if (replacingExisting && replacingExisting.base && replacingExisting.base > 0) {
+        basePersist = replacingExisting.base;
+      }
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_base_total', basePersist);
       targetMeta = csfxUpsertMeta(targetMeta, 'csfx_discount_note', note);
       targetCart.meta_data = targetMeta;
       targetCart.metaData = targetMeta;
       targetCart.csfx_usd_paid = usdPaidRounded;
       targetCart.csfx_discount_pct = pctStored;
       targetCart.csfx_discount_value = discountValue;
-      targetCart.csfx_base_total = baseTotal;
+      targetCart.csfx_base_total = basePersist;
       targetCart.csfx_discount_note = note;
       csfxEnrichCartWithSupervisor(targetCart);
     };
@@ -3780,6 +4153,10 @@ var csfxLastLoggedSupervisorNote = '';
       uiDoneSuccess: uiDoneSuccess
     });
 
+    if (typeof window !== 'undefined' && isFinite(baseTotal) && baseTotal > 0) {
+      window.__CSFX_LAST_BASE_USD = baseTotal;
+    }
+
     return true;
   }
 
@@ -3795,12 +4172,12 @@ var csfxLastLoggedSupervisorNote = '';
       });
     }
     var topBar = contentDiv.querySelector('.csfx-badge-top');
+    var topTitle = null;
     if (!topBar) {
       topBar = document.createElement('div');
       topBar.className = 'csfx-badge-top';
-      var topTitle = document.createElement('span');
+      topTitle = document.createElement('span');
       topTitle.className = 'csfx-badge-top-title';
-      topTitle.innerHTML = '<span class="csfx-badge-icon">🏷️</span><span>Referencia de tasa y descuento</span>';
       var closeBtn = document.createElement('button');
       closeBtn.type = 'button';
       closeBtn.className = 'csfx-badge-close';
@@ -3817,6 +4194,12 @@ var csfxLastLoggedSupervisorNote = '';
         ev.stopPropagation();
         badge.classList.remove('open');
       });
+    }
+    if (!topTitle) {
+      topTitle = topBar.querySelector('.csfx-badge-top-title');
+    }
+    if (topTitle) {
+      topTitle.innerHTML = '<span class="csfx-badge-icon">' + csfxCurrentBadgeIcon() + '</span><span>Referencia de tasa y descuento</span>';
     }
     var infoRow = contentDiv.querySelector('.csfx-badge-info');
     if (!infoRow) {
@@ -3974,15 +4357,21 @@ var csfxLastLoggedSupervisorNote = '';
 
     var actions = document.createElement('div');
     actions.className = 'csfx-dual-actions';
+    var fullBtn = document.createElement('button');
+    fullBtn.type = 'button';
+    fullBtn.className = 'csfx-btn csfx-btn--primary csfx-btn--wide';
+    fullBtn.dataset.csfx = 'full-discount';
+    fullBtn.textContent = 'Aplicar descuento total';
+    actions.appendChild(fullBtn);
     var confirm = document.createElement('button');
     confirm.type = 'button';
-    confirm.className = 'csfx-btn csfx-btn--primary';
+    confirm.className = 'csfx-btn csfx-btn--secondary csfx-btn--wide';
     confirm.dataset.csfx = 'confirm';
     confirm.textContent = 'Aplicar descuento dual';
     actions.appendChild(confirm);
     var customBtn = document.createElement('button');
     customBtn.type = 'button';
-    customBtn.className = 'csfx-btn csfx-btn--ghost';
+    customBtn.className = 'csfx-btn csfx-btn--ghost csfx-btn--wide';
     customBtn.dataset.csfx = 'custom-discount';
     customBtn.textContent = 'Descuento personalizado';
     actions.appendChild(customBtn);
@@ -4006,7 +4395,31 @@ var csfxLastLoggedSupervisorNote = '';
       input.dataset.csfxTouched = '1';
       csfxUpdateDualPanel(panel);
     });
-    confirm.addEventListener('click', function () { csfxHandleDualConfirm(panel); });
+    fullBtn.addEventListener('click', function () {
+      if (fullBtn.disabled) return;
+      var statusEl = panel.querySelector('[data-csfx="status"]');
+      var baseStr = panel.dataset.csfxBase || '';
+      var baseTotal = parseFloat(baseStr);
+      if (!isFinite(baseTotal) || baseTotal <= 0) {
+        if (statusEl) {
+          statusEl.textContent = 'No hay total disponible para aplicar el descuento.';
+          statusEl.className = 'csfx-dual-status csfx-dual-status--error';
+        }
+        return;
+      }
+      var inputEl = panel.querySelector('input[data-csfx="usd-net"]');
+      if (!inputEl) return;
+      var rounded = round(baseTotal, FX.decimals);
+      inputEl.value = rounded.toFixed(FX.decimals);
+      panel.dataset.csfxDirty = '1';
+      inputEl.dataset.csfxTouched = '1';
+      csfxUpdateDualPanel(panel);
+      csfxHandleDualConfirm(panel);
+    });
+    confirm.addEventListener('click', function () {
+      if (confirm.disabled) return;
+      csfxHandleDualConfirm(panel);
+    });
     customBtn.addEventListener('click', function () { csfxOpenCustomDiscountModal({ fromDualPanel: panel }); });
 
     csfxUpdateDualPanel(panel);
@@ -4026,7 +4439,19 @@ var csfxLastLoggedSupervisorNote = '';
     if (!panel) return;
     var pct = csfxDiscountDecimal();
     var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
+    var hasGlobalDiscount = csfxHasGlobalDiscount(snapshot);
     var baseTotal = snapshot.baseTotalUSD;
+    if ((!isFinite(baseTotal) || baseTotal <= 0) && snapshot.meta && snapshot.meta.csfx_base_total) {
+      var metaBase = csfxToNumber(snapshot.meta.csfx_base_total);
+      if (isFinite(metaBase) && metaBase > 0) baseTotal = metaBase;
+    }
+    if ((!isFinite(baseTotal) || baseTotal <= 0) && window.__CSFX_LAST_BASE_USD) {
+      var cachedBase = Number(window.__CSFX_LAST_BASE_USD);
+      if (isFinite(cachedBase) && cachedBase > 0) baseTotal = cachedBase;
+    }
+    if (!hasGlobalDiscount && isFinite(baseTotal) && baseTotal > 0) {
+      window.__CSFX_LAST_BASE_USD = baseTotal;
+    }
     panel.dataset.csfxPct = pct ? String(pct) : '';
     panel.dataset.csfxBase = isFinite(baseTotal) ? String(baseTotal) : '';
     panel.dataset.csfxTotal = isFinite(snapshot.totalUSD) ? String(snapshot.totalUSD) : '';
@@ -4040,6 +4465,7 @@ var csfxLastLoggedSupervisorNote = '';
 
     var input = panel.querySelector('input[data-csfx="usd-net"]');
     var status = panel.querySelector('[data-csfx="status"]');
+    var applyButtons = Array.prototype.slice.call(panel.querySelectorAll('[data-csfx="full-discount"], [data-csfx="confirm"]'));
     if (input && !panel.dataset.csfxDirty) {
       if (snapshot.usdPaid) {
         input.value = round(snapshot.usdPaid, FX.decimals).toFixed(FX.decimals);
@@ -4048,31 +4474,64 @@ var csfxLastLoggedSupervisorNote = '';
       }
     }
 
+    if (hasGlobalDiscount) {
+      applyButtons.forEach(function (btn) { if (btn) btn.disabled = true; });
+      csfxResetDualChips(panel);
+      if (status) {
+        var currentDisc = snapshot.discountAmount;
+        if ((!currentDisc || currentDisc <= 0.0001) && window.__CSFX_LAST_DISCOUNT_USD) {
+          currentDisc = window.__CSFX_LAST_DISCOUNT_USD;
+        }
+        if (!isNaN(currentDisc) && currentDisc > 0.0001) {
+          status.textContent = 'Ya existe un descuento global (' + fmtUsd(currentDisc) + '). Elimina el actual para aplicar uno nuevo.';
+        } else {
+          status.textContent = 'Ya existe un descuento global. Elimina el actual para aplicar uno nuevo.';
+        }
+        status.className = 'csfx-dual-status csfx-dual-status--warn';
+      }
+      if (input) input.value = '';
+      return panel;
+    }
+    applyButtons.forEach(function (btn) { if (btn) btn.disabled = false; });
+
     if (!isFinite(baseTotal) || baseTotal <= 0) {
       if (status) {
         status.textContent = 'Sin total disponible para calcular descuento.';
         status.className = 'csfx-dual-status csfx-dual-status--warn';
       }
       csfxResetDualChips(panel);
-    return;
+      return;
     }
 
     var rawValue = input ? String(input.value || '').replace(',', '.') : '0';
     var usdNet = parseFloat(rawValue);
     if (!isFinite(usdNet) || usdNet <= 0) {
-      csfxResetDualChips(panel);
-      if (status) {
-        status.textContent = 'Introduce el pago neto en divisas para estimar.';
-        status.className = 'csfx-dual-status';
+      if (!hasGlobalDiscount) {
+        csfxResetDualChips(panel);
+        if (status) {
+          status.textContent = 'Introduce el pago neto en divisas para estimar.';
+          status.className = 'csfx-dual-status';
+        }
       }
       return;
     }
 
-    var calc = csfxComputeDual(baseTotal, usdNet, pct);
+    var effectiveBase = baseTotal;
+    if ((!isFinite(effectiveBase) || effectiveBase <= 0) && snapshot.meta && snapshot.meta.csfx_base_total) {
+      var metaBase = csfxToNumber(snapshot.meta.csfx_base_total);
+      if (isFinite(metaBase) && metaBase > 0) effectiveBase = metaBase;
+    }
+    if (!isFinite(effectiveBase) || effectiveBase <= 0) {
+      effectiveBase = baseTotal;
+    }
+    var calc = csfxComputeDual(effectiveBase, usdNet, pct);
     panel.dataset.csfxCalcNet = calc.netEffective || '';
     panel.dataset.csfxCalcDiscount = calc.discount || '';
     panel.dataset.csfxCalcGross = calc.grossCovered || '';
     panel.dataset.csfxCalcRemainder = calc.remainderUsd || '';
+
+
+
 
     var metricsMap = {
       'gross': fmtUsd(calc.grossCovered),
@@ -4138,7 +4597,24 @@ var csfxLastLoggedSupervisorNote = '';
     }
     var pct = csfxDiscountDecimal();
     var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
+    var replacingCurrent = csfxHasGlobalDiscount(snapshot);
+    if (replacingCurrent) {
+      if (status) {
+        var discCurrent = snapshot.discountAmount || window.__CSFX_LAST_DISCOUNT_USD || 0;
+        status.textContent = 'Ya existe un descuento global (' + fmtUsd(discCurrent) + '). Elimina el actual antes de aplicar otro.';
+        status.className = 'csfx-dual-status csfx-dual-status--error';
+      }
+      return;
+    }
     var baseTotal = snapshot.baseTotalUSD;
+    if ((!isFinite(baseTotal) || baseTotal <= 0) && snapshot.meta && snapshot.meta.csfx_base_total) {
+      var metaBase = csfxToNumber(snapshot.meta.csfx_base_total);
+      if (isFinite(metaBase) && metaBase > 0) baseTotal = metaBase;
+    }
+    if ((!isFinite(baseTotal) || baseTotal <= 0) && window.__CSFX_LAST_BASE_USD) {
+      var cachedBase = Number(window.__CSFX_LAST_BASE_USD);
+      if (isFinite(cachedBase) && cachedBase > 0) baseTotal = cachedBase;
+    }
     if (!isFinite(baseTotal) || baseTotal <= 0) {
       csfxDualLog('confirm:no-base-total', { snapshot: snapshot, usdNet: usdNet });
       if (status) {
@@ -4156,7 +4632,8 @@ var csfxLastLoggedSupervisorNote = '';
       cartSource: snapshot.cartSource,
       hasService: !!snapshot.cartService,
       cartDebug: snapshot.cartDebug,
-      calc: calc
+      calc: calc,
+      replacingExisting: replacingCurrent
     });
     if (!calc || calc.discount <= 0) {
       csfxDualLog('confirm:no-discount', { calc: calc });
@@ -4166,13 +4643,14 @@ var csfxLastLoggedSupervisorNote = '';
       }
       return;
     }
-    var success = csfxApplyDualDiscount(snapshot, calc);
+    var success = csfxApplyDualDiscount(snapshot, calc, null);
     csfxDualLog('confirm:apply-result', {
       success: success,
       discount: calc.discount,
       cartFound: !!snapshot.cart,
       remainderUsd: calc.remainderUsd,
-      manualVia: snapshot.cartDebug && snapshot.cartDebug.manualVia ? snapshot.cartDebug.manualVia : null
+      manualVia: snapshot.cartDebug && snapshot.cartDebug.manualVia ? snapshot.cartDebug.manualVia : null,
+      replacingExisting: replacingCurrent
     });
     if (status) {
       status.classList.remove('csfx-dual-status--warn', 'csfx-dual-status--info', 'csfx-dual-status--error', 'csfx-dual-status--ok');
@@ -4185,6 +4663,10 @@ var csfxLastLoggedSupervisorNote = '';
       }
     }
     if (success) {
+      window.__CSFX_LAST_DISCOUNT_USD = calc.discount;
+      if (isFinite(baseTotal) && baseTotal > 0) {
+        window.__CSFX_LAST_BASE_USD = baseTotal;
+      }
       panel.dataset.csfxDirty = '';
       input.dataset.csfxTouched = '';
       csfxRenderBadgeContent(document.querySelector('.csfx-badge'));
@@ -4827,23 +5309,64 @@ var csfxLastLoggedSupervisorNote = '';
   // --- Refresco de tasa via AJAX ---
   function refreshRate(cb) {
     var url = (window.CSFX_RATE_ENDPOINT || '/wp-json/csfx/v1/rate') + '?ts=' + Date.now();
-    fetch(url, { cache: 'no-store', credentials: 'same-origin' })
-      .then(function (r) { return r.ok ? r.json() : null; })
+    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var configuredTimeout = Number(FX.fetchTimeout || 0);
+    if (!configuredTimeout || !isFinite(configuredTimeout) || configuredTimeout <= 0) {
+      var ttlBased = Number(FX.ttl || 0) * 500;
+      configuredTimeout = ttlBased && isFinite(ttlBased) && ttlBased > 0 ? ttlBased : CSFX_DEFAULT_FETCH_TIMEOUT;
+    }
+    var timeoutMs = Math.min(Math.max(3000, configuredTimeout), 20000);
+    var timedOut = false;
+    var timeoutId = null;
+    var options = { cache: 'no-store', credentials: 'same-origin' };
+    if (controller) {
+      options.signal = controller.signal;
+      timeoutId = setTimeout(function () {
+        timedOut = true;
+        try { controller.abort(); } catch (_abortErr) {}
+      }, timeoutMs);
+    }
+    fetch(url, options)
+      .then(function (r) {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (!r || !r.ok) {
+          var statusText = r ? 'http_' + r.status : 'no_response';
+          throw new Error(statusText);
+        }
+        return r.json();
+      })
       .then(function (j) {
-        // Si la respuesta es válida y tiene una tasa > 0, actualizamos; de lo contrario mantenemos la última tasa conocida.
-        if (j && Number(j.rate) > 0) {
+        var validRate = j && Number(j.rate) > 0;
+        if (validRate) {
           FX.rate = Number(j.rate);
           FX.mode = j.mode || '';
           FX.updated = j.updated || '';
-          persistFxOfflineState({ rate: FX.rate, updated: FX.updated });
+          csfxSetConnectionStatus('online', '');
+          csfxRememberLastGood(FX.rate, FX.updated, 'api');
+        } else {
+          csfxSetConnectionStatus('degraded', j ? 'invalid_rate' : 'invalid_payload');
         }
-        if (!FX.rate || FX.rate <= 0) hydrateFxRateFromOffline();
-        ensureBadge();
-        cb && cb();
+        if (!FX.rate || FX.rate <= 0) {
+          csfxApplyFallbackRate(validRate ? 'api-rate' : 'api-empty');
+        }
       })
-      .catch(function () {
-        // En caso de error de red, no reiniciamos la tasa: conservamos la existente.
+      .catch(function (err) {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        var reason = timedOut ? 'timeout' : ((err && err.message) || 'error');
+        csfxSetConnectionStatus('offline', reason);
         hydrateFxRateFromOffline();
+        csfxApplyFallbackRate('fetch-error');
+      })
+      .finally(function () {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         ensureBadge();
         cb && cb();
       });
