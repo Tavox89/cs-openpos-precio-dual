@@ -257,9 +257,10 @@ var csfxLastLoggedSupervisorMessage = '';
   var CSFX_AUTH_INFO_DISABLED = 'Los descuentos nativos permanecen ocultos. Solicita autorización para habilitarlos.';
 
   var CSFX_NATIVE_STYLE_ID = 'csfx-hide-discounts';
+  var CSFX_DISCOUNT_REMOVE_ATTR = 'data-csfx-allow-discount-remove';
   var CSFX_NATIVE_GUARD_SELECTORS = [
     'button[mat-icon-button][aria-label*="Descu"]',
-    '.cart-discount button',
+    '.cart-discount button:not([' + CSFX_DISCOUNT_REMOVE_ATTR + ']):not([data-action="remove"]):not(.remove):not([aria-label*="eliminar"]):not([aria-label*="Eliminar"]):not([aria-label*="remove"]):not([aria-label*="Remove"])',
     '.mat-menu-panel button[aria-label*="Descu"]',
     '.product-discount-dialog button',
     '.mat-dialog-container button[aria-label*="Descuento"]',
@@ -272,7 +273,6 @@ var csfxLastLoggedSupervisorMessage = '';
     '.mat-dialog-container .discount-details-sidenav'
   ];
   var CSFX_NATIVE_GUARD_SELECTOR = CSFX_NATIVE_GUARD_SELECTORS.join(', ');
-  var CSFX_DISCOUNT_REMOVE_ATTR = 'data-csfx-allow-discount-remove';
   var CSFX_NATIVE_STYLE_RULES = CSFX_NATIVE_STYLE_SELECTORS.join(', ') + ' { display: none !important; pointer-events: none !important; }' +
     '\n.cart-discount button:not([' + CSFX_DISCOUNT_REMOVE_ATTR + ']):not([data-action="remove"]):not(.remove):not([aria-label*="eliminar"]):not([aria-label*="Eliminar"]):not([aria-label*="remove"]):not([aria-label*="Remove"]), button[mat-icon-button][aria-label*="Descu"] { pointer-events: none !important; opacity: 0.35 !important; }';
   var csfxDiscountObserver = null;
@@ -340,14 +340,18 @@ var csfxLastLoggedSupervisorMessage = '';
     if (typeof document === 'undefined') return;
     if (csfxDiscountGuard.handler) return;
     csfxDiscountGuard.handler = function (ev) {
-      var target = ev.target;
+      var target = ev && ev.target;
       if (!target) return;
       if (csfxManualDiscountBypassUntil && Date.now() < csfxManualDiscountBypassUntil) {
         return;
       }
+      try {
+        var removalParent = target.closest('[' + CSFX_DISCOUNT_REMOVE_ATTR + '], [data-action="remove"], [data-role="remove"], .remove, .op-remove-discount');
+        if (removalParent) return;
+      } catch (_errRemovalClosest) {}
       if (csfxMatchesDiscountTarget(target)) {
         try {
-          var remover = target.closest('[' + CSFX_DISCOUNT_REMOVE_ATTR + '], [data-action="remove"], [data-role="remove"], .remove, .op-remove-discount, .cart-discount [class*="delete"], .cart-discount [class*="trash"], button[aria-label*="eliminar"], button[aria-label*="Eliminar"], button[aria-label*="remove"], button[aria-label*="Remove"], .mat-icon[aria-label*="eliminar"], .mat-icon[aria-label*="Eliminar"], .mat-icon-button[aria-label*="eliminar"], .mat-icon-button[aria-label*="Eliminar"]');
+          var remover = target.closest('[' + CSFX_DISCOUNT_REMOVE_ATTR + '], [data-action="remove"], [data-role="remove"], .remove, .op-remove-discount, .cart-discount [class*="delete"], .cart-discount [class*="trash"], button[aria-label*="eliminar"], button[aria-label*="Eliminar"], button[aria-label*="remove"], button[aria-label*="Remove"], .mat-icon[aria-label*="eliminar"], .mat-icon[aria-label*="Eliminar"], .mat-icon-button[aria-label*="eliminar"], .mat-icon-button[aria-label*="Eliminar"], .mat-icon[fonticon*="delete"], .mat-icon-button');
           if (remover) return;
         } catch (_errClosestRemove) {}
         ev.stopPropagation();
@@ -355,12 +359,14 @@ var csfxLastLoggedSupervisorMessage = '';
       }
     };
     document.addEventListener('click', csfxDiscountGuard.handler, true);
+    document.addEventListener('pointerdown', csfxDiscountGuard.handler, true);
   }
 
   function csfxAllowNativeDiscountActions() {
     if (typeof document === 'undefined') return;
     if (!csfxDiscountGuard.handler) return;
     document.removeEventListener('click', csfxDiscountGuard.handler, true);
+    document.removeEventListener('pointerdown', csfxDiscountGuard.handler, true);
     csfxDiscountGuard.handler = null;
     csfxManualDiscountBypassUntil = 0;
   }
@@ -2561,7 +2567,7 @@ var csfxLastLoggedSupervisorMessage = '';
           ev.stopPropagation();
           try { csfxShowAuthWidget(); } catch (_errShowAuth) {}
         };
-        ['click', 'mousedown', 'touchstart'].forEach(function (evt) {
+        ['click', 'mousedown', 'pointerdown', 'touchstart'].forEach(function (evt) {
           discRow.addEventListener(evt, guardHandler, true);
         });
       }
