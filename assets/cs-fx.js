@@ -27,6 +27,13 @@
   var CSFX_HEALTH_TIMEOUT_MS = 5000;
   var csfxHealthTimer = null;
   var csfxLastHealthProbe = 0;
+  var csfxDegradedRetryTimer = null;
+  var CSFX_DEGRADED_RETRY_MS = 45000;
+  var CSFX_DEGRADED_MODAL_SUPPRESS_MS = 30 * 60 * 1000;
+  var CSFX_DEGRADED_MODAL_STORAGE_KEY = 'csfx_degraded_modal_suppress_until';
+  var CSFX_DEGRADED_MODAL_BASE_COOLDOWN_MS = 120000;
+  var csfxDegradedModalState = null;
+  var csfxDegradedModalLastShown = 0;
 
   // --- Config FX (mezcla BOOT + localStorage) ---
   var FX = window.CSFX = (function () {
@@ -89,14 +96,40 @@
           });
         }
       }
+      var fxUpdatedHint = fx.updated || fx.updated_at || fx.updatedAt || 0;
+      var fxUpdatedTs = csfxParseUpdated(fxUpdatedHint);
       Object.keys(fx).forEach(function (k) {
-             if (fx[k] != null) {
-          if (k === 'style' && typeof fx[k] === 'object') {
-            Object.assign(def.style, fx[k]);
-          } else {
-            def[k] = fx[k];
-          }
+        if (fx[k] == null) return;
+        if (k === 'style' && typeof fx[k] === 'object') {
+          Object.assign(def.style, fx[k]);
+          return;
         }
+        if (k === 'rate') {
+          var incomingRate = Number(fx[k]);
+          if (!isFinite(incomingRate) || incomingRate <= 0) return;
+          var currentRate = Number(def.rate || 0);
+          var currentUpdatedTs = csfxParseUpdated(def.updated);
+          if (!currentRate || currentRate <= 0) {
+            def.rate = incomingRate;
+            if (fxUpdatedTs) def.updated = fxUpdatedTs;
+            return;
+          }
+          if (!currentUpdatedTs && fxUpdatedTs) {
+            def.rate = incomingRate;
+            def.updated = fxUpdatedTs;
+            return;
+          }
+          if (fxUpdatedTs && fxUpdatedTs > currentUpdatedTs) {
+            def.rate = incomingRate;
+            def.updated = fxUpdatedTs;
+          }
+          return;
+        }
+        if (k === 'updated' || k === 'updated_at' || k === 'updatedAt') {
+          // la manejamos junto con rate para comparar timestamps
+          return;
+        }
+        def[k] = fx[k];
       });
     } catch (e) {}
     def.rate = Number(def.rate) || 0;
@@ -122,6 +155,7 @@
 
   var csfxCustomModalUI = null;
   var csfxExplainModalUI = null;
+  var csfxFullConfirmUI = null;
   var csfxAuthWidget = null;
   var csfxUpdatingReference = false;
   var csfxCustomModalState = {
@@ -258,9 +292,34 @@ var csfxLastLoggedSupervisorMessage = '';
 
   var CSFX_NATIVE_STYLE_ID = 'csfx-hide-discounts';
   var CSFX_DISCOUNT_REMOVE_ATTR = 'data-csfx-allow-discount-remove';
+  var CSFX_DISCOUNT_REMOVE_BYPASS_SELECTORS = [
+    '[' + CSFX_DISCOUNT_REMOVE_ATTR + ']',
+    '[data-action="remove"]',
+    '[data-role="remove"]',
+    '.remove',
+    '.op-remove-discount',
+    '[class*="delete"]',
+    '[class*="Delete"]',
+    '[class*="trash"]',
+    '[class*="Trash"]',
+    '[aria-label*="eliminar"]',
+    '[aria-label*="Eliminar"]',
+    '[aria-label*="remove"]',
+    '[aria-label*="Remove"]',
+    '[aria-label*="delete"]',
+    '[aria-label*="Delete"]',
+    '[aria-label*="trash"]',
+    '[aria-label*="Trash"]',
+    '.mat-icon[fonticon*="delete"]',
+    '.mat-icon[fonticon*="Delete"]',
+    '.mat-icon[fonticon*="trash"]',
+    '.mat-icon[fonticon*="Trash"]',
+    '.csfx-dual-adjust button'
+  ];
+  var CSFX_DISCOUNT_REMOVE_BYPASS_SELECTOR = CSFX_DISCOUNT_REMOVE_BYPASS_SELECTORS.join(', ');
   var CSFX_NATIVE_GUARD_SELECTORS = [
     'button[mat-icon-button][aria-label*="Descu"]',
-    '.cart-discount button:not([' + CSFX_DISCOUNT_REMOVE_ATTR + ']):not([data-action="remove"]):not(.remove):not([aria-label*="eliminar"]):not([aria-label*="Eliminar"]):not([aria-label*="remove"]):not([aria-label*="Remove"])',
+    '.cart-discount button:not([' + CSFX_DISCOUNT_REMOVE_ATTR + ']):not([data-action="remove"]):not([data-role="remove"]):not(.remove):not(.op-remove-discount):not([class*="delete"]):not([class*="Delete"]):not([class*="trash"]):not([class*="Trash"]):not([aria-label*="eliminar"]):not([aria-label*="Eliminar"]):not([aria-label*="remove"]):not([aria-label*="Remove"]):not([aria-label*="delete"]):not([aria-label*="Delete"]):not([aria-label*="trash"]):not([aria-label*="Trash"])',
     '.mat-menu-panel button[aria-label*="Descu"]',
     '.product-discount-dialog button',
     '.mat-dialog-container button[aria-label*="Descuento"]',
@@ -274,7 +333,7 @@ var csfxLastLoggedSupervisorMessage = '';
   ];
   var CSFX_NATIVE_GUARD_SELECTOR = CSFX_NATIVE_GUARD_SELECTORS.join(', ');
   var CSFX_NATIVE_STYLE_RULES = CSFX_NATIVE_STYLE_SELECTORS.join(', ') + ' { display: none !important; pointer-events: none !important; }' +
-    '\n.cart-discount button:not([' + CSFX_DISCOUNT_REMOVE_ATTR + ']):not([data-action="remove"]):not(.remove):not([aria-label*="eliminar"]):not([aria-label*="Eliminar"]):not([aria-label*="remove"]):not([aria-label*="Remove"]), button[mat-icon-button][aria-label*="Descu"] { pointer-events: none !important; opacity: 0.35 !important; }';
+    '\n.cart-discount button:not([' + CSFX_DISCOUNT_REMOVE_ATTR + ']):not([data-action="remove"]):not([data-role="remove"]):not(.remove):not(.op-remove-discount):not([class*="delete"]):not([class*="Delete"]):not([class*="trash"]):not([class*="Trash"]):not([aria-label*="eliminar"]):not([aria-label*="Eliminar"]):not([aria-label*="remove"]):not([aria-label*="Remove"]):not([aria-label*="delete"]):not([aria-label*="Delete"]):not([aria-label*="trash"]):not([aria-label*="Trash"]), button[mat-icon-button][aria-label*="Descu"] { pointer-events: none !important; opacity: 0.35 !important; }';
   var csfxDiscountObserver = null;
   var csfxDiscountObserverPending = false;
   var csfxManualDiscountBypassUntil = 0;
@@ -346,12 +405,12 @@ var csfxLastLoggedSupervisorMessage = '';
         return;
       }
       try {
-        var removalParent = target.closest('[' + CSFX_DISCOUNT_REMOVE_ATTR + '], [data-action="remove"], [data-role="remove"], .remove, .op-remove-discount');
+        var removalParent = target.closest(CSFX_DISCOUNT_REMOVE_BYPASS_SELECTOR);
         if (removalParent) return;
       } catch (_errRemovalClosest) {}
       if (csfxMatchesDiscountTarget(target)) {
         try {
-          var remover = target.closest('[' + CSFX_DISCOUNT_REMOVE_ATTR + '], [data-action="remove"], [data-role="remove"], .remove, .op-remove-discount, .cart-discount [class*="delete"], .cart-discount [class*="trash"], button[aria-label*="eliminar"], button[aria-label*="Eliminar"], button[aria-label*="remove"], button[aria-label*="Remove"], .mat-icon[aria-label*="eliminar"], .mat-icon[aria-label*="Eliminar"], .mat-icon-button[aria-label*="eliminar"], .mat-icon-button[aria-label*="Eliminar"], .mat-icon[fonticon*="delete"], .mat-icon-button');
+          var remover = target.closest(CSFX_DISCOUNT_REMOVE_BYPASS_SELECTOR);
           if (remover) return;
         } catch (_errClosestRemove) {}
         ev.stopPropagation();
@@ -359,14 +418,12 @@ var csfxLastLoggedSupervisorMessage = '';
       }
     };
     document.addEventListener('click', csfxDiscountGuard.handler, true);
-    document.addEventListener('pointerdown', csfxDiscountGuard.handler, true);
   }
 
   function csfxAllowNativeDiscountActions() {
     if (typeof document === 'undefined') return;
     if (!csfxDiscountGuard.handler) return;
     document.removeEventListener('click', csfxDiscountGuard.handler, true);
-    document.removeEventListener('pointerdown', csfxDiscountGuard.handler, true);
     csfxDiscountGuard.handler = null;
     csfxManualDiscountBypassUntil = 0;
   }
@@ -693,7 +750,7 @@ var csfxLastLoggedSupervisorMessage = '';
       csfxInitialSources.push({
         rate: cachedRate,
         updated: fxOfflineState.updated || 0,
-        source: 'offline-cache'
+        source: fxOfflineState.source || 'offline-cache'
       });
     }
   }
@@ -701,7 +758,32 @@ var csfxLastLoggedSupervisorMessage = '';
   function persistFxOfflineState(partial){
     if (!partial || typeof partial !== 'object') return;
     fxOfflineState = fxOfflineState && typeof fxOfflineState === 'object' ? fxOfflineState : {};
+    var hasRate = typeof partial.rate !== 'undefined';
+    if (hasRate) {
+      var incomingRate = Number(partial.rate);
+      var incomingValid = isFinite(incomingRate) && incomingRate > 0;
+      if (incomingValid) {
+        var incomingTs = 0;
+        if (partial.updated !== undefined && partial.updated !== null) {
+          incomingTs = Number(partial.updated);
+        }
+        if (!incomingTs && partial.updatedRaw !== undefined && partial.updatedRaw !== null) {
+          incomingTs = csfxParseUpdated(partial.updatedRaw);
+        }
+        if (!incomingTs || !isFinite(incomingTs)) {
+          incomingTs = Date.now();
+        }
+        var currentTs = Number(fxOfflineState.updated) || 0;
+        if (!currentTs || incomingTs >= currentTs) {
+          fxOfflineState.rate = incomingRate;
+          fxOfflineState.updated = incomingTs;
+          if (partial.updatedRaw !== undefined) fxOfflineState.updatedRaw = partial.updatedRaw;
+          if (partial.source !== undefined) fxOfflineState.source = partial.source;
+        }
+      }
+    }
     Object.keys(partial).forEach(function(k){
+      if (k === 'rate' || k === 'updated' || k === 'updatedRaw' || k === 'source') return;
       fxOfflineState[k] = partial[k];
     });
     try {
@@ -726,6 +808,16 @@ var csfxLastLoggedSupervisorMessage = '';
     }
     return 0;
   }
+  function csfxSourcePriority(source){
+    var norm = String(source || '').toLowerCase();
+    if (!norm) return 0;
+    if (norm === 'api' || norm === 'fox') return 6;
+    if (norm === 'currencies' || norm === 'boot') return 5;
+    if (norm === 'pos-settings' || norm === 'session' || norm === 'op_settings') return 4;
+    if (norm === 'offline-cache' || norm === 'fallback') return 3;
+    if (norm === 'last') return 2;
+    return 1;
+  }
   function csfxPickBestCandidate(list){
     if (!Array.isArray(list)) return null;
     var best = null;
@@ -740,30 +832,65 @@ var csfxLastLoggedSupervisorMessage = '';
         source: item.source || '',
         ts: csfxParseUpdated(item.updated)
       };
-      if (!best || candidate.ts > best.ts || (!best.ts && !candidate.ts)) {
+      candidate.priority = csfxSourcePriority(candidate.source);
+      if (!best) {
         best = candidate;
+        continue;
+      }
+      if (candidate.priority > best.priority) {
+        best = candidate;
+        continue;
+      }
+      if (candidate.priority === best.priority) {
+        if ((candidate.ts || 0) > (best.ts || 0)) {
+          best = candidate;
+          continue;
+        }
+        if ((!candidate.ts && !best.ts) && candidate.rate > best.rate) {
+          best = candidate;
+          continue;
+        }
       }
     }
     return best;
   }
-  function csfxRememberLastGood(rate, updated, source){
+  function csfxRememberLastGood(rate, updated, source, opts){
+    opts = opts || {};
     var numRate = Number(rate || 0);
     if (!isFinite(numRate) || numRate <= 0) return;
     var key = source || 'fallback';
+    var ts = csfxParseUpdated(updated);
+    if (!ts) {
+      ts = Date.now();
+    }
+    if (csfxLastGoodRate && csfxLastGoodRate.ts && ts && ts < csfxLastGoodRate.ts) {
+      if (!opts.force) return;
+    }
+    var status = (csfxConnectionStatus && csfxConnectionStatus.status) ? csfxConnectionStatus.status : 'unknown';
+    if (!opts.force && status !== 'online' && status !== 'unknown') {
+      if (csfxLastGoodRate && csfxLastGoodRate.rate > 0) {
+        return;
+      }
+    }
     csfxLastGoodRate = {
       rate: numRate,
-      updated: updated,
+      updated: (updated !== undefined && updated !== null) ? updated : ts,
       source: key,
-      ts: csfxParseUpdated(updated) || Date.now()
+      ts: ts
     };
-    var stored = { rate: numRate };
-    if (updated !== undefined && updated !== null) stored.updated = updated;
+    var stored = { rate: numRate, updated: ts, source: key };
+    if (updated !== undefined && updated !== null) stored.updatedRaw = updated;
     persistFxOfflineState(stored);
     // refrescar arreglo de fuentes iniciales
     var replaced = false;
     for (var i = 0; i < csfxInitialSources.length; i++) {
       var src = csfxInitialSources[i];
       if (src && src.source === key) {
+        var existingTs = csfxParseUpdated(src.updated);
+        if (existingTs && existingTs > ts) {
+          replaced = true;
+          break;
+        }
         csfxInitialSources[i] = { rate: numRate, updated: updated, source: key };
         replaced = true;
         break;
@@ -777,16 +904,33 @@ var csfxLastLoggedSupervisorMessage = '';
     }
   }
   function csfxEnsureBestInitialRate(){
-    if (FX.rate && FX.rate > 0) {
-      csfxRememberLastGood(FX.rate, FX.updated, FX.rateSource || 'initial');
-      return;
-    }
     var candidate = csfxPickBestCandidate(csfxInitialSources);
+    var current = null;
+    if (FX.rate && FX.rate > 0) {
+      current = {
+        rate: FX.rate,
+        updated: FX.updated,
+        source: FX.rateSource || 'initial',
+        ts: csfxParseUpdated(FX.updated),
+        priority: csfxSourcePriority(FX.rateSource || 'initial')
+      };
+    }
+    if (current) {
+      if (!candidate) {
+        candidate = current;
+      } else if (current.priority > candidate.priority) {
+        candidate = current;
+      } else if (current.priority === candidate.priority && (current.ts || 0) > (candidate.ts || 0)) {
+        candidate = current;
+      }
+    }
+    if (!candidate && current) candidate = current;
+    if (!candidate && csfxLastGoodRate) candidate = csfxLastGoodRate;
     if (candidate) {
       FX.rate = candidate.rate;
       if (candidate.updated !== undefined) FX.updated = candidate.updated;
       FX.rateSource = candidate.source || FX.rateSource || 'initial';
-      csfxRememberLastGood(candidate.rate, candidate.updated, candidate.source || 'initial');
+      csfxRememberLastGood(candidate.rate, candidate.updated, candidate.source || 'initial', { force: true });
     }
   }
   function csfxApplyFallbackRate(context){
@@ -802,10 +946,31 @@ var csfxLastLoggedSupervisorMessage = '';
         source: 'offline-cache'
       });
     }
-    var candidate = csfxPickBestCandidate(pool);
+    var candidate = null;
+    if (csfxLastGoodRate && csfxLastGoodRate.rate > 0) {
+      candidate = csfxLastGoodRate;
+    }
+    var best = csfxPickBestCandidate(pool);
+    if (best) {
+      if (!candidate) {
+        candidate = best;
+      } else {
+        var status = (csfxConnectionStatus && csfxConnectionStatus.status) ? csfxConnectionStatus.status : 'unknown';
+        var preferStored = (status === 'degraded' || status === 'offline');
+        if (!preferStored && (!candidate.ts || (best.ts || 0) > (candidate.ts || 0))) {
+          candidate = best;
+        } else if (preferStored && candidate !== csfxLastGoodRate && (!candidate.ts || (best.ts || 0) > (candidate.ts || 0))) {
+          candidate = best;
+        }
+      }
+    }
     if (candidate) {
       FX.rate = candidate.rate;
-      if (candidate.updated !== undefined) FX.updated = candidate.updated;
+      if (candidate.updated !== undefined) {
+        FX.updated = candidate.updated;
+      } else if (candidate.ts) {
+        FX.updated = candidate.ts;
+      }
       FX.rateSource = candidate.source || FX.rateSource || 'fallback';
       csfxRememberLastGood(candidate.rate, candidate.updated, candidate.source || context || 'fallback');
       return true;
@@ -820,6 +985,7 @@ var csfxLastLoggedSupervisorMessage = '';
   function csfxSetConnectionStatus(status, reason){
     var normalized = status || 'unknown';
     var motive = reason || '';
+    var previous = csfxConnectionStatus.status || 'unknown';
     if (csfxConnectionStatus.status === normalized && (csfxConnectionStatus.reason || '') === motive) {
       return;
     }
@@ -837,6 +1003,193 @@ var csfxLastLoggedSupervisorMessage = '';
       if (motive) badge.dataset.csfxStatusReason = motive; else delete badge.dataset.csfxStatusReason;
       csfxUpdateBadgeHandle(badge);
     }
+    if (normalized === 'degraded') {
+      csfxScheduleDegradedRetry();
+      if (previous !== 'degraded') {
+        csfxMaybeShowDegradedAlert();
+        setTimeout(function () {
+          if (csfxConnectionStatus.status === 'degraded') {
+            try {
+              refreshRate(function(){});
+            } catch (_errImmediateRetry) {
+              /* ignore */
+            }
+          }
+        }, 5000);
+      } else if (!csfxIsDegradedAlertVisible()) {
+        csfxMaybeShowDegradedAlert();
+      }
+    } else {
+      csfxStopDegradedRetry();
+      if (previous === 'degraded' || normalized === 'online') {
+        csfxCloseDegradedAlert();
+      }
+      if (normalized === 'online') {
+        csfxRememberDegradedSuppressUntil(0);
+      }
+    }
+  }
+
+  function csfxStopDegradedRetry(){
+    if (csfxDegradedRetryTimer) {
+      clearInterval(csfxDegradedRetryTimer);
+      csfxDegradedRetryTimer = null;
+    }
+  }
+
+  function csfxScheduleDegradedRetry(){
+    if (csfxDegradedRetryTimer) return;
+    csfxDegradedRetryTimer = setInterval(function(){
+      if (csfxConnectionStatus.status !== 'degraded') {
+        csfxStopDegradedRetry();
+        return;
+      }
+      csfxMaybeShowDegradedAlert();
+      try {
+        refreshRate(function(){});
+      } catch (_errDegradedRetry) {
+        /* sin efecto */
+      }
+    }, CSFX_DEGRADED_RETRY_MS);
+  }
+
+  function csfxReadDegradedSuppressUntil(){
+    try {
+      var raw = localStorage.getItem(CSFX_DEGRADED_MODAL_STORAGE_KEY);
+      if (!raw) return 0;
+      var num = Number(raw);
+      return isFinite(num) ? num : 0;
+    } catch (_errReadSuppress) {
+      return 0;
+    }
+  }
+
+  function csfxRememberDegradedSuppressUntil(untilTs){
+    try {
+      if (!untilTs) {
+        localStorage.removeItem(CSFX_DEGRADED_MODAL_STORAGE_KEY);
+      } else {
+        localStorage.setItem(CSFX_DEGRADED_MODAL_STORAGE_KEY, String(untilTs));
+      }
+    } catch (_errRememberSuppress) {
+      /* almacenamiento no disponible */
+    }
+  }
+
+  function csfxIsDegradedAlertVisible(){
+    return !!(csfxDegradedModalState && csfxDegradedModalState.open);
+  }
+
+  function csfxEnsureDegradedAlert(){
+    if (csfxDegradedModalState && csfxDegradedModalState.element) {
+      return csfxDegradedModalState;
+    }
+    var overlay = document.createElement('div');
+    overlay.className = 'csfx-alert-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'csfx-alert-modal';
+    var title = document.createElement('h3');
+    title.className = 'csfx-alert-title';
+    title.innerHTML = 'No se pudo actualizar la tasa';
+    var body = document.createElement('p');
+    body.className = 'csfx-alert-body';
+    var rateInfo = document.createElement('p');
+    rateInfo.className = 'csfx-alert-rate';
+    var actions = document.createElement('div');
+    actions.className = 'csfx-alert-actions';
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'csfx-btn csfx-btn--primary';
+    closeBtn.textContent = 'Entendido';
+    var snoozeBtn = document.createElement('button');
+    snoozeBtn.type = 'button';
+    snoozeBtn.className = 'csfx-btn csfx-btn--ghost';
+    snoozeBtn.textContent = 'No volver a mostrar por 30 minutos';
+
+    actions.appendChild(closeBtn);
+    actions.appendChild(snoozeBtn);
+    modal.appendChild(title);
+    modal.appendChild(body);
+    modal.appendChild(rateInfo);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+
+    closeBtn.addEventListener('click', function(ev){
+      ev.preventDefault();
+      csfxCloseDegradedAlert();
+    });
+    snoozeBtn.addEventListener('click', function(ev){
+      ev.preventDefault();
+      var until = Date.now() + CSFX_DEGRADED_MODAL_SUPPRESS_MS;
+      csfxRememberDegradedSuppressUntil(until);
+      csfxCloseDegradedAlert();
+    });
+    overlay.addEventListener('click', function(ev){
+      if (ev.target === overlay) {
+        csfxCloseDegradedAlert();
+      }
+    });
+    csfxDegradedModalState = {
+      element: overlay,
+      modal: modal,
+      title: title,
+      body: body,
+      rate: rateInfo,
+      closeBtn: closeBtn,
+      snoozeBtn: snoozeBtn,
+      open: false
+    };
+    return csfxDegradedModalState;
+  }
+
+  function csfxUpdateDegradedAlertCopy(){
+    if (!csfxDegradedModalState) return;
+    var rateDisplay = '';
+    if (FX && FX.rate > 0) {
+      var decimals = isFinite(Number(FX.decimals)) ? Number(FX.decimals) : 2;
+      rateDisplay = (FX.symbolVES || 'Bs.') + ' ' + FX.rate.toFixed(decimals);
+    } else {
+      rateDisplay = 'sin dato';
+    }
+    var body = 'Seguimos usando la última tasa disponible para continuar cobrando. Verifica con un supervisor si el problema persiste.';
+    csfxDegradedModalState.body.textContent = body;
+    csfxDegradedModalState.rate.textContent = 'Tasa aplicada actualmente: ' + rateDisplay;
+  }
+
+  function csfxOpenDegradedAlert(){
+    var state = csfxEnsureDegradedAlert();
+    if (!state) return;
+    if (!state.open) {
+      csfxUpdateDegradedAlertCopy();
+      if (document.body && !state.element.parentNode) {
+        document.body.appendChild(state.element);
+      }
+      state.open = true;
+      csfxDegradedModalLastShown = Date.now();
+    } else {
+      csfxUpdateDegradedAlertCopy();
+    }
+  }
+
+  function csfxCloseDegradedAlert(){
+    if (csfxDegradedModalState && csfxDegradedModalState.element && csfxDegradedModalState.element.parentNode) {
+      csfxDegradedModalState.element.parentNode.removeChild(csfxDegradedModalState.element);
+    }
+    if (csfxDegradedModalState) {
+      csfxDegradedModalState.open = false;
+    }
+  }
+
+  function csfxMaybeShowDegradedAlert(){
+    if (csfxConnectionStatus.status !== 'degraded') return;
+    var suppressUntil = csfxReadDegradedSuppressUntil();
+    if (suppressUntil && Date.now() < suppressUntil) {
+      return;
+    }
+    if (csfxDegradedModalLastShown && (Date.now() - csfxDegradedModalLastShown) < CSFX_DEGRADED_MODAL_BASE_COOLDOWN_MS) {
+      return;
+    }
+    csfxOpenDegradedAlert();
   }
 
   function csfxProbeBackend(force){
@@ -899,7 +1252,7 @@ var csfxLastLoggedSupervisorMessage = '';
     if (rate > 0 && (!FX.rate || FX.rate <= 0)) {
       FX.rate = rate;
       if (fxOfflineState.updated) FX.updated = fxOfflineState.updated;
-      csfxRememberLastGood(rate, FX.updated, 'offline-cache');
+      csfxRememberLastGood(rate, FX.updated, 'offline-cache', { force: true });
     }
   }
 
@@ -1788,6 +2141,18 @@ var csfxLastLoggedSupervisorMessage = '';
     var p = Math.pow(10, d);
     return Math.round((+n + Number.EPSILON) * p) / p;
   }
+  function csfxFormatInputNumber(num, decimals) {
+    if (!isFinite(num)) return '';
+    var str = Number(num).toFixed(decimals);
+    if (decimals > 0) {
+      str = str.replace(/\.0+$/, '');
+      str = str.replace(/(\.\d*?)0+$/, '$1');
+    }
+    if (str.endsWith('.')) {
+      str = str.slice(0, -1);
+    }
+    return str;
+  }
   function parsePrice(s) {
     /**
      * Extrae un precio decimal de una cadena buscando todos los tokens
@@ -1904,8 +2269,36 @@ var csfxLastLoggedSupervisorMessage = '';
       '.csfx-dual-input span{font-weight:700;color:#072c59;font-size:14px;}',
       '.csfx-dual-input input{padding:7px 10px;border:1px solid rgba(0,87,183,.26);border-radius:10px;font-size:15px;font-weight:600;color:#0f172a;background:#fff;transition:box-shadow .2s ease,border-color .2s ease;}',
       '.csfx-dual-input input:focus{outline:none;border-color:#0057b7;box-shadow:0 0 0 2px rgba(0,87,183,.18);}',
+      '.csfx-dual-tabs{margin-top:14px;display:flex;gap:6px;}',
+      '.csfx-dual-tab{flex:1 1 auto;padding:6px 8px;border-radius:10px;border:1px solid rgba(0,87,183,.25);background:#fff;color:#0f172a;font-weight:600;font-size:13px;cursor:pointer;transition:all .18s ease;}',
+      '.csfx-dual-tab.is-active{background:#0c4a94;color:#fff;box-shadow:0 6px 14px rgba(12,74,148,.35);border-color:#0c4a94;}',
+      '.csfx-dual-tab:focus{outline:none;box-shadow:0 0 0 2px rgba(12,74,148,.25);}',
+      '.csfx-dual-modes{position:relative;}',
+      '.csfx-dual-mode{margin-top:12px;}',
+      '.csfx-dual-mode[data-active="false"],.csfx-dual-mode[hidden]{display:none;}',
+      '.csfx-dual-inline-hint{font-size:12px;color:#0b5394;background:rgba(13,76,140,.08);border-radius:8px;padding:4px 8px;font-weight:500;}',
+      '.csfx-dual-bs-tools{margin-top:8px;display:flex;justify-content:flex-end;}',
+      '.csfx-dual-bs-toggle{font-size:12px;font-weight:600;color:#0c4a94;background:rgba(12,74,148,.12);border:1px solid rgba(12,74,148,.25);border-radius:8px;padding:4px 10px;cursor:pointer;transition:all .18s ease;}',
+      '.csfx-dual-bs-toggle.is-active{background:#0c4a94;color:#fff;box-shadow:0 4px 12px rgba(12,74,148,.3);}',
+      '.csfx-dual-bs-field{margin-top:8px;display:grid;grid-template-columns:1fr;gap:6px;padding:10px;border:1px dashed rgba(12,74,148,.3);border-radius:10px;background:rgba(12,74,148,.06);}',
+      '.csfx-dual-adjust{margin-top:6px;font-size:12px;color:#92400e;display:none;flex-direction:column;align-items:flex-start;gap:4px;}',
+      '.csfx-dual-adjust[data-open="true"]{display:flex;}',
+      '.csfx-dual-adjust button{background:rgba(12,74,148,.12);border:1px solid rgba(12,74,148,.25);color:#0c4a94;border-radius:8px;padding:2px 10px;font-size:11px;font-weight:600;cursor:pointer;transition:all .18s ease;}',
+      '.csfx-dual-adjust button:hover{background:rgba(12,74,148,.2);}',
+      '.csfx-dual-adjust button.is-selected{background:#0c4a94;color:#fff;box-shadow:0 4px 12px rgba(12,74,148,.35);}',
+      '.csfx-dual-adjust-text{display:block;line-height:1.35;margin-bottom:2px;}',
+      '.csfx-dual-adjust-text{display:block;line-height:1.35;margin-bottom:2px;}',
       '.csfx-dual-metrics{margin-top:12px;border-radius:10px;background:#f8fbff;border:1px solid rgba(7,44,89,.07);overflow:hidden;box-shadow:0 4px 12px rgba(7,44,89,.06);}',
       '.csfx-dual-metrics-row{display:grid;grid-template-columns:1fr auto;padding:9px 12px;font-size:13px;font-weight:600;color:#0f172a;align-items:center;gap:10px;}',
+      '.csfx-dual-copy{margin-top:10px;display:flex;justify-content:flex-end;}',
+      '.csfx-dual-copy .csfx-btn{padding:6px 12px;font-size:12px;font-weight:600;}',
+      '.csfx-dual-copy .csfx-btn:disabled{opacity:.45;cursor:not-allowed;}',
+      '.csfx-alert-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.48);backdrop-filter:blur(4px);z-index:10005;padding:20px;}',
+      '.csfx-alert-modal{background:#ffffff;border-radius:18px;max-width:360px;width:min(360px,calc(100vw - 48px));box-shadow:0 20px 48px rgba(15,23,42,.35);padding:22px;display:flex;flex-direction:column;gap:14px;font-family:inherit;}',
+      '.csfx-alert-title{margin:0;font-size:18px;font-weight:700;color:#0f172a;}',
+      '.csfx-alert-body{margin:0;font-size:15px;color:#1e293b;line-height:1.45;}',
+      '.csfx-alert-rate{margin:0;font-size:14px;font-weight:600;color:#0b5394;background:rgba(12,74,148,.1);border-radius:12px;padding:10px 12px;}',
+      '.csfx-alert-actions{display:flex;flex-direction:column;gap:8px;}',
       '.csfx-dual-metrics-row:nth-child(odd){background:rgba(227,242,255,.65);}',
       '.csfx-dual-metrics-row.is-highlight{background:rgba(16,185,129,.18)!important;color:#065f46;}',
       '.csfx-dual-metrics-row.is-warning{background:rgba(251,191,36,.22)!important;color:#92400e;}',
@@ -1930,6 +2323,8 @@ var csfxLastLoggedSupervisorMessage = '';
       '.csfx-btn--primary:hover:not(:disabled){background:linear-gradient(135deg,#1d4ed8,#1e40af);box-shadow:0 6px 18px rgba(30,64,175,.45);}',
       '.csfx-btn--secondary{background:rgba(59,130,246,.12);color:#1e40af;border:1px solid rgba(59,130,246,.35);box-shadow:0 3px 10px rgba(59,130,246,.18);}',
       '.csfx-btn--secondary:hover:not(:disabled){background:rgba(59,130,246,.18);}',
+      '.csfx-btn[data-csfx-full-lock=\"1\"]{background:rgba(251,191,36,.16);color:#92400e;border:1px solid rgba(251,191,36,.4);box-shadow:none;}',
+      '.csfx-btn[data-csfx-full-lock=\"1\"]:hover:not(:disabled){background:rgba(251,191,36,.22);color:#78350f;}',
       '.csfx-btn--ghost{background:rgba(15,23,42,.04);color:#0f172a;border:1px solid rgba(15,23,42,.12);}',
       '.csfx-btn--ghost:hover:not(:disabled){background:rgba(15,23,42,.08);}',
       '.csfx-btn--accent{background:#10b981;color:#fff;box-shadow:0 3px 12px rgba(16,185,129,.35);}',
@@ -1993,6 +2388,10 @@ var csfxLastLoggedSupervisorMessage = '';
       '.csfx-guarded{cursor:not-allowed!important;color:#64748b!important;}',
       '.csfx-modal--info{max-width:420px;width:420px;min-width:320px;}',
       '.csfx-modal--info .csfx-modal-body{gap:14px;}',
+      '.csfx-modal--confirm .csfx-modal-body{gap:18px;}',
+      '.csfx-confirm-body{padding:22px 24px 26px;display:flex;flex-direction:column;gap:14px;text-align:center;font-size:14px;color:#0f172a;}',
+      '.csfx-confirm-icon{font-size:34px;line-height:1;color:#1d4ed8;margin:0 auto;}',
+      '.csfx-confirm-note{font-size:12px;color:#475569;}',
       '.csfx-explain-body{display:flex;flex-direction:column;gap:12px;font-size:13px;color:#0f172a;}',
       '.csfx-explain-head{font-weight:700;color:#0b1f3a;}',
       '.csfx-explain-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;}',
@@ -2000,6 +2399,9 @@ var csfxLastLoggedSupervisorMessage = '';
       '.csfx-explain-steps strong{color:#0b6ad4;}',
       '.csfx-explain-inline{font-weight:600;color:#072c59;}',
       '.csfx-explain-foot{font-size:12px;color:#475569;line-height:1.4;}',
+      '.csfx-explain-subtitle{font-weight:700;color:#0b1f3a;margin-top:6px;}',
+      '.csfx-explain-steps--secondary{margin-top:4px;font-size:12px;color:#0f172a;}',
+      '.csfx-explain-steps--secondary li strong{color:#0b1f3a;}',
       '.csfx-modal-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:4px;}',
       '.csfx-btn--wide{padding:11px 20px;font-size:13px;font-weight:700;min-width:148px;}',
       '.csfx-btn--link{background:rgba(37,99,235,.08);color:#0b6ad4;border:1px dashed rgba(37,99,235,.35);}',
@@ -2560,28 +2962,66 @@ var csfxLastLoggedSupervisorMessage = '';
         var guardHandler = function (ev) {
           if (csfxCustomModalState && csfxCustomModalState.authorized) return;
           if (ev && ev.target && typeof ev.target.closest === 'function') {
-            var bypassRemove = ev.target.closest('[' + CSFX_DISCOUNT_REMOVE_ATTR + '], [data-action="remove"], [data-role="remove"], .remove, .op-remove-discount');
+            var bypassRemove = ev.target.closest(CSFX_DISCOUNT_REMOVE_BYPASS_SELECTOR);
             if (bypassRemove) return;
           }
+          if (ev && ev.type === 'pointerdown') return;
           ev.preventDefault();
           ev.stopPropagation();
           try { csfxShowAuthWidget(); } catch (_errShowAuth) {}
         };
-        ['click', 'mousedown', 'pointerdown', 'touchstart'].forEach(function (evt) {
+        ['click', 'mousedown', 'touchstart'].forEach(function (evt) {
           discRow.addEventListener(evt, guardHandler, true);
         });
       }
       try {
-        var removeSelectors = '[' + CSFX_DISCOUNT_REMOVE_ATTR + '], [data-action="remove"], [data-role="remove"], .remove, .op-remove-discount, button[aria-label*="eliminar"], button[aria-label*="Eliminar"], button[aria-label*="remove"], button[aria-label*="Remove"], .mat-icon[aria-label*="eliminar"], .mat-icon[aria-label*="Eliminar"], .mat-icon-button[aria-label*="eliminar"], .mat-icon-button[aria-label*="Eliminar"], .mat-icon[fonticon*="delete"], .mat-icon-button';
+        var removeSelectors = CSFX_DISCOUNT_REMOVE_BYPASS_SELECTOR;
         var removeNodes = discRow.querySelectorAll(removeSelectors);
-        removeNodes.forEach(function (btn) {
+        var marked = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
+        var markNode = function (btn) {
           if (!btn) return;
+          if (marked && marked.has(btn)) return;
+          if (marked) marked.add(btn);
           btn.setAttribute(CSFX_DISCOUNT_REMOVE_ATTR, '1');
           var parent = btn.parentElement;
-          if (parent && parent !== discRow) parent.setAttribute(CSFX_DISCOUNT_REMOVE_ATTR, '1');
+          while (parent && parent !== discRow && parent !== document) {
+            if (parent.hasAttribute && parent.hasAttribute(CSFX_DISCOUNT_REMOVE_ATTR)) break;
+            var shouldMarkParent = false;
+            if (parent.matches) {
+              try {
+                shouldMarkParent = parent.matches('[mat-icon-button], .mat-icon-button, [data-action="remove"], [data-role="remove"], .remove, .op-remove-discount, [class*="delete"], [class*="Delete"], [class*="trash"], [class*="Trash"]');
+              } catch (_errMatchParent) {
+                shouldMarkParent = false;
+              }
+            }
+            if (!shouldMarkParent) break;
+            parent.setAttribute(CSFX_DISCOUNT_REMOVE_ATTR, '1');
+            parent = parent.parentElement;
+          }
           var inner = btn.querySelectorAll('*');
           for (var k = 0; k < inner.length; k++) {
             inner[k].setAttribute(CSFX_DISCOUNT_REMOVE_ATTR, '1');
+          }
+        };
+        removeNodes.forEach(function (btn) {
+          markNode(btn);
+        });
+        var fallbackNodes = discRow.querySelectorAll('button, [role="button"], [mat-icon-button], .mat-icon');
+        fallbackNodes.forEach(function (node) {
+          if (!node || node.hasAttribute(CSFX_DISCOUNT_REMOVE_ATTR)) return;
+          var label = '';
+          try {
+            label = (node.getAttribute('aria-label') || '').toLowerCase();
+          } catch (_errLabel) {}
+          var text = '';
+          try {
+            text = (node.textContent || '').toLowerCase();
+          } catch (_errText) {}
+          if (!label && !text) return;
+          if (label.indexOf('eliminar') !== -1 || label.indexOf('remove') !== -1 || label.indexOf('delete') !== -1 || label.indexOf('trash') !== -1 ||
+            text.indexOf('eliminar') !== -1 || text.indexOf('remove') !== -1 || text.indexOf('delete') !== -1 || text.indexOf('trash') !== -1 ||
+            text === 'delete' || text === 'remove' || text === 'delete_forever' || text === 'delete_outline') {
+            markNode(node);
           }
         });
       } catch (_errMarkRemove) {}
@@ -2660,6 +3100,7 @@ var csfxLastLoggedSupervisorMessage = '';
         var b = readCheckoutUSD();
         if (!isNaN(b)) usdFinal = b;
       }
+      if (!isNaN(usdFinal) && usdFinal < 0) usdFinal = 0;
              if (totSp && !isNaN(usdFinal)) totSp.textContent = fmtBs(usd2bs(usdFinal));
 
     }
@@ -3030,6 +3471,18 @@ var csfxLastLoggedSupervisorMessage = '';
         'csfx_discount_value',
         'csfx_discount_note',
         'csfx_base_total',
+        'csfx_dual_mode',
+        'csfx_dual_usd_direct',
+        'csfx_dual_usd_bs',
+        'csfx_dual_bs_amount',
+        'csfx_dual_total_usd',
+        'csfx_dual_discountable_gross',
+        'csfx_dual_non_discount_gross',
+        'csfx_dual_missing_usd',
+        'csfx_dual_missing_bs',
+        'csfx_dual_change_usd',
+        'csfx_dual_change_bs',
+        'csfx_dual_rate',
         'csfx_auth_supervisor_id',
         'csfx_auth_supervisor_name',
         'csfx_auth_supervisor_email',
@@ -3187,6 +3640,18 @@ var csfxLastLoggedSupervisorMessage = '';
     var usdPaid = csfxToNumber(meta.csfx_usd_paid);
     var discountPctMeta = meta.csfx_discount_pct != null ? Number(meta.csfx_discount_pct) : null;
     var applied = Math.abs(discountAmount) > 0.0001;
+    var dualModeMeta = typeof meta.csfx_dual_mode === 'string' ? meta.csfx_dual_mode : '';
+    var dualUsdDirectMeta = csfxToNumber(meta.csfx_dual_usd_direct);
+    var dualUsdBsMeta = csfxToNumber(meta.csfx_dual_usd_bs);
+    var dualBsAmountMeta = csfxToNumber(meta.csfx_dual_bs_amount);
+    var dualTotalUsdMeta = csfxToNumber(meta.csfx_dual_total_usd);
+    var dualDiscountableMeta = csfxToNumber(meta.csfx_dual_discountable_gross);
+    var dualNonDiscountMeta = csfxToNumber(meta.csfx_dual_non_discount_gross);
+    var dualMissingUsdMeta = csfxToNumber(meta.csfx_dual_missing_usd);
+    var dualMissingBsMeta = csfxToNumber(meta.csfx_dual_missing_bs);
+    var dualChangeUsdMeta = csfxToNumber(meta.csfx_dual_change_usd);
+    var dualChangeBsMeta = csfxToNumber(meta.csfx_dual_change_bs);
+    var dualRateMeta = csfxToNumber(meta.csfx_dual_rate);
 
     var snapshotResult = {
       cart: cart,
@@ -3198,6 +3663,20 @@ var csfxLastLoggedSupervisorMessage = '';
       baseTotalUSD: isNaN(baseTotal) ? NaN : baseTotal,
       discountAmount: discountAmount,
       usdPaid: isNaN(usdPaid) ? 0 : usdPaid,
+      dual: {
+        mode: dualModeMeta || '',
+        usdDirect: isNaN(dualUsdDirectMeta) ? 0 : dualUsdDirectMeta,
+        usdFromBs: isNaN(dualUsdBsMeta) ? 0 : dualUsdBsMeta,
+        bsAmount: isNaN(dualBsAmountMeta) ? 0 : dualBsAmountMeta,
+        totalUsd: isNaN(dualTotalUsdMeta) ? 0 : dualTotalUsdMeta,
+        discountableGross: isNaN(dualDiscountableMeta) ? 0 : dualDiscountableMeta,
+        nonDiscountGross: isNaN(dualNonDiscountMeta) ? 0 : dualNonDiscountMeta,
+        missingUsd: isNaN(dualMissingUsdMeta) ? 0 : dualMissingUsdMeta,
+        missingBs: isNaN(dualMissingBsMeta) ? 0 : dualMissingBsMeta,
+        changeUsd: isNaN(dualChangeUsdMeta) ? 0 : dualChangeUsdMeta,
+        changeBs: isNaN(dualChangeBsMeta) ? 0 : dualChangeBsMeta,
+        rate: isNaN(dualRateMeta) ? 0 : dualRateMeta
+      },
       discountPct: discountPctMeta,
       applied: applied
     };
@@ -3250,6 +3729,302 @@ var csfxLastLoggedSupervisorMessage = '';
       trimmed: usdNet > effectiveNet + 0.009,
       finalTotal: finalTotal
     };
+  }
+
+  function csfxDualState(panel) {
+    if (!panel) {
+      return { inputs: {}, ui: {} };
+    }
+    if (!panel.__csfxDual || typeof panel.__csfxDual !== 'object') {
+      panel.__csfxDual = { inputs: {}, ui: {} };
+    } else {
+      if (!panel.__csfxDual.inputs) panel.__csfxDual.inputs = {};
+      if (!panel.__csfxDual.ui) panel.__csfxDual.ui = {};
+    }
+    return panel.__csfxDual;
+  }
+
+  function csfxDualNormalizeValue(raw) {
+    if (raw === undefined || raw === null) return NaN;
+    var str = String(raw);
+    if (!str) return NaN;
+    str = str.replace(/,/g, '.');
+    str = str.replace(/[^0-9\-\.]/g, '');
+    if (!str) return NaN;
+    var num = parseFloat(str);
+    return isFinite(num) ? num : NaN;
+  }
+
+  function csfxDualParseInput(input) {
+    if (!input) {
+      return { value: 0, hasValue: false, raw: '' };
+    }
+    var raw = typeof input.value === 'string' ? input.value : '';
+    if (raw && raw.indexOf(',') > -1) {
+      var pos = input.selectionStart;
+      raw = raw.replace(/,/g, '.');
+      input.value = raw;
+      if (typeof pos === 'number') {
+        try { input.setSelectionRange(pos, pos); } catch (_errSel) {}
+      }
+    }
+    var parsed = csfxDualNormalizeValue(raw);
+    if (!isFinite(parsed) || parsed < 0) parsed = 0;
+    return {
+      value: parsed,
+      hasValue: raw !== '',
+      raw: raw
+    };
+  }
+
+  function csfxDualMarkDirty(panel, input) {
+    if (!panel || !panel.dataset) return;
+    panel.dataset.csfxDirty = '1';
+    if (input && input.dataset) input.dataset.csfxTouched = '1';
+  }
+
+  function csfxDualResetModeInputs(panel, targetMode, state){
+    if (!panel) return;
+    state = state || csfxDualState(panel);
+    var inputs = state.inputs || {};
+    function clearInput(input){
+      if (!input) return;
+      input.value = '';
+      if (input.dataset) {
+        if (input.dataset.csfxTouched !== undefined) {
+          delete input.dataset.csfxTouched;
+        }
+        if (input.dataset.csfxManualBs !== undefined) {
+          delete input.dataset.csfxManualBs;
+        }
+      }
+    }
+    if (targetMode === 'usd') {
+      clearInput(inputs.bsUsd);
+      clearInput(inputs.bsRaw);
+      if (state) state.bsConverterOpen = false;
+      if (state && state.ui) {
+        if (state.ui.bsConverterWrap) {
+          state.ui.bsConverterWrap.setAttribute('hidden', 'hidden');
+        }
+        if (state.ui.bsConverterButton) {
+          state.ui.bsConverterButton.classList.remove('is-active');
+          state.ui.bsConverterButton.textContent = 'Convertir desde Bs';
+        }
+      }
+    } else if (targetMode === 'bs') {
+      clearInput(inputs.usd);
+      if (state && typeof state.bsConverterOpen === 'undefined') state.bsConverterOpen = false;
+    }
+    if (panel.dataset) {
+      var resetKeys = [
+        'csfxEntryMode',
+        'csfxEntryUsd',
+        'csfxEntryUsdFromBs',
+        'csfxEntryBs',
+        'csfxEntryTotal',
+        'csfxEntryMissing',
+        'csfxEntryChange',
+        'csfxEntryRate',
+        'csfxEntryDiscountable',
+        'csfxEntryNonDiscount',
+        'csfxCalcNet',
+        'csfxCalcDiscount',
+        'csfxCalcGross',
+        'csfxCalcRemainder',
+        'csfxSelectedSuggest'
+      ];
+      resetKeys.forEach(function(key){
+        if (panel.dataset[key] !== undefined) delete panel.dataset[key];
+      });
+      if (panel.dataset.csfxDirty !== undefined) delete panel.dataset.csfxDirty;
+    }
+  }
+
+  function csfxDualSetMode(panel, mode, options) {
+    if (!panel) return;
+    var prevMode = panel.dataset ? panel.dataset.csfxMode : '';
+    mode = mode || 'usd';
+    panel.dataset.csfxMode = mode;
+    if (prevMode && prevMode !== mode) {
+      csfxDualResetModeInputs(panel, mode, csfxDualState(panel));
+    }
+    var tabs = panel.querySelectorAll('[data-csfx-mode-tab]');
+    tabs.forEach(function (tab) {
+      if (!tab) return;
+      if (tab.dataset && tab.dataset.csfxModeTab === mode) {
+        tab.classList.add('is-active');
+        tab.setAttribute('aria-selected', 'true');
+      } else {
+        tab.classList.remove('is-active');
+        tab.setAttribute('aria-selected', 'false');
+      }
+    });
+    var forms = panel.querySelectorAll('[data-csfx-mode-form]');
+    forms.forEach(function (form) {
+      if (!form || !form.dataset) return;
+      var isMatch = form.dataset.csfxModeForm === mode;
+      form.setAttribute('data-active', isMatch ? 'true' : 'false');
+      if (isMatch) {
+        form.removeAttribute('hidden');
+      } else {
+        form.setAttribute('hidden', 'hidden');
+      }
+    });
+    if (options && options.focus) {
+      setTimeout(function () {
+        try {
+          var active = panel.querySelector('[data-csfx-mode-form="' + mode + '"] input');
+          if (active) active.focus();
+        } catch (_errFocusMode) {}
+      }, 40);
+    }
+    if (!options || !options.silent) {
+      csfxUpdateDualPanel(panel);
+    }
+  }
+
+  function csfxDualReadEntry(panel, context) {
+    context = context || {};
+    var state = csfxDualState(panel);
+    var mode = panel && panel.dataset ? panel.dataset.csfxMode : 'usd';
+    if (!mode) mode = 'usd';
+    var decimals = (FX && FX.decimals) || 2;
+    var rate = Number(FX && FX.rate ? FX.rate : 0);
+    if (!isFinite(rate)) rate = 0;
+    var baseTotal = context && isFinite(context.baseTotal) ? context.baseTotal : NaN;
+    var pct = context && isFinite(context.pct) ? context.pct : 0;
+    if (pct < 0) pct = 0;
+    if (pct >= 0.995) pct = 0.995;
+    var entry = {
+      mode: mode,
+      rate: rate,
+      decimals: decimals,
+      usdDirect: 0,
+      usdFromBs: 0,
+      bsAmount: 0,
+      totalUsd: 0,
+      netRequested: 0,
+      netForDiscount: 0,
+      discountableGross: isFinite(baseTotal) ? Math.max(0, baseTotal) : 0,
+      nonDiscountGross: 0,
+      autoUsdDirect: false,
+      errors: [],
+      warnings: [],
+      hasValue: false
+    };
+    var epsilonUsd = Math.pow(10, -(decimals + 1));
+    var epsilonBs = Math.pow(10, -(((FX && FX.decimals) || 2) + 1));
+    var inputs = state.inputs || {};
+
+    function collectBsValue() {
+      var info = { usd: 0, bs: 0, hasValue: false, rateMissing: false };
+      var usdInput = inputs.bsUsd;
+      var bsInput = inputs.bsRaw;
+      if (!usdInput && !bsInput) return info;
+      var usdParsed = csfxDualParseInput(usdInput);
+      var bsParsed = csfxDualParseInput(bsInput);
+      if (usdParsed.hasValue || bsParsed.hasValue) info.hasValue = true;
+      var manualBs = NaN;
+      if (usdInput && usdInput.dataset && typeof usdInput.dataset.csfxManualBs !== 'undefined') {
+        manualBs = csfxToNumber(usdInput.dataset.csfxManualBs);
+      }
+      if (bsParsed.hasValue && bsParsed.value > 0) {
+        if (rate > 0) {
+          info.bs = round(bsParsed.value, FX.decimals);
+          info.usd = round(info.bs / rate, decimals);
+          if (usdInput) {
+            try { usdInput.value = csfxFormatInputNumber(info.usd, decimals); } catch (_errUsdSet) {}
+          }
+          if (usdInput && usdInput.dataset) {
+            usdInput.dataset.csfxManualBs = String(info.bs);
+          }
+        } else {
+          info.rateMissing = true;
+        }
+      } else {
+        info.usd = round(usdParsed.value, decimals);
+        if (!isNaN(manualBs) && manualBs > 0) {
+          info.bs = round(manualBs, FX.decimals);
+          if (info.usd <= 0 && rate > 0) {
+            info.usd = round(info.bs / rate, decimals);
+            if (usdInput) {
+              try { usdInput.value = csfxFormatInputNumber(info.usd, decimals); } catch (_errUsdMan) {}
+            }
+          }
+        } else if (usdParsed.hasValue && usdParsed.raw && /[.,]/.test(usdParsed.raw)) {
+          info.usd = usdParsed.value;
+          if (rate > 0 && info.usd > 0) {
+            info.bs = round(info.usd * rate, FX.decimals);
+          }
+        } else if (info.usd > 0 && rate > 0) {
+          info.bs = round(info.usd * rate, FX.decimals);
+          if (usdInput) {
+            try { usdInput.value = csfxFormatInputNumber(info.usd, decimals); } catch (_errUsdCalc) {}
+          }
+        }
+      }
+      return info;
+    }
+
+    if (mode === 'usd') {
+      var usdParsed = csfxDualParseInput(inputs.usd);
+      if (usdParsed.hasValue) entry.hasValue = true;
+      entry.usdDirect = round(usdParsed.value, decimals);
+    } else {
+      var bsInfo = collectBsValue();
+      entry.usdFromBs = bsInfo.usd;
+      entry.bsAmount = bsInfo.bs;
+      var hasBsValue = (Math.abs(entry.usdFromBs) > epsilonUsd) || (Math.abs(entry.bsAmount) > epsilonBs);
+      if (hasBsValue) entry.hasValue = true;
+      if (bsInfo.rateMissing && entry.usdFromBs > epsilonUsd) {
+        entry.errors.push('No hay tasa vigente para convertir los bolívares.');
+      }
+      mode = 'bs';
+      panel.dataset.csfxMode = 'bs';
+      entry.mode = 'bs';
+    }
+
+    var discountFactor = (pct > 0 && pct < 1) ? (1 - pct) : (pct >= 1 ? 0 : 1);
+    var nonDiscountGross = 0;
+    if (!isFinite(baseTotal) || baseTotal <= 0) {
+      entry.discountableGross = 0;
+      entry.nonDiscountGross = 0;
+    } else {
+      if (discountFactor > 0) {
+        nonDiscountGross = entry.usdFromBs / discountFactor;
+      } else {
+        nonDiscountGross = entry.usdFromBs;
+      }
+      if (!isFinite(nonDiscountGross) || nonDiscountGross < 0) nonDiscountGross = 0;
+      if (nonDiscountGross > baseTotal) nonDiscountGross = baseTotal;
+      entry.nonDiscountGross = round(nonDiscountGross, decimals);
+      entry.discountableGross = Math.max(0, baseTotal - entry.nonDiscountGross);
+    }
+
+    if (mode === 'bs') {
+      var hasBsValue = (Math.abs(entry.usdFromBs) > epsilonUsd) || (Math.abs(entry.bsAmount) > epsilonBs);
+      entry.autoUsdDirect = hasBsValue && entry.discountableGross > epsilonUsd;
+      if (hasBsValue) {
+        if (!isFinite(baseTotal) || baseTotal <= 0) {
+          if (!entry.errors.length) entry.errors.push('Sin total disponible para calcular el resto.');
+        }
+        if (entry.autoUsdDirect && discountFactor > 0) {
+          entry.usdDirect = round(entry.discountableGross * discountFactor, decimals);
+        } else {
+          entry.usdDirect = 0;
+        }
+        entry.hasValue = true;
+      } else {
+        entry.autoUsdDirect = false;
+        entry.usdDirect = 0;
+      }
+    }
+
+    entry.totalUsd = round(entry.usdDirect + entry.usdFromBs, decimals);
+    entry.netForDiscount = entry.usdDirect;
+    entry.netRequested = entry.netForDiscount;
+    return entry;
   }
 
   function csfxSanitizeMetaList(list) {
@@ -3926,6 +4701,18 @@ var csfxLastLoggedSupervisorMessage = '';
       csfx_discount_pct: cart.csfx_discount_pct,
       csfx_discount_value: cart.csfx_discount_value,
       csfx_base_total: cart.csfx_base_total,
+      csfx_dual_mode: cart.csfx_dual_mode,
+      csfx_dual_usd_direct: cart.csfx_dual_usd_direct,
+      csfx_dual_usd_bs: cart.csfx_dual_usd_bs,
+      csfx_dual_bs_amount: cart.csfx_dual_bs_amount,
+      csfx_dual_total_usd: cart.csfx_dual_total_usd,
+      csfx_dual_discountable_gross: cart.csfx_dual_discountable_gross,
+      csfx_dual_non_discount_gross: cart.csfx_dual_non_discount_gross,
+      csfx_dual_missing_usd: cart.csfx_dual_missing_usd,
+      csfx_dual_missing_bs: cart.csfx_dual_missing_bs,
+      csfx_dual_change_usd: cart.csfx_dual_change_usd,
+      csfx_dual_change_bs: cart.csfx_dual_change_bs,
+      csfx_dual_rate: cart.csfx_dual_rate,
       addition_information: additionInfo.slice(),
       additionInformation: additionInfo.slice()
     };
@@ -3956,7 +4743,7 @@ var csfxLastLoggedSupervisorMessage = '';
     });
   }
 
-  function csfxApplyDualDiscount(snapshot, calc, replacingExisting) {
+  function csfxApplyDualDiscount(snapshot, calc, replacingExisting, entry) {
     if (!snapshot || !calc) return false;
     var cart = (snapshot.cart && typeof snapshot.cart === 'object') ? snapshot.cart : {};
     if (!cart.totals || typeof cart.totals !== 'object') cart.totals = {};
@@ -3997,7 +4784,8 @@ var csfxLastLoggedSupervisorMessage = '';
       hasService: !!snapshot.cartService,
       cartSource: snapshot.cartSource,
       replacingExisting: !!replacingExisting,
-      manualVia: 'ui'
+      manualVia: 'ui',
+      entry: entry
     });
     if (snapshot.cartDebug && typeof snapshot.cartDebug === 'object') {
       snapshot.cartDebug.manualVia = 'ui';
@@ -4008,7 +4796,56 @@ var csfxLastLoggedSupervisorMessage = '';
     var pctDisplay = pctStored;
     if (pctDisplay > 0 && pctDisplay < 1) pctDisplay = pctDisplay * 100;
     var pctRounded = round(pctDisplay, 2);
-    var note = 'Descuento dual del ' + pctRounded.toFixed(2) + '% aplicado sobre ' + fmtUsd(calc.grossCovered) + ', cliente pagó ' + fmtUsd(calc.netEffective) + ' en divisas.';
+
+    entry = entry || {};
+    var entryMode = entry.mode || 'usd';
+    var usdDirectRounded = round(Number(entry.usdDirect || 0), FX.decimals);
+    if (!isFinite(usdDirectRounded)) usdDirectRounded = 0;
+    var usdFromBsRounded = round(Number(entry.usdFromBs || 0), FX.decimals);
+    if (!isFinite(usdFromBsRounded)) usdFromBsRounded = 0;
+    var bsAmountRounded = round(Number(entry.bsAmount || 0), FX.decimals);
+    if (!isFinite(bsAmountRounded)) bsAmountRounded = 0;
+    var totalUsdRounded = round(Number(entry.totalUsd || entry.netRequested || calc.netEffective || 0), FX.decimals);
+    if (!isFinite(totalUsdRounded)) totalUsdRounded = usdPaidRounded;
+    var rate = entry.rate > 0 ? entry.rate : (Number(FX && FX.rate) || 0);
+    if (!isFinite(rate)) rate = 0;
+    var toleranceDiff = Math.max(0.01, Math.pow(10, -(((FX && FX.decimals) || 2) + 1)));
+    var diff = round(totalUsdRounded - usdPaidRounded, FX.decimals);
+    if (Math.abs(diff) <= toleranceDiff) diff = 0;
+    var changeUsdRounded = diff > 0 ? diff : 0;
+    var missingUsdRounded = diff < 0 ? Math.abs(diff) : 0;
+    var changeBsRounded = rate > 0 ? round(changeUsdRounded * rate, FX.decimals) : 0;
+    var missingBsRounded = rate > 0 ? round(missingUsdRounded * rate, FX.decimals) : 0;
+
+    var discountableRounded = round(Number(entry.discountableGross || 0), FX.decimals);
+    if (!isFinite(discountableRounded) || discountableRounded < 0) discountableRounded = 0;
+    var nonDiscountRounded = round(Number(entry.nonDiscountGross || 0), FX.decimals);
+    if (!isFinite(nonDiscountRounded) || nonDiscountRounded < 0) {
+      nonDiscountRounded = round(Math.max(0, baseTotal - discountableRounded), FX.decimals);
+    }
+
+    var noteParts = [];
+    noteParts.push('Descuento dual del ' + pctRounded.toFixed(2) + '% aplicado sobre ' + fmtUsd(calc.grossCovered) + '.');
+    if (usdDirectRounded > 0 && bsAmountRounded > 0) {
+      noteParts.push('Cliente aportó ' + fmtUsd(usdDirectRounded) + ' en USD y ' + fmtBs(bsAmountRounded) + ' (≈ ' + fmtUsd(usdFromBsRounded) + ') en Bs.');
+    } else if (usdDirectRounded > 0) {
+      noteParts.push('Cliente pagó ' + fmtUsd(usdDirectRounded) + ' en USD.');
+    } else if (bsAmountRounded > 0) {
+      noteParts.push('Cliente pagó ' + fmtBs(bsAmountRounded) + ' (≈ ' + fmtUsd(usdFromBsRounded) + ') en Bs.');
+    } else {
+      noteParts.push('Cliente pagó ' + fmtUsd(calc.netEffective) + ' en divisas.');
+    }
+    if (changeUsdRounded > 0.0001) {
+      var changeText = 'Cambio entregado: ' + fmtUsd(changeUsdRounded);
+      if (rate > 0 && changeBsRounded > 0.0001) changeText += ' (≈ ' + fmtBs(changeBsRounded) + ')';
+      noteParts.push(changeText + '.');
+    }
+    if (missingUsdRounded > 0.0001) {
+      var pendingText = 'Saldo pendiente: ' + fmtUsd(missingUsdRounded);
+      if (rate > 0 && missingBsRounded > 0.0001) pendingText += ' (≈ ' + fmtBs(missingBsRounded) + ')';
+      noteParts.push(pendingText + '.');
+    }
+    var note = noteParts.join(' ');
 
     var syncDiscountFields = function (targetCart) {
       if (!targetCart || typeof targetCart !== 'object') return;
@@ -4062,6 +4899,18 @@ var csfxLastLoggedSupervisorMessage = '';
       }
       targetMeta = csfxUpsertMeta(targetMeta, 'csfx_base_total', basePersist);
       targetMeta = csfxUpsertMeta(targetMeta, 'csfx_discount_note', note);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_mode', entryMode);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_usd_direct', usdDirectRounded);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_usd_bs', usdFromBsRounded);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_bs_amount', bsAmountRounded);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_total_usd', totalUsdRounded);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_discountable_gross', discountableRounded);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_non_discount_gross', nonDiscountRounded);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_missing_usd', missingUsdRounded);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_missing_bs', missingBsRounded);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_change_usd', changeUsdRounded);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_change_bs', changeBsRounded);
+      targetMeta = csfxUpsertMeta(targetMeta, 'csfx_dual_rate', rate);
       targetCart.meta_data = targetMeta;
       targetCart.metaData = targetMeta;
       targetCart.csfx_usd_paid = usdPaidRounded;
@@ -4069,6 +4918,18 @@ var csfxLastLoggedSupervisorMessage = '';
       targetCart.csfx_discount_value = discountValue;
       targetCart.csfx_base_total = basePersist;
       targetCart.csfx_discount_note = note;
+      targetCart.csfx_dual_mode = entryMode;
+      targetCart.csfx_dual_usd_direct = usdDirectRounded;
+      targetCart.csfx_dual_usd_bs = usdFromBsRounded;
+      targetCart.csfx_dual_bs_amount = bsAmountRounded;
+      targetCart.csfx_dual_total_usd = totalUsdRounded;
+      targetCart.csfx_dual_discountable_gross = discountableRounded;
+      targetCart.csfx_dual_non_discount_gross = nonDiscountRounded;
+      targetCart.csfx_dual_missing_usd = missingUsdRounded;
+      targetCart.csfx_dual_missing_bs = missingBsRounded;
+      targetCart.csfx_dual_change_usd = changeUsdRounded;
+      targetCart.csfx_dual_change_bs = changeBsRounded;
+      targetCart.csfx_dual_rate = rate;
       csfxEnrichCartWithSupervisor(targetCart);
     };
 
@@ -4078,6 +4939,18 @@ var csfxLastLoggedSupervisorMessage = '';
       discountValue: discountValue,
       pctStored: pctStored,
       meta: cart.meta_data,
+      entry: {
+        mode: entryMode,
+        usdDirect: usdDirectRounded,
+        usdFromBs: usdFromBsRounded,
+        bsAmount: bsAmountRounded,
+        totalUsd: totalUsdRounded,
+        discountableGross: discountableRounded,
+        nonDiscountGross: nonDiscountRounded,
+        changeUsd: changeUsdRounded,
+        missingUsd: missingUsdRounded,
+        rate: rate
+      },
       cartSummary: {
         discount_amount: cart.discount_amount,
         final_discount_amount: cart.final_discount_amount,
@@ -4144,7 +5017,19 @@ var csfxLastLoggedSupervisorMessage = '';
           usdNet: calc.netEffective,
           discount: discountValue,
           pct: Number(FX.disc.percent),
-          remainderUsd: calc.remainderUsd
+          remainderUsd: calc.remainderUsd,
+          mode: entryMode,
+          usdDirect: usdDirectRounded,
+          usdFromBs: usdFromBsRounded,
+          bsAmount: bsAmountRounded,
+          totalUsd: totalUsdRounded,
+          discountableGross: discountableRounded,
+          nonDiscountGross: nonDiscountRounded,
+          changeUsd: changeUsdRounded,
+          changeBs: changeBsRounded,
+          missingUsd: missingUsdRounded,
+          missingBs: missingBsRounded,
+          rate: rate
         }
       }));
       document.dispatchEvent(new CustomEvent('csfx:cart-updated'));
@@ -4261,6 +5146,11 @@ var csfxLastLoggedSupervisorMessage = '';
     panel.dataset.csfx = 'dual-panel';
     container.appendChild(panel);
 
+    var state = csfxDualState(panel);
+    if (typeof state.bsConverterOpen === 'undefined') {
+      state.bsConverterOpen = false;
+    }
+
     var title = document.createElement('h4');
     var titleIcon = document.createElement('span');
     titleIcon.className = 'csfx-dual-heading-icon';
@@ -4278,31 +5168,157 @@ var csfxLastLoggedSupervisorMessage = '';
       + '<span>Total con descuento</span><strong data-csfx="total-full">—</strong>';
     panel.appendChild(grid);
 
-    var inputWrap = document.createElement('div');
-    inputWrap.className = 'csfx-dual-input';
-    var label = document.createElement('span');
-    label.textContent = 'Pago en divisas (USD neto)';
-    var input = document.createElement('input');
-    input.type = 'number';
-    input.min = '0';
-    input.step = '0.01';
-    input.placeholder = '0.00';
-    input.dataset.csfx = 'usd-net';
-    inputWrap.appendChild(label);
-    inputWrap.appendChild(input);
-    panel.appendChild(inputWrap);
-    input.value = '';
-    input.autocomplete = 'off';
-    input.inputMode = 'decimal';
-    input.pattern = '[0-9]*[.,]?[0-9]*';
-    input.disabled = false;
-    input.removeAttribute('disabled');
-    input.readOnly = false;
-    input.removeAttribute('readonly');
-    input.tabIndex = 0;
-    ['keydown','keypress','keyup','wheel','focus','blur','mousedown','mouseup','click','touchstart'].forEach(function(evt){
-      input.addEventListener(evt, function(e){ e.stopPropagation(); }, true);
-      input.addEventListener(evt, function(e){ e.stopPropagation(); });
+    var tabs = document.createElement('div');
+    tabs.className = 'csfx-dual-tabs';
+    var modeDefs = [
+      { id: 'usd', label: 'USD directo', desc: 'El cliente paga en USD y el resto se cubre en Bs.' },
+      { id: 'bs', label: 'Bs', desc: 'Cobrar un monto USD pagado íntegramente en bolívares.' }
+    ];
+    modeDefs.forEach(function (def) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'csfx-dual-tab';
+      btn.dataset.csfxModeTab = def.id;
+      btn.textContent = def.label;
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-selected', 'false');
+      if (def.desc) btn.setAttribute('title', def.desc);
+      btn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        csfxDualSetMode(panel, def.id, { focus: true });
+      });
+      tabs.appendChild(btn);
+    });
+    panel.appendChild(tabs);
+
+    var modesWrap = document.createElement('div');
+    modesWrap.className = 'csfx-dual-modes';
+    panel.appendChild(modesWrap);
+
+    function setupInput(inputEl, onChange) {
+      if (!inputEl) return;
+      inputEl.autocomplete = 'off';
+      inputEl.inputMode = 'decimal';
+      inputEl.pattern = '[0-9]*[.,]?[0-9]*';
+      inputEl.disabled = false;
+      inputEl.removeAttribute('disabled');
+      inputEl.readOnly = false;
+      inputEl.removeAttribute('readonly');
+      inputEl.tabIndex = 0;
+      ['keydown','keypress','keyup','wheel','focus','blur','mousedown','mouseup','click','touchstart'].forEach(function(evt){
+        inputEl.addEventListener(evt, function(e){ e.stopPropagation(); }, true);
+        inputEl.addEventListener(evt, function(e){ e.stopPropagation(); });
+      });
+      inputEl.addEventListener('input', function (ev) {
+        if (ev && ev.isTrusted && panel) {
+          delete panel.dataset.csfxSelectedSuggest;
+          panel.querySelectorAll('[data-csfx-adjust]').forEach(function(btn){
+            btn.classList.remove('is-selected');
+          });
+        }
+        csfxDualMarkDirty(panel, inputEl);
+        if (typeof onChange === 'function') onChange(ev);
+        csfxUpdateDualPanel(panel);
+        ev.stopPropagation();
+      });
+    }
+
+    var usdMode = document.createElement('div');
+    usdMode.className = 'csfx-dual-mode';
+    usdMode.dataset.csfxModeForm = 'usd';
+    var usdInputWrap = document.createElement('div');
+    usdInputWrap.className = 'csfx-dual-input';
+    var usdLabel = document.createElement('span');
+    usdLabel.textContent = 'Pago en divisas (USD neto)';
+    var usdInput = document.createElement('input');
+    usdInput.type = 'text';
+    usdInput.placeholder = '0.00';
+    usdInput.dataset.csfx = 'usd-net';
+    usdInputWrap.appendChild(usdLabel);
+    usdInputWrap.appendChild(usdInput);
+    usdMode.appendChild(usdInputWrap);
+    modesWrap.appendChild(usdMode);
+    setupInput(usdInput);
+
+    var bsMode = document.createElement('div');
+    bsMode.className = 'csfx-dual-mode';
+    bsMode.dataset.csfxModeForm = 'bs';
+    var bsInputWrap = document.createElement('div');
+    bsInputWrap.className = 'csfx-dual-input';
+    var bsLabel = document.createElement('span');
+    bsLabel.textContent = 'Monto en USD (se cobrará en Bs)';
+    var bsInput = document.createElement('input');
+    bsInput.type = 'text';
+    bsInput.placeholder = '0.00';
+    bsInput.dataset.csfx = 'usd-net-bs';
+    bsInputWrap.appendChild(bsLabel);
+    bsInputWrap.appendChild(bsInput);
+    var bsHint = document.createElement('div');
+    bsHint.className = 'csfx-dual-inline-hint';
+    bsHint.dataset.csfx = 'bs-equivalent';
+    bsHint.textContent = 'Ingresa el monto USD para ver el equivalente a cobrar en Bs.';
+    bsInputWrap.appendChild(bsHint);
+    bsMode.appendChild(bsInputWrap);
+
+    var bsTools = document.createElement('div');
+    bsTools.className = 'csfx-dual-bs-tools';
+    var bsToggle = document.createElement('button');
+    bsToggle.type = 'button';
+    bsToggle.className = 'csfx-dual-bs-toggle';
+    bsToggle.textContent = 'Convertir desde Bs';
+    bsTools.appendChild(bsToggle);
+    bsMode.appendChild(bsTools);
+
+    var bsAltWrap = document.createElement('div');
+    bsAltWrap.className = 'csfx-dual-bs-field csfx-dual-input';
+    bsAltWrap.setAttribute('hidden', 'hidden');
+    var bsAltLabel = document.createElement('span');
+    bsAltLabel.textContent = 'Monto en Bs';
+    var bsAltInput = document.createElement('input');
+    bsAltInput.type = 'text';
+    bsAltInput.placeholder = '0.00';
+    bsAltInput.dataset.csfx = 'bs-manual';
+    bsAltWrap.appendChild(bsAltLabel);
+    bsAltWrap.appendChild(bsAltInput);
+    bsMode.appendChild(bsAltWrap);
+    var bsAdjust = document.createElement('div');
+    bsAdjust.className = 'csfx-dual-adjust';
+    bsAdjust.dataset.csfx = 'bs-adjust';
+    bsAdjust.setAttribute('hidden', 'hidden');
+    bsMode.appendChild(bsAdjust);
+    modesWrap.appendChild(bsMode);
+
+    setupInput(bsInput, function () {
+      if (bsInput && bsInput.dataset) delete bsInput.dataset.csfxManualBs;
+    });
+    setupInput(bsAltInput, function () {
+      if (!bsAltInput.value && bsInput && bsInput.dataset) {
+        delete bsInput.dataset.csfxManualBs;
+      }
+    });
+
+    bsToggle.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      var opened = bsAltWrap.hasAttribute('hidden');
+      if (opened) {
+        bsAltWrap.removeAttribute('hidden');
+        bsToggle.classList.add('is-active');
+        bsToggle.textContent = 'Ocultar conversor Bs';
+        state.bsConverterOpen = true;
+        setTimeout(function () {
+          try { bsAltInput.focus(); } catch (_errFocusBs) {}
+        }, 40);
+      } else {
+        bsAltWrap.setAttribute('hidden', 'hidden');
+        bsToggle.classList.remove('is-active');
+        bsToggle.textContent = 'Convertir desde Bs';
+        state.bsConverterOpen = false;
+        bsAltInput.value = '';
+        if (bsInput && bsInput.dataset) delete bsInput.dataset.csfxManualBs;
+        csfxUpdateDualPanel(panel);
+      }
     });
 
     var metrics = document.createElement('div');
@@ -4341,11 +5357,11 @@ var csfxLastLoggedSupervisorMessage = '';
     helperIcon.className = 'csfx-dual-helper-icon';
     helperIcon.dataset.tooltip = 'Haz clic para ver cómo explicar el descuento al cliente.';
     helperIcon.textContent = 'i';
-    var helperLabel = document.createElement('span');
-    helperLabel.className = 'csfx-dual-helper-label';
-    helperLabel.textContent = 'Cómo explicar el descuento';
-    helper.appendChild(helperIcon);
-    helper.appendChild(helperLabel);
+      var helperLabel = document.createElement('span');
+      helperLabel.className = 'csfx-dual-helper-label';
+      helperLabel.textContent = 'Cómo explicar el descuento';
+      helper.appendChild(helperIcon);
+      helper.appendChild(helperLabel);
     helper.setAttribute('role', 'button');
     helper.tabIndex = 0;
     var explainHandler = function (ev) {
@@ -4360,6 +5376,22 @@ var csfxLastLoggedSupervisorMessage = '';
       }
     });
     panel.appendChild(helper);
+
+    var copyRow = document.createElement('div');
+    copyRow.className = 'csfx-dual-copy';
+    var copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'csfx-btn csfx-btn--ghost';
+    copyBtn.dataset.csfx = 'copy-summary';
+    copyBtn.textContent = 'Copiar resumen';
+    copyBtn.disabled = true;
+    copyRow.appendChild(copyBtn);
+    panel.appendChild(copyRow);
+    copyBtn.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      csfxCopyDualSummary(panel);
+    });
 
     var actions = document.createElement('div');
     actions.className = 'csfx-dual-actions';
@@ -4388,21 +5420,16 @@ var csfxLastLoggedSupervisorMessage = '';
     status.dataset.csfx = 'status';
     panel.appendChild(status);
 
-    input.addEventListener('input', function (ev) {
-      if (this.value && typeof this.value === 'string' && this.value.indexOf(',') > -1) {
-        var pos = this.selectionStart;
-        this.value = this.value.replace(',', '.');
-        if (typeof pos === 'number') {
-          this.setSelectionRange(pos, pos);
-        }
-      }
-      ev.stopPropagation();
-      panel.dataset.csfxDirty = '1';
-      input.dataset.csfxTouched = '1';
-      csfxUpdateDualPanel(panel);
-    });
-    fullBtn.addEventListener('click', function () {
-      if (fullBtn.disabled) return;
+    state.inputs.usd = usdInput;
+    state.inputs.bsUsd = bsInput;
+    state.inputs.bsRaw = bsAltInput;
+    state.ui.bsEquivalent = bsHint;
+    state.ui.bsAdjust = bsAdjust;
+    state.ui.bsConverterWrap = bsAltWrap;
+    state.ui.bsConverterButton = bsToggle;
+    state.ui.copyBtn = copyBtn;
+
+    var applyFullDiscount = function () {
       var statusEl = panel.querySelector('[data-csfx="status"]');
       var baseStr = panel.dataset.csfxBase || '';
       var baseTotal = parseFloat(baseStr);
@@ -4415,12 +5442,74 @@ var csfxLastLoggedSupervisorMessage = '';
       }
       var inputEl = panel.querySelector('input[data-csfx="usd-net"]');
       if (!inputEl) return;
+      csfxDualSetMode(panel, 'usd', { focus: false, silent: true });
       var rounded = round(baseTotal, FX.decimals);
-      inputEl.value = rounded.toFixed(FX.decimals);
+      inputEl.value = csfxFormatInputNumber(rounded, FX.decimals);
       panel.dataset.csfxDirty = '1';
       inputEl.dataset.csfxTouched = '1';
       csfxUpdateDualPanel(panel);
       csfxHandleDualConfirm(panel);
+    };
+
+    fullBtn.addEventListener('click', function () {
+      if (fullBtn.disabled) return;
+      var inputEl = panel.querySelector('input[data-csfx="usd-net"]');
+      var baseStr = panel.dataset.csfxBase || '';
+      var baseTotal = parseFloat(baseStr);
+      if (!isFinite(baseTotal) && panel.dataset && panel.dataset.csfxTotal) {
+        var fallback = parseFloat(panel.dataset.csfxTotal || '');
+        if (isFinite(fallback)) baseTotal = fallback;
+      }
+      var manualValue = NaN;
+      if (inputEl && typeof inputEl.value === 'string') {
+        manualValue = parseFloat(inputEl.value.replace(',', '.'));
+      }
+      var epsilon = Math.max(0.01, Math.pow(10, -((FX && FX.decimals) || 2)));
+      var hasManualAmount = false;
+      if (isFinite(manualValue) && manualValue > 0) {
+        if (!isFinite(baseTotal) || Math.abs(manualValue - baseTotal) > epsilon) {
+          hasManualAmount = true;
+        } else {
+          // si coincide con la base, no forzamos confirmación extra
+          manualValue = manualValue;
+        }
+      } else {
+        manualValue = NaN;
+      }
+
+      var currentMode = panel.dataset && panel.dataset.csfxMode ? panel.dataset.csfxMode : 'usd';
+      if (currentMode === 'bs') {
+        var stateNow = csfxDualState(panel);
+        var bsUsdInput = stateNow.inputs ? stateNow.inputs.bsUsd : null;
+        var bsRawInput = stateNow.inputs ? stateNow.inputs.bsRaw : null;
+        var usdFromBs = csfxDualNormalizeValue(bsUsdInput ? bsUsdInput.value : '');
+        var bsAmount = csfxDualNormalizeValue(bsRawInput ? bsRawInput.value : '');
+        var rate = Number(FX && FX.rate ? FX.rate : 0);
+        if (!isFinite(rate) || rate <= 0) rate = 0;
+        var candidateUsd = NaN;
+        if (isFinite(usdFromBs) && usdFromBs > 0) {
+          candidateUsd = usdFromBs;
+        } else if (isFinite(bsAmount) && bsAmount > 0 && rate > 0) {
+          candidateUsd = bsAmount / rate;
+        }
+        if (isFinite(candidateUsd) && candidateUsd > 0) {
+          if (!isFinite(baseTotal) || Math.abs(candidateUsd - baseTotal) > epsilon) {
+            hasManualAmount = true;
+          }
+          manualValue = candidateUsd;
+        }
+      }
+
+      if (hasManualAmount) {
+        csfxPromptFullDiscountOverride({
+          panel: panel,
+          manualValue: manualValue,
+          base: baseTotal,
+          onConfirm: applyFullDiscount
+        });
+        return;
+      }
+      applyFullDiscount();
     });
     confirm.addEventListener('click', function () {
       if (confirm.disabled) return;
@@ -4428,6 +5517,12 @@ var csfxLastLoggedSupervisorMessage = '';
     });
     customBtn.addEventListener('click', function () { csfxOpenCustomDiscountModal({ fromDualPanel: panel }); });
 
+    csfxDualSetMode(panel, 'usd', { silent: true });
+    if (state.bsConverterOpen) {
+      bsAltWrap.removeAttribute('hidden');
+      bsToggle.classList.add('is-active');
+      bsToggle.textContent = 'Ocultar conversor Bs';
+    }
     csfxUpdateDualPanel(panel);
     return panel;
   }
@@ -4443,10 +5538,13 @@ var csfxLastLoggedSupervisorMessage = '';
 
   function csfxUpdateDualPanel(panel) {
     if (!panel) return;
+    var state = csfxDualState(panel);
     var pct = csfxDiscountDecimal();
     var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
     var hasGlobalDiscount = csfxHasGlobalDiscount(snapshot);
     var baseTotal = snapshot.baseTotalUSD;
+    var currentRate = Number(FX && FX.rate ? FX.rate : 0);
+    if (!isFinite(currentRate)) currentRate = 0;
     if ((!isFinite(baseTotal) || baseTotal <= 0) && snapshot.meta && snapshot.meta.csfx_base_total) {
       var metaBase = csfxToNumber(snapshot.meta.csfx_base_total);
       if (isFinite(metaBase) && metaBase > 0) baseTotal = metaBase;
@@ -4469,19 +5567,58 @@ var csfxLastLoggedSupervisorMessage = '';
       ? fmtUsd(baseTotal * (1 - pct))
       : '—';
 
-    var input = panel.querySelector('input[data-csfx="usd-net"]');
+    var uiRefs = state.ui || {};
+    var bsHint = uiRefs.bsEquivalent || null;
+    var bsAdjust = uiRefs.bsAdjust || null;
+    var copyBtn = uiRefs.copyBtn || null;
+    state.summary = null;
+    if (copyBtn) {
+      copyBtn.disabled = true;
+    }
+    if (bsHint) bsHint.textContent = '—';
+    if (bsAdjust) {
+      bsAdjust.innerHTML = '';
+      bsAdjust.setAttribute('hidden', 'hidden');
+      bsAdjust.removeAttribute('data-open');
+    }
+
+    var usdInput = state.inputs && state.inputs.usd ? state.inputs.usd : panel.querySelector('input[data-csfx="usd-net"]');
     var status = panel.querySelector('[data-csfx="status"]');
     var applyButtons = Array.prototype.slice.call(panel.querySelectorAll('[data-csfx="full-discount"], [data-csfx="confirm"]'));
-    if (input && !panel.dataset.csfxDirty) {
+    var fullBtn = panel.querySelector('[data-csfx="full-discount"]');
+    var confirmBtn = panel.querySelector('[data-csfx="confirm"]');
+
+    function csfxUpdateFullButtonLock(shouldLock, hint) {
+      if (shouldLock) {
+        panel.dataset.csfxFullLock = '1';
+      } else {
+        delete panel.dataset.csfxFullLock;
+      }
+      if (!fullBtn) return;
+      if (shouldLock) {
+        fullBtn.setAttribute('data-csfx-full-lock', '1');
+        if (hint) {
+          fullBtn.setAttribute('title', hint);
+        } else {
+          fullBtn.setAttribute('title', 'Ingresaste un monto manual; confirma antes de aplicar el descuento total.');
+        }
+      } else {
+        fullBtn.removeAttribute('data-csfx-full-lock');
+        if (fullBtn.hasAttribute('title')) fullBtn.removeAttribute('title');
+      }
+    }
+
+    if (usdInput && !panel.dataset.csfxDirty) {
       if (snapshot.usdPaid) {
-        input.value = round(snapshot.usdPaid, FX.decimals).toFixed(FX.decimals);
-      } else if (!input.dataset.csfxTouched) {
-        input.value = '';
+        usdInput.value = csfxFormatInputNumber(round(snapshot.usdPaid, FX.decimals), FX.decimals);
+      } else if (!usdInput.dataset || !usdInput.dataset.csfxTouched) {
+        usdInput.value = '';
       }
     }
 
     if (hasGlobalDiscount) {
       applyButtons.forEach(function (btn) { if (btn) btn.disabled = true; });
+      csfxUpdateFullButtonLock(false);
       csfxResetDualChips(panel);
       if (status) {
         var currentDisc = snapshot.discountAmount;
@@ -4495,57 +5632,214 @@ var csfxLastLoggedSupervisorMessage = '';
         }
         status.className = 'csfx-dual-status csfx-dual-status--warn';
       }
-      if (input) input.value = '';
+      if (usdInput) usdInput.value = '';
+      panel.dataset.csfxCalcNet = panel.dataset.csfxCalcDiscount = panel.dataset.csfxCalcGross = panel.dataset.csfxCalcRemainder = '';
+      panel.dataset.csfxEntryMode = panel.dataset.csfxEntryUsd = panel.dataset.csfxEntryUsdFromBs = panel.dataset.csfxEntryBs = panel.dataset.csfxEntryTotal = '';
+      panel.dataset.csfxEntryMissing = panel.dataset.csfxEntryChange = panel.dataset.csfxEntryRate = '';
+      panel.dataset.csfxEntryDiscountable = panel.dataset.csfxEntryNonDiscount = '';
       return panel;
     }
+
     applyButtons.forEach(function (btn) { if (btn) btn.disabled = false; });
-
-    if (!isFinite(baseTotal) || baseTotal <= 0) {
-      if (status) {
-        status.textContent = 'Sin total disponible para calcular descuento.';
-        status.className = 'csfx-dual-status csfx-dual-status--warn';
-      }
-      csfxResetDualChips(panel);
-      return;
-    }
-
-    var rawValue = input ? String(input.value || '').replace(',', '.') : '0';
-    var usdNet = parseFloat(rawValue);
-    if (!isFinite(usdNet) || usdNet <= 0) {
-      if (!hasGlobalDiscount) {
-        csfxResetDualChips(panel);
-        if (status) {
-          status.textContent = 'Introduce el pago neto en divisas para estimar.';
-          status.className = 'csfx-dual-status';
-        }
-      }
-      return;
-    }
+    if (confirmBtn) confirmBtn.disabled = false;
 
     var effectiveBase = baseTotal;
     if ((!isFinite(effectiveBase) || effectiveBase <= 0) && snapshot.meta && snapshot.meta.csfx_base_total) {
-      var metaBase = csfxToNumber(snapshot.meta.csfx_base_total);
-      if (isFinite(metaBase) && metaBase > 0) effectiveBase = metaBase;
+      var metaBaseEffective = csfxToNumber(snapshot.meta.csfx_base_total);
+      if (isFinite(metaBaseEffective) && metaBaseEffective > 0) effectiveBase = metaBaseEffective;
     }
     if (!isFinite(effectiveBase) || effectiveBase <= 0) {
       effectiveBase = baseTotal;
     }
-    var calc = csfxComputeDual(effectiveBase, usdNet, pct);
-    panel.dataset.csfxCalcNet = calc.netEffective || '';
-    panel.dataset.csfxCalcDiscount = calc.discount || '';
-    panel.dataset.csfxCalcGross = calc.grossCovered || '';
-    panel.dataset.csfxCalcRemainder = calc.remainderUsd || '';
 
+    var entry = csfxDualReadEntry(panel, { baseTotal: effectiveBase, pct: pct });
+    var currentMode = panel.dataset && panel.dataset.csfxMode ? panel.dataset.csfxMode : 'usd';
+    if (entry && currentMode === 'usd' && typeof entry.usdDirect === 'number' && usdInput && usdInput.value) {
+      var decimalsCount = entry.decimals || ((FX && FX.decimals) || 2);
+      var usdCanonical = csfxFormatInputNumber(entry.usdDirect, decimalsCount);
+      if (usdCanonical === '') usdCanonical = '0';
+      if (usdInput.value !== usdCanonical) {
+        usdInput.value = usdCanonical;
+      }
+    }
 
+    var decimals = entry.decimals || ((FX && FX.decimals) || 2);
+    var tolerance = Math.max(0.01, Math.pow(10, -(decimals + 1)));
+    var epsilonUsd = Math.pow(10, -(decimals + 1));
 
+    if (bsHint) {
+      if (currentMode === 'bs') {
+        if (entry.bsAmount > 0 && entry.rate > 0) {
+          bsHint.textContent = 'Se cobrará ' + fmtBs(entry.bsAmount) + ' (≈ ' + fmtUsd(entry.usdFromBs) + ')';
+        } else {
+          bsHint.textContent = 'Ingresa el monto USD para ver el equivalente en Bs.';
+        }
+      } else {
+        bsHint.textContent = '—';
+      }
+    }
+    var baseForLock = parseFloat(panel.dataset.csfxBase || '');
+    if (!isFinite(baseForLock)) baseForLock = baseTotal;
+    var epsilonLock = Math.max(0.01, Math.pow(10, -(((FX && FX.decimals) || 2) + 1)));
+    var shouldLockFull = false;
+    var lockHint = '';
+    if (currentMode === 'usd' && isFinite(entry.usdDirect) && entry.usdDirect > 0) {
+      if (!isFinite(baseForLock) || Math.abs(entry.usdDirect - baseForLock) > epsilonLock) {
+        shouldLockFull = true;
+        lockHint = 'Ingresaste ' + fmtUsd(entry.usdDirect) + '. Confirma si aún deseas aplicar el descuento total.';
+      }
+    } else if (currentMode === 'bs') {
+      var rate = Number(entry.rate || FX.rate || 0);
+      if (!isFinite(rate) || rate <= 0) rate = 0;
+      var hasBsManual = false;
+      var bsAmountAbs = Math.abs(entry.bsAmount || 0);
+      var usdFromBsAbs = Math.abs(entry.usdFromBs || 0);
+      if (usdFromBsAbs > epsilonLock) hasBsManual = true;
+      if (rate > 0 && bsAmountAbs > epsilonLock * rate) hasBsManual = true;
+      if (!hasBsManual && bsAmountAbs > Math.pow(10, -((FX && FX.decimals) || 2))) hasBsManual = true;
+      if (hasBsManual) {
+        shouldLockFull = true;
+        if (bsAmountAbs > 0 && rate > 0) {
+          lockHint = 'Ingresaste ' + fmtBs(entry.bsAmount) + ' (≈ ' + fmtUsd(entry.usdFromBs) + '). Confirma si aún deseas aplicar el descuento total.';
+        } else if (usdFromBsAbs > 0) {
+          lockHint = 'Ingresaste ' + fmtUsd(entry.usdFromBs) + ' en la pestaña Bs. Confirma si aún deseas aplicar el descuento total.';
+        } else {
+          lockHint = 'Ingresaste un monto en la pestaña Bs. Confirma si aún deseas aplicar el descuento total.';
+        }
+      }
+    }
+    if (shouldLockFull) {
+      csfxUpdateFullButtonLock(true, lockHint);
+    } else {
+      csfxUpdateFullButtonLock(false);
+    }
+
+    if (!entry.hasValue || (!isFinite(entry.usdDirect) && !isFinite(entry.usdFromBs))) {
+      csfxResetDualChips(panel);
+      if (status) {
+        status.textContent = 'Introduce el monto correspondiente para estimar.';
+        status.className = 'csfx-dual-status';
+      }
+      if (confirmBtn) confirmBtn.disabled = true;
+      panel.dataset.csfxCalcNet = panel.dataset.csfxCalcDiscount = panel.dataset.csfxCalcGross = panel.dataset.csfxCalcRemainder = '';
+      panel.dataset.csfxEntryMode = currentMode;
+      panel.dataset.csfxEntryUsd = entry.usdDirect || '';
+      panel.dataset.csfxEntryUsdFromBs = entry.usdFromBs || '';
+      panel.dataset.csfxEntryBs = entry.bsAmount || '';
+      panel.dataset.csfxEntryTotal = entry.totalUsd || '';
+      panel.dataset.csfxEntryMissing = panel.dataset.csfxEntryChange = panel.dataset.csfxEntryRate = '';
+      panel.dataset.csfxEntryDiscountable = panel.dataset.csfxEntryNonDiscount = '';
+      return;
+    }
+
+    if (entry.errors && entry.errors.length) {
+      applyButtons.forEach(function (btn) { if (btn) btn.disabled = true; });
+      if (confirmBtn) confirmBtn.disabled = true;
+      csfxResetDualChips(panel);
+      if (status) {
+        status.textContent = entry.errors[0];
+        status.className = 'csfx-dual-status csfx-dual-status--error';
+      }
+      panel.dataset.csfxEntryMode = currentMode;
+      panel.dataset.csfxEntryUsd = entry.usdDirect || '';
+      panel.dataset.csfxEntryUsdFromBs = entry.usdFromBs || '';
+      panel.dataset.csfxEntryBs = entry.bsAmount || '';
+      panel.dataset.csfxEntryTotal = entry.totalUsd || '';
+      panel.dataset.csfxEntryMissing = panel.dataset.csfxEntryChange = panel.dataset.csfxEntryRate = '';
+      panel.dataset.csfxEntryDiscountable = panel.dataset.csfxEntryNonDiscount = '';
+      return;
+    }
+
+    var calc = csfxComputeDual(entry.discountableGross, entry.netForDiscount, pct);
+    var appliedBsGross = entry.usdFromBs;
+    if (isFinite(effectiveBase) && effectiveBase > 0) {
+      appliedBsGross = Math.min(effectiveBase, appliedBsGross);
+    }
+    var remainderGross = calc.remainderUsd;
+    if (isFinite(effectiveBase) && effectiveBase > 0) {
+      remainderGross = Math.max(0, effectiveBase - (calc.grossCovered + appliedBsGross));
+    }
+    var remainderBs = usd2bs(remainderGross);
+
+    var netEffective = round(calc.netEffective, decimals);
+    var netUsdDue = netEffective;
+    var usdFraction = 0;
+    if (currentMode === 'bs') {
+      var usdFloor = Math.floor(netUsdDue + epsilonUsd);
+      usdFraction = round(netUsdDue - usdFloor, decimals);
+      if (usdFraction < epsilonUsd) usdFraction = 0;
+    }
+    var totalNetPlanned = round(entry.usdDirect + entry.usdFromBs, decimals);
+    var effectiveTotalNet = round(netEffective + entry.usdFromBs, decimals);
+    var diff = round(totalNetPlanned - effectiveTotalNet, decimals);
+    if (Math.abs(diff) <= tolerance) diff = 0;
+    var missingUsd = diff < 0 ? Math.abs(diff) : 0;
+    var changeUsd = diff > 0 ? diff : 0;
+    var rate = entry.rate > 0 ? entry.rate : (Number(FX && FX.rate) || 0);
+    if (!isFinite(rate)) rate = 0;
+    var missingBs = rate > 0 ? round(missingUsd * rate, FX.decimals) : NaN;
+    var changeBs = rate > 0 ? round(changeUsd * rate, FX.decimals) : NaN;
+
+    if (currentMode === 'bs') {
+      remainderGross = 0;
+      remainderBs = 0;
+    }
+    var calcNetRounded = round(calc.netEffective, decimals);
+    var calcDiscountRounded = round(calc.discount, decimals);
+    panel.dataset.csfxEntryMode = currentMode;
+    panel.dataset.csfxEntryUsd = entry.usdDirect || '';
+    panel.dataset.csfxEntryUsdFromBs = entry.usdFromBs || '';
+    panel.dataset.csfxEntryBs = entry.bsAmount || '';
+    panel.dataset.csfxEntryTotal = entry.totalUsd || '';
+    panel.dataset.csfxEntryMissing = missingUsd || '';
+    panel.dataset.csfxEntryChange = changeUsd || '';
+    panel.dataset.csfxEntryRate = rate || '';
+    panel.dataset.csfxEntryDiscountable = entry.discountableGross || '';
+    panel.dataset.csfxEntryNonDiscount = entry.nonDiscountGross || '';
+
+    var summaryData = csfxBuildDualSummaryData({
+      mode: currentMode,
+      rate: rate > 0 ? rate : currentRate,
+      baseUsd: isFinite(baseTotal) ? baseTotal : 0,
+      discountUsd: calc.discount,
+      discountPct: pct || 0,
+      usdDirect: entry.usdDirect,
+      usdFromBs: entry.usdFromBs,
+      bsAmount: entry.bsAmount,
+      remainderUsd: remainderGross,
+      remainderBs: remainderBs,
+      decimals: decimals,
+      bsDecimals: (FX && FX.decimals) || 2,
+      finalUsd: calc.finalTotal
+    });
+    state.summary = summaryData;
+    if (copyBtn) {
+      copyBtn.disabled = !(summaryData && summaryData.text);
+    }
+
+    csfxResetDualChips(panel);
+    var displayGross = calc.grossCovered;
+    var displayDiscount = calc.discount;
+    var displayRemainingUsd = remainderGross;
+    var displayRemainingBs = remainderBs;
+    if (currentMode === 'bs') {
+      displayGross = isFinite(baseTotal) ? baseTotal : calc.grossCovered;
+      displayDiscount = calc.discount;
+      displayRemainingUsd = netUsdDue;
+      displayRemainingBs = 0;
+    }
+
+    panel.dataset.csfxCalcNet = String(calcNetRounded || 0);
+    panel.dataset.csfxCalcDiscount = String(calcDiscountRounded || 0);
+    panel.dataset.csfxCalcGross = String(round(displayGross, decimals) || 0);
+    panel.dataset.csfxCalcRemainder = String(round(displayRemainingUsd, decimals) || 0);
 
     var metricsMap = {
-      'gross': fmtUsd(calc.grossCovered),
-      'discount': fmtUsd(calc.discount),
-      'remaining-usd': fmtUsd(calc.remainderUsd),
-      'remaining-bs': fmtBs(calc.remainderBs)
+      'gross': fmtUsd(displayGross),
+      'discount': fmtUsd(displayDiscount),
+      'remaining-usd': fmtUsd(displayRemainingUsd),
+      'remaining-bs': fmtBs(displayRemainingBs)
     };
-
     Object.keys(metricsMap).forEach(function (key) {
       var node = panel.querySelector('[data-csfx-metric-value="' + key + '"]');
       if (node) node.textContent = metricsMap[key];
@@ -4558,9 +5852,11 @@ var csfxLastLoggedSupervisorMessage = '';
         discountRow.classList.remove('is-highlight');
       }
     }
+    var highlightUsd = currentMode === 'bs' ? netUsdDue : remainderGross;
+    var highlightBs = currentMode === 'bs' ? displayRemainingBs : remainderBs;
     var remainingUsdRow = panel.querySelector('[data-csfx-metric="remaining-usd"]');
     if (remainingUsdRow) {
-      if (calc.remainderUsd > 0.009) {
+      if (highlightUsd > 0.009) {
         remainingUsdRow.classList.add('is-warning');
       } else {
         remainingUsdRow.classList.remove('is-warning');
@@ -4568,39 +5864,312 @@ var csfxLastLoggedSupervisorMessage = '';
     }
     var remainingBsRow = panel.querySelector('[data-csfx-metric="remaining-bs"]');
     if (remainingBsRow) {
-      if (calc.remainderBs > 0.009) {
+      if (highlightBs > 0.009) {
         remainingBsRow.classList.add('is-warning');
       } else {
         remainingBsRow.classList.remove('is-warning');
       }
     }
 
+    var statusParts = [];
+    var statusClass = 'csfx-dual-status csfx-dual-status--info';
+    if (calc.discount > 0.009) {
+      statusParts.push('Desc: ' + fmtUsd(calc.discount));
+    } else {
+      statusParts.push('Sin descuento');
+      statusClass = 'csfx-dual-status csfx-dual-status--warn';
+    }
+    var paymentParts = [];
+    if (netUsdDue > 0.0001) paymentParts.push(fmtUsd(netUsdDue));
+    if (entry.bsAmount > 0.0001) paymentParts.push(fmtBs(entry.bsAmount));
+    if (paymentParts.length) {
+      statusParts.push('Pagos ' + paymentParts.join(' + '));
+    }
+    if (missingUsd > tolerance) {
+      var missingText = fmtUsd(missingUsd);
+      if (rate > 0 && missingBs > 0.0001) missingText += ' (≈ ' + fmtBs(missingBs) + ')';
+      statusParts.push('Falta ' + missingText);
+      statusClass = 'csfx-dual-status csfx-dual-status--warn';
+      if (currentMode === 'usd' && rate > 0 && missingBs > 0.0001) {
+        statusParts.push('Sugerencia: pasa ' + fmtUsd(missingUsd) + ' a Bs (' + fmtBs(missingBs) + ')');
+      }
+    } else if (changeUsd > tolerance) {
+      var changeText = fmtUsd(changeUsd);
+      if (rate > 0 && changeBs > 0.0001) changeText += ' (≈ ' + fmtBs(changeBs) + ')';
+      statusParts.push('Cambio ' + changeText);
+    }
     if (status) {
-      if (calc.discount > 0.009) {
-        status.textContent = 'Descuento estimado: ' + fmtUsd(calc.discount);
-        status.className = 'csfx-dual-status csfx-dual-status--info';
-      } else {
-        status.textContent = 'Con este monto no se genera descuento.';
-        status.className = 'csfx-dual-status csfx-dual-status--warn';
+      status.textContent = statusParts.join(' · ');
+      status.className = statusClass;
+    }
+
+    if (bsAdjust) {
+      bsAdjust.innerHTML = '';
+      bsAdjust.setAttribute('hidden', 'hidden');
+      bsAdjust.removeAttribute('data-open');
+      var fractionThreshold = Math.pow(10, -decimals);
+      var discountFactor = 1 - pct;
+      if (currentMode === 'bs' && rate > 0 && entry.discountableGross > epsilonUsd) {
+        if (discountFactor <= 0) discountFactor = 1;
+        var maxNetShift = entry.discountableGross * discountFactor;
+        if (maxNetShift > fractionThreshold) {
+          var baseFloor = Math.floor(netUsdDue + epsilonUsd);
+          var candidateTargets = [];
+          if (baseFloor >= 0) candidateTargets.push(baseFloor);
+          if (baseFloor - 1 >= 0) candidateTargets.push(baseFloor - 1);
+          var seenTargets = {};
+          var suggestionList = [];
+          candidateTargets.forEach(function (target) {
+            if (seenTargets[target]) return;
+            seenTargets[target] = true;
+            var netShift = round(netUsdDue - target, decimals);
+            if (netShift <= fractionThreshold) return;
+            if (netShift > maxNetShift + epsilonUsd) netShift = round(maxNetShift, decimals);
+            if (netShift <= fractionThreshold) return;
+            var bsEquivalent = round(netShift * rate, FX.decimals);
+            suggestionList.push({ net: netShift, target: target, bs: bsEquivalent });
+          });
+          if (suggestionList.length) {
+            bsAdjust.removeAttribute('hidden');
+            bsAdjust.setAttribute('data-open', 'true');
+            var intro = document.createElement('span');
+            intro.className = 'csfx-dual-adjust-text';
+            intro.textContent = 'Sugerencias en Bs:';
+            bsAdjust.appendChild(intro);
+            suggestionList.forEach(function (suggestion) {
+              var btn = document.createElement('button');
+              btn.type = 'button';
+              btn.dataset.csfxAdjustNet = String(suggestion.net);
+              btn.dataset.csfxAdjust = '1';
+              var label = '+' + fmtUsd(suggestion.net) + ' (≈ ' + fmtBs(suggestion.bs) + ') → ' + fmtUsd(suggestion.target);
+              btn.textContent = label;
+              if (panel.dataset.csfxSelectedSuggest && Math.abs(Number(panel.dataset.csfxSelectedSuggest) - suggestion.net) < 1e-6) {
+                btn.classList.add('is-selected');
+              }
+              var handler = function (ev) {
+                if (ev) ev.preventDefault();
+                panel.dataset.csfxSelectedSuggest = String(suggestion.net);
+                panel.querySelectorAll('[data-csfx-adjust]').forEach(function(other){
+                  if (other === btn) {
+                    other.classList.add('is-selected');
+                  } else {
+                    other.classList.remove('is-selected');
+                  }
+                });
+                csfxAdjustBs(panel, suggestion.net);
+              };
+              btn.addEventListener('pointerdown', handler);
+              btn.addEventListener('click', handler);
+              bsAdjust.appendChild(btn);
+            });
+          }
+        }
       }
     }
     return panel;
   }
 
-  function csfxHandleDualConfirm(panel) {
+  function csfxAdjustBs(panel, remainderUsd) {
+    if (!panel || !isFinite(remainderUsd) || remainderUsd <= 0) return;
+    var state = csfxDualState(panel);
+    var bsUsdInput = panel.querySelector('input[data-csfx=\"usd-net-bs\"]');
+    if (!bsUsdInput) return;
+    panel.dataset.csfxEntryMode = 'bs';
+    panel.dataset.csfxDirty = '1';
+    state.inputs.bsUsd = bsUsdInput;
+    var bsRawInput = panel.querySelector('input[data-csfx=\"bs-manual\"]');
+    if (bsRawInput) state.inputs.bsRaw = bsRawInput;
+    var wrap = state.ui && state.ui.bsConverterWrap ? state.ui.bsConverterWrap : (bsRawInput ? bsRawInput.closest('.csfx-dual-bs-field') : null);
+    var usingRaw = !!(wrap && !wrap.hasAttribute('hidden') && bsRawInput);
+    var decimals = (FX && FX.decimals) || 2;
+    var rate = Number(FX && FX.rate ? FX.rate : 0);
+    if (!isFinite(rate)) rate = 0;
+    var prevUsd = csfxToNumber(panel.dataset.csfxEntryUsdFromBs);
+    if (!isFinite(prevUsd) || prevUsd < 0) prevUsd = csfxDualNormalizeValue(bsUsdInput.value);
+    if (!isFinite(prevUsd)) prevUsd = 0;
+
+    if (usingRaw && rate > 0) {
+      var currentBs = csfxDualNormalizeValue(bsRawInput.value);
+      if (!isFinite(currentBs)) currentBs = 0;
+      var updatedBs = round(currentBs + remainderUsd * rate, FX.decimals);
+      bsRawInput.value = updatedBs.toFixed(FX.decimals);
+      var updatedUsdFromRaw = round(updatedBs / rate, decimals);
+      if (bsUsdInput) {
+        bsUsdInput.value = csfxFormatInputNumber(updatedUsdFromRaw, decimals);
+      }
+      if (bsUsdInput.dataset) {
+        bsUsdInput.dataset.csfxManualBs = String(updatedBs);
+        bsUsdInput.dataset.csfxTouched = '1';
+      }
+      panel.dataset.csfxEntryUsdFromBs = String(updatedUsdFromRaw);
+      panel.dataset.csfxEntryBs = String(updatedBs);
+      csfxDualMarkDirty(panel, bsRawInput);
+      try {
+        var evtRaw = new Event('input', { bubbles: true });
+        bsRawInput.dispatchEvent(evtRaw);
+      } catch (_errDispatchRaw) {}
+    } else {
+      var updatedUsd = round(prevUsd + remainderUsd, decimals);
+      bsUsdInput.value = csfxFormatInputNumber(updatedUsd, decimals);
+      if (bsUsdInput.dataset) {
+        bsUsdInput.dataset.csfxTouched = '1';
+        if (rate > 0) {
+          var manualBs = round(updatedUsd * rate, FX.decimals);
+          bsUsdInput.dataset.csfxManualBs = String(manualBs);
+          if (bsRawInput) bsRawInput.value = manualBs.toFixed(FX.decimals);
+        }
+      }
+      panel.dataset.csfxEntryUsdFromBs = String(updatedUsd);
+      if (rate > 0) panel.dataset.csfxEntryBs = String(round(updatedUsd * rate, FX.decimals));
+      csfxDualMarkDirty(panel, bsUsdInput);
+      try {
+        var evtUsd = new Event('input', { bubbles: true });
+        bsUsdInput.dispatchEvent(evtUsd);
+      } catch (_errDispatchUsd) {}
+    }
+    csfxUpdateDualPanel(panel);
+  }
+
+  function csfxBuildDualSummaryData(context) {
+    if (!context) return null;
+    var mode = context.mode || 'usd';
+    var rate = Number(context.rate || 0);
+    var baseUsd = Number(context.baseUsd || 0);
+    var discountUsd = Number(context.discountUsd || 0);
+    var discountPct = Number(context.discountPct || 0);
+    var usdDirect = Number(context.usdDirect || 0);
+    var usdFromBs = Number(context.usdFromBs || 0);
+    var bsAmount = Number(context.bsAmount || 0);
+    var remainderUsd = Number(context.remainderUsd || 0);
+    var remainderBs = Number(context.remainderBs || 0);
+    var decimals = Number(context.decimals || ((FX && FX.decimals) || 2));
+    var bsDecimals = Number(context.bsDecimals || ((FX && FX.decimals) || 2));
+    var epsilonUsd = Math.pow(10, -(decimals + 1));
+    var epsilonBs = Math.pow(10, -(bsDecimals + 1));
+    var hasData = false;
+    if (mode === 'usd') {
+      hasData = (usdDirect > epsilonUsd) || (remainderBs > epsilonBs);
+    } else {
+      hasData = (bsAmount > epsilonBs) || (remainderUsd > epsilonUsd);
+    }
+    if (!hasData) return null;
+
+    var finalUsd = Number(context.finalUsd || 0);
+    var finalBs = (rate > 0 && finalUsd > 0) ? fmtBs(round(finalUsd * rate, FX.decimals)) : '';
+
+    var lines = [];
+    lines.push(mode === 'bs' ? '*Precio dual – Pago en Bs*' : '*Precio dual – USD directo*');
+    if (rate > 0) lines.push('• *Tasa BCV:* ' + fmtBs(rate));
+    if (baseUsd > epsilonUsd) lines.push('• *Base sin descuento:* ' + fmtUsd(baseUsd));
+
+    var pctText = discountPct > 0 ? (discountPct * 100).toFixed(2).replace(/\.00$/, '') + '%' : '';
+    lines.push('• *Descuento:* ' + (discountUsd > epsilonUsd ? fmtUsd(discountUsd) + (pctText ? ' (' + pctText + ')' : '') : '—'));
+
+    if (finalUsd > epsilonUsd) {
+      var totalLine = '• *Total estimado con descuento:* ' + fmtUsd(finalUsd);
+      if (finalBs) totalLine += ' (≈ ' + finalBs + ')';
+      lines.push(totalLine);
+    }
+
+    if (mode === 'usd') {
+      if (usdDirect > epsilonUsd) lines.push('• *Debe entregar en USD:* ' + fmtUsd(usdDirect));
+      if (remainderBs > epsilonBs) {
+        var approxUsd = remainderUsd > epsilonUsd ? fmtUsd(remainderUsd) : null;
+        var bsLine = '• *Debe completar en Bs:* ' + fmtBs(remainderBs);
+        if (approxUsd) bsLine += ' (≈ ' + approxUsd + ')';
+        lines.push(bsLine);
+      }
+    } else {
+      if (bsAmount > epsilonBs) {
+        var approxUsd = usdFromBs > epsilonUsd ? fmtUsd(usdFromBs) : null;
+        var bsLine = '• *Debe entregar en Bs:* ' + fmtBs(bsAmount);
+        if (approxUsd) bsLine += ' (≈ ' + approxUsd + ')';
+        lines.push(bsLine);
+      }
+      if (remainderUsd > epsilonUsd) {
+        var approxBs = rate > 0 ? fmtBs(round(remainderUsd * rate, FX.decimals)) : null;
+        var remLine = '• *Saldo en USD:* ' + fmtUsd(remainderUsd);
+        if (approxBs) remLine += ' (≈ ' + approxBs + ')';
+        lines.push(remLine);
+      }
+    }
+
+    lines.push('_Valores informativos antes de facturar._');
+
+    var payload = {
+      mode: mode,
+      rate: rate,
+      baseUsd: baseUsd,
+      discountUsd: discountUsd,
+      discountPct: discountPct,
+      finalUsd: finalUsd,
+      usdDirect: usdDirect,
+      usdFromBs: usdFromBs,
+      bsAmount: bsAmount,
+      remainderUsd: remainderUsd,
+      remainderBs: remainderBs
+    };
+
+    return { mode: mode, text: lines.join('\n'), data: payload };
+  }
+
+  function csfxCopyDualSummary(panel) {
     if (!panel) return;
-    var input = panel.querySelector('input[data-csfx="usd-net"]');
+    var state = csfxDualState(panel);
+    var summary = state && state.summary;
     var status = panel.querySelector('[data-csfx="status"]');
-    if (!input) return;
-    var usdNet = parseFloat(String(input.value || '').replace(',', '.'));
-    if (!isFinite(usdNet) || usdNet <= 0) {
-      csfxDualLog('confirm:invalid-input', { rawValue: input.value });
+    if (!summary || !summary.text) {
       if (status) {
-        status.textContent = 'Ingresa un monto válido.';
-        status.className = 'csfx-dual-status csfx-dual-status--error';
+        status.textContent = 'Genera un monto antes de copiar el resumen.';
+        status.className = 'csfx-dual-status csfx-dual-status--warn';
       }
       return;
     }
+    var text = summary.text;
+    var handleSuccess = function () {
+      if (status) {
+        status.textContent = 'Resumen copiado al portapapeles.';
+        status.className = 'csfx-dual-status csfx-dual-status--info';
+      }
+    };
+    var handleFailure = function () {
+      if (status) {
+        status.textContent = 'No se pudo copiar automáticamente. Selecciona y copia manualmente.';
+        status.className = 'csfx-dual-status csfx-dual-status--warn';
+      }
+    };
+    var fallbackCopy = function () {
+      try {
+        var temp = document.createElement('textarea');
+        temp.value = text;
+        temp.setAttribute('readonly', '');
+        temp.style.position = 'absolute';
+        temp.style.left = '-9999px';
+        document.body.appendChild(temp);
+        temp.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(temp);
+        if (ok) {
+          handleSuccess();
+          return true;
+        }
+      } catch (_errFallback) {}
+      return false;
+    };
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(text)
+        .then(handleSuccess)
+        .catch(function () {
+          if (!fallbackCopy()) handleFailure();
+        });
+    } else {
+      if (!fallbackCopy()) handleFailure();
+    }
+  }
+
+  function csfxHandleDualConfirm(panel) {
+    if (!panel) return;
+    var status = panel.querySelector('[data-csfx="status"]');
     var pct = csfxDiscountDecimal();
     var snapshot = csfxGetCartSnapshot({ totalUSD: readCheckoutUSD() });
     var replacingCurrent = csfxHasGlobalDiscount(snapshot);
@@ -4622,17 +6191,34 @@ var csfxLastLoggedSupervisorMessage = '';
       if (isFinite(cachedBase) && cachedBase > 0) baseTotal = cachedBase;
     }
     if (!isFinite(baseTotal) || baseTotal <= 0) {
-      csfxDualLog('confirm:no-base-total', { snapshot: snapshot, usdNet: usdNet });
+      csfxDualLog('confirm:no-base-total', { snapshot: snapshot, entry: entry });
       if (status) {
         status.textContent = 'No hay total disponible para aplicar el descuento.';
         status.className = 'csfx-dual-status csfx-dual-status--error';
       }
       return;
     }
-    var calc = csfxComputeDual(baseTotal, usdNet, pct);
+    var entry = csfxDualReadEntry(panel, { baseTotal: baseTotal, pct: pct });
+    if (!entry || (!entry.hasValue && entry.mode !== 'bs')) {
+      csfxDualLog('confirm:invalid-entry', { entry: entry });
+      if (status) {
+        status.textContent = 'Ingresa un monto válido.';
+        status.className = 'csfx-dual-status csfx-dual-status--error';
+      }
+      return;
+    }
+    if (entry.errors && entry.errors.length) {
+      csfxDualLog('confirm:entry-errors', { entry: entry });
+      if (status) {
+        status.textContent = entry.errors[0];
+        status.className = 'csfx-dual-status csfx-dual-status--error';
+      }
+      return;
+    }
+    var calc = csfxComputeDual(entry.discountableGross, entry.netForDiscount, pct);
     csfxDualLog('confirm:calc', {
       baseTotal: baseTotal,
-      usdNet: usdNet,
+      entry: entry,
       pct: pct,
       cartFound: !!snapshot.cart,
       cartSource: snapshot.cartSource,
@@ -4642,26 +6228,40 @@ var csfxLastLoggedSupervisorMessage = '';
       replacingExisting: replacingCurrent
     });
     if (!calc || calc.discount <= 0) {
-      csfxDualLog('confirm:no-discount', { calc: calc });
+      csfxDualLog('confirm:no-discount', { calc: calc, entry: entry });
       if (status) {
         status.textContent = 'Con este monto no se genera descuento.';
         status.className = 'csfx-dual-status csfx-dual-status--warn';
       }
       return;
     }
-    var success = csfxApplyDualDiscount(snapshot, calc, null);
+    var success = csfxApplyDualDiscount(snapshot, calc, null, entry);
     csfxDualLog('confirm:apply-result', {
       success: success,
       discount: calc.discount,
       cartFound: !!snapshot.cart,
       remainderUsd: calc.remainderUsd,
       manualVia: snapshot.cartDebug && snapshot.cartDebug.manualVia ? snapshot.cartDebug.manualVia : null,
-      replacingExisting: replacingCurrent
+      replacingExisting: replacingCurrent,
+      entry: entry
     });
     if (status) {
       status.classList.remove('csfx-dual-status--warn', 'csfx-dual-status--info', 'csfx-dual-status--error', 'csfx-dual-status--ok');
       if (success) {
-        status.textContent = 'Descuento aplicado: ' + fmtUsd(calc.discount);
+        var message = 'Descuento aplicado: ' + fmtUsd(calc.discount);
+        var decimals = (FX && FX.decimals) || 2;
+        var diff = round((entry.usdDirect + entry.usdFromBs) - (calc.netEffective + entry.usdFromBs), decimals);
+        var tolerance = Math.max(0.01, Math.pow(10, -(decimals + 1)));
+        if (Math.abs(diff) <= tolerance) diff = 0;
+        if (diff > 0.0001) {
+          message += ' · Cambio ' + fmtUsd(diff);
+          if (entry.rate > 0) message += ' (≈ ' + fmtBs(round(diff * entry.rate, FX.decimals)) + ')';
+        } else if (diff < -0.0001) {
+          var missingDiff = Math.abs(diff);
+          message += ' · Faltante ' + fmtUsd(missingDiff);
+          if (entry.rate > 0) message += ' (≈ ' + fmtBs(round(missingDiff * entry.rate, FX.decimals)) + ')';
+        }
+        status.textContent = message;
         status.classList.add('csfx-dual-status', 'csfx-dual-status--ok');
       } else {
         status.textContent = 'No se pudo aplicar el descuento.';
@@ -4674,7 +6274,9 @@ var csfxLastLoggedSupervisorMessage = '';
         window.__CSFX_LAST_BASE_USD = baseTotal;
       }
       panel.dataset.csfxDirty = '';
-      input.dataset.csfxTouched = '';
+      var state = csfxDualState(panel);
+      var directInput = state.inputs && state.inputs.usd ? state.inputs.usd : panel.querySelector('input[data-csfx="usd-net"]');
+      if (directInput && directInput.dataset) directInput.dataset.csfxTouched = '';
       csfxRenderBadgeContent(document.querySelector('.csfx-badge'));
       schedule(decorateCart);
       schedule(decorateTotals);
@@ -4684,6 +6286,7 @@ var csfxLastLoggedSupervisorMessage = '';
       if (badge && badge.classList && badge.classList.contains('open')) {
         badge.classList.remove('open');
       }
+      csfxUpdateDualPanel(panel);
     }
   }
 
@@ -4757,15 +6360,34 @@ var csfxLastLoggedSupervisorMessage = '';
   function csfxOpenDualExplainModal(panel) {
     var ui = csfxEnsureExplainModal();
     if (!ui) return;
-    var base = Number(panel && panel.dataset ? panel.dataset.csfxBase : 0) || 0;
-    var discount = Number(panel && panel.dataset ? panel.dataset.csfxCalcDiscount : 0) || 0;
-    var pctStored = Number(panel && panel.dataset ? panel.dataset.csfxPct : 0) || 0;
+    var state = csfxDualState(panel);
+    var summary = state && state.summary;
+    var payload = summary && summary.data ? summary.data : null;
+    var base = payload ? Number(payload.baseUsd || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxBase : 0) || 0);
+    var discount = payload ? Number(payload.discountUsd || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxCalcDiscount : 0) || 0);
+    var pctStored = payload ? Number(payload.discountPct || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxPct : 0) || 0);
     var pctDisplay = pctStored;
     if (pctDisplay > 0 && pctDisplay < 1) pctDisplay = pctDisplay * 100;
-    var net = Number(panel && panel.dataset ? panel.dataset.csfxCalcNet : 0) || 0;
+    var netDataset = Number(panel && panel.dataset ? panel.dataset.csfxCalcNet : 0) || 0;
+    var net = payload ? (payload.mode === 'bs' ? (Number(payload.usdFromBs || 0) || netDataset) : (Number(payload.usdDirect || 0) || netDataset)) : netDataset;
     var grossCovered = Number(panel && panel.dataset ? panel.dataset.csfxCalcGross : 0) || 0;
-    var remainderUsd = Number(panel && panel.dataset ? panel.dataset.csfxCalcRemainder : 0) || 0;
-    var total = base && discount ? base - discount : 0;
+    if (!grossCovered && payload) {
+      var possibleGross = Number(payload.baseUsd || 0) - Number(payload.remainderUsd || 0);
+      if (isFinite(possibleGross) && possibleGross >= 0) grossCovered = possibleGross;
+    }
+    var remainderUsd = payload ? Number(payload.remainderUsd || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxCalcRemainder : 0) || 0);
+    var total = payload ? Number(payload.finalUsd || 0) : (base && discount ? base - discount : 0);
+
+    var mode = payload && payload.mode ? payload.mode : (panel && panel.dataset ? panel.dataset.csfxEntryMode : '');
+    var modeLabel = mode === 'bs' ? 'Bs' : (mode === 'usd' ? 'USD directo' : (mode || '—'));
+    var usdDirectEntry = payload ? Number(payload.usdDirect || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxEntryUsd : 0) || 0);
+    var usdFromBsEntry = payload ? Number(payload.usdFromBs || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxEntryUsdFromBs : 0) || 0);
+    var bsEntry = payload ? Number(payload.bsAmount || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxEntryBs : 0) || 0);
+    var changeUsdEntry = Number(panel && panel.dataset ? panel.dataset.csfxEntryChange : 0) || 0;
+    var missingUsdEntry = Number(panel && panel.dataset ? panel.dataset.csfxEntryMissing : 0) || 0;
+    var rateEntry = payload ? Number(payload.rate || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxEntryRate : 0) || 0);
+    var changeBsEntry = rateEntry > 0 ? changeUsdEntry * rateEntry : 0;
+    var missingBsEntry = rateEntry > 0 ? missingUsdEntry * rateEntry : 0;
 
     if (!isFinite(base) || base <= 0 || !isFinite(discount) || discount <= 0) {
       ui.body.innerHTML = '<div class="csfx-explain-body"><p>No hay datos suficientes. Introduce el pago en divisas y calcula el descuento primero.</p></div>';
@@ -4774,26 +6396,168 @@ var csfxLastLoggedSupervisorMessage = '';
       return;
     }
 
-    var remainderBs = usd2bs(remainderUsd);
+    var remainderBs = payload ? Number(payload.remainderBs || 0) : usd2bs(remainderUsd);
+    if (rateEntry > 0 && (!remainderBs || remainderBs < 0.0001)) {
+      remainderBs = remainderUsd * rateEntry;
+    }
+    var paymentsItems = [];
+    paymentsItems.push('<li><strong>Debe entregar en USD:</strong> <span class="csfx-explain-inline">' + fmtUsd(usdDirectEntry) + '</span></li>');
+    paymentsItems.push('<li><strong>Debe entregar en Bs:</strong> <span class="csfx-explain-inline">' + fmtBs(bsEntry) + (bsEntry > 0 ? ' (≈ ' + fmtUsd(usdFromBsEntry) + ')' : '') + '</span></li>');
+    var totalEntregar = usdDirectEntry + usdFromBsEntry;
+    if (totalEntregar > 0.0001) {
+      paymentsItems.push('<li><strong>Total referencial (USD + Bs):</strong> <span class="csfx-explain-inline">' + fmtUsd(totalEntregar) + (bsEntry > 0 ? ' + ' + fmtBs(bsEntry) : '') + '</span></li>');
+    }
+    if (changeUsdEntry > 0.0001) {
+      var changeLine = '<li><strong>Se estima cambio:</strong> <span class="csfx-explain-inline">' + fmtUsd(changeUsdEntry);
+      if (rateEntry > 0 && changeBsEntry > 0.0001) changeLine += ' (≈ ' + fmtBs(changeBsEntry) + ')';
+      changeLine += '</span></li>';
+      paymentsItems.push(changeLine);
+    }
+    if (missingUsdEntry > 0.0001) {
+      var pendingLine = '<li><strong>Saldo estimado por cobrar:</strong> <span class="csfx-explain-inline">' + fmtUsd(missingUsdEntry);
+      if (rateEntry > 0 && missingBsEntry > 0.0001) pendingLine += ' (≈ ' + fmtBs(missingBsEntry) + ')';
+      pendingLine += '</span></li>';
+      paymentsItems.push(pendingLine);
+    }
+    var paymentsHtml = paymentsItems.join('');
     var pctText = isFinite(pctDisplay) ? pctDisplay.toFixed(2) + '%' : '—';
     var explainHtml = '' +
       '<div class="csfx-explain-body">' +
         '<div class="csfx-explain-head">¿Cómo se calcula este descuento?</div>' +
         '<ul class="csfx-explain-steps">' +
           '<li><strong>1.</strong> Base sin descuento (subtotal): <span class="csfx-explain-inline">' + fmtUsd(base) + '</span></li>' +
-          '<li><strong>2.</strong> Pago neto declarado en divisas: <span class="csfx-explain-inline">' + fmtUsd(net) + '</span></li>' +
-          '<li><strong>3.</strong> Parte cubierta por las divisas: <span class="csfx-explain-inline">' + fmtUsd(grossCovered) + '</span></li>' +
-          '<li><strong>4.</strong> Porcentaje configurado: <span class="csfx-explain-inline">' + pctText + '</span></li>' +
-          '<li><strong>5.</strong> Descuento aplicado = porción cubierta × % = <span class="csfx-explain-inline">' + fmtUsd(grossCovered) + ' × ' + pctText + ' = ' + fmtUsd(discount) + '</span></li>' +
-          '<li><strong>6.</strong> Total con descuento: <span class="csfx-explain-inline">' + fmtUsd(total) + '</span></li>' +
-          '<li><strong>7.</strong> Saldo restante por cobrar: <span class="csfx-explain-inline">' + fmtUsd(remainderUsd) + ' / ' + fmtBs(remainderBs) + '</span></li>' +
+          '<li><strong>2.</strong> Monto referencial declarado en divisas: <span class="csfx-explain-inline">' + fmtUsd(net) + '</span></li>' +
+          '<li><strong>3.</strong> Porción de la base cubierta por esas divisas: <span class="csfx-explain-inline">' + fmtUsd(grossCovered) + '</span></li>' +
+          '<li><strong>4.</strong> Porcentaje configurado para este descuento: <span class="csfx-explain-inline">' + pctText + '</span></li>' +
+          '<li><strong>5.</strong> Descuento estimado = porción cubierta × % = <span class="csfx-explain-inline">' + fmtUsd(grossCovered) + ' × ' + pctText + ' = ' + fmtUsd(discount) + '</span></li>' +
+          '<li><strong>6.</strong> Total estimado con descuento: <span class="csfx-explain-inline">' + fmtUsd(total) + '</span></li>' +
+          '<li><strong>7.</strong> Saldo estimado por cobrar: <span class="csfx-explain-inline">' + fmtUsd(remainderUsd) + ' / ' + fmtBs(remainderBs) + '</span></li>' +
         '</ul>' +
-        '<div class="csfx-explain-foot">Comparte este detalle con el cliente para justificar el descuento dual y el saldo que queda por cancelar en bolívares.</div>' +
+        '<div class="csfx-explain-subtitle">Referencia de cobro' + (mode ? ' (' + modeLabel + ')' : '') + '</div>' +
+        '<ul class="csfx-explain-steps csfx-explain-steps--secondary">' + paymentsHtml + '</ul>' +
+        '<div class="csfx-explain-foot">Comparte este detalle con el cliente para indicar cuánto debe entregar en cada medio al momento del cobro final.</div>' +
       '</div>';
 
     ui.body.innerHTML = explainHtml;
     ui.backdrop.setAttribute('data-open', 'true');
     ui.open = true;
+  }
+
+  function csfxEnsureFullDiscountConfirmModal() {
+    if (csfxFullConfirmUI && csfxFullConfirmUI.backdrop && document.body.contains(csfxFullConfirmUI.backdrop)) {
+      return csfxFullConfirmUI;
+    }
+    if (typeof document === 'undefined') return null;
+    var backdrop = document.createElement('div');
+    backdrop.className = 'csfx-modal-backdrop';
+    var modal = document.createElement('div');
+    modal.className = 'csfx-modal csfx-modal--confirm';
+    var header = document.createElement('div');
+    header.className = 'csfx-modal-header';
+    var headerTitle = document.createElement('div');
+    headerTitle.className = 'csfx-modal-header-title';
+    var headerIcon = document.createElement('span');
+    headerIcon.className = 'csfx-modal-header-icon';
+    headerIcon.textContent = '⚠️';
+    var headerText = document.createElement('span');
+    headerText.textContent = 'Confirmar descuento total';
+    headerTitle.appendChild(headerIcon);
+    headerTitle.appendChild(headerText);
+    header.appendChild(headerTitle);
+    var body = document.createElement('div');
+    body.className = 'csfx-modal-body csfx-confirm-body';
+    var icon = document.createElement('div');
+    icon.className = 'csfx-confirm-icon';
+    icon.textContent = '⚠️';
+    var message = document.createElement('div');
+    message.className = 'csfx-confirm-message';
+    message.textContent = '¿Deseas aplicar el descuento total?';
+    var note = document.createElement('div');
+    note.className = 'csfx-confirm-note';
+    var footer = document.createElement('div');
+    footer.className = 'csfx-modal-footer';
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'csfx-btn csfx-btn--ghost';
+    cancelBtn.textContent = 'Cancelar';
+    var acceptBtn = document.createElement('button');
+    acceptBtn.type = 'button';
+    acceptBtn.className = 'csfx-btn csfx-btn--primary';
+    acceptBtn.textContent = 'Sí, aplicar descuento total';
+    footer.appendChild(cancelBtn);
+    footer.appendChild(acceptBtn);
+    body.appendChild(icon);
+    body.appendChild(message);
+    body.appendChild(note);
+    modal.appendChild(header);
+    modal.appendChild(body);
+    modal.appendChild(footer);
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+
+    csfxFullConfirmUI = {
+      backdrop: backdrop,
+      modal: modal,
+      header: header,
+      message: message,
+      note: note,
+      acceptBtn: acceptBtn,
+      cancelBtn: cancelBtn,
+      icon: icon
+    };
+
+    var closeHandler = function () { csfxCloseFullDiscountConfirm(); };
+    cancelBtn.addEventListener('click', closeHandler);
+    header.addEventListener('click', closeHandler);
+    backdrop.addEventListener('click', function (ev) {
+      if (ev.target === backdrop) csfxCloseFullDiscountConfirm();
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (!csfxFullConfirmUI || !csfxFullConfirmUI.backdrop) return;
+      if (csfxFullConfirmUI.backdrop.getAttribute('data-open') !== 'true') return;
+      if (ev.key === 'Escape') {
+        csfxCloseFullDiscountConfirm();
+      }
+    });
+    return csfxFullConfirmUI;
+  }
+
+  function csfxCloseFullDiscountConfirm() {
+    if (!csfxFullConfirmUI || !csfxFullConfirmUI.backdrop) return;
+    csfxFullConfirmUI.backdrop.removeAttribute('data-open');
+    if (csfxFullConfirmUI.acceptBtn) csfxFullConfirmUI.acceptBtn.onclick = null;
+    if (csfxFullConfirmUI.cancelBtn) csfxFullConfirmUI.cancelBtn.onclick = null;
+  }
+
+  function csfxPromptFullDiscountOverride(options) {
+    options = options || {};
+    var manualValue = Number(options.manualValue || 0);
+    var baseValue = Number(options.base || 0);
+    var onConfirm = typeof options.onConfirm === 'function' ? options.onConfirm : null;
+    var onCancel = typeof options.onCancel === 'function' ? options.onCancel : null;
+    var ui = csfxEnsureFullDiscountConfirmModal();
+    if (!ui) {
+      if (onConfirm) onConfirm();
+      return;
+    }
+    var manualText = isFinite(manualValue) && manualValue > 0 ? fmtUsd(manualValue) : 'un monto';
+    var baseText = isFinite(baseValue) && baseValue > 0 ? fmtUsd(baseValue) : 'el total actual';
+    ui.message.innerHTML = 'Ingresaste <strong>' + manualText + '</strong> en el campo de pago en divisas.';
+    ui.note.textContent = 'Si aplicas el descuento total, ignoraremos ese monto y usaremos ' + baseText + ' como base.';
+    ui.acceptBtn.textContent = 'Sí, aplicar descuento total';
+    ui.cancelBtn.textContent = 'Mantener monto';
+    ui.acceptBtn.onclick = function () {
+      csfxCloseFullDiscountConfirm();
+      if (onConfirm) onConfirm();
+    };
+    ui.cancelBtn.onclick = function () {
+      csfxCloseFullDiscountConfirm();
+      if (onCancel) onCancel();
+    };
+    ui.backdrop.setAttribute('data-open', 'true');
+    setTimeout(function () {
+      try { ui.acceptBtn.focus(); } catch (_errFocusConfirm) {}
+    }, 40);
   }
 
   function csfxEnsureCustomDiscountModal() {
@@ -5149,6 +6913,7 @@ var csfxLastLoggedSupervisorMessage = '';
           if (k === 1) {
             bsVal = diff;
           }
+          if (!isNaN(bsVal) && bsVal < 0) bsVal = 0;
           var bs = usd2bs(bsVal);
           if (!child) {
             child = document.createElement('span');
@@ -5351,7 +7116,7 @@ var csfxLastLoggedSupervisorMessage = '';
           FX.mode = j.mode || '';
           FX.updated = j.updated || '';
           csfxSetConnectionStatus('online', '');
-          csfxRememberLastGood(FX.rate, FX.updated, 'api');
+          csfxRememberLastGood(FX.rate, FX.updated, 'api', { force: true });
         } else {
           csfxSetConnectionStatus('degraded', j ? 'invalid_rate' : 'invalid_payload');
         }
