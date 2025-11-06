@@ -2426,14 +2426,20 @@ var csfxLastLoggedSupervisorMessage = '';
       '.csfx-auth-widget__close:hover{background:rgba(248,250,252,.18);color:#f8fafc;border-color:rgba(255,255,255,.55);}',
       // especificidad para evitar conflictos con CSS del POS
         /* Reglas específicas para el buscador (sin romper layout nativo) */
-      '.csfx-chip{font-family:inherit;font-size:16px;font-weight:700;}',
-      '.csfx-usd-chip{font-size:16px;font-weight:700;color:#0b5e3c;background:rgba(16,185,129,.10);padding:.2rem .5rem;border-radius:12px;}',
-      '.csfx-bs-chip{font-size:16px;font-weight:700;color:#1e3a8a;background:rgba(0,87,183,.10);padding:.2rem .5rem;border-radius:12px;position:absolute;top:50%;transform:translateY(-50%);right:0;}',
-      '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;overflow:visible;padding-right:2rem;}',
+      '.csfx-chip.csfx-chip--search{display:inline-flex;align-items:center;justify-content:center;margin:0;padding:1px 4px;border-radius:999px;font-size:10.5px;font-weight:600;line-height:1;white-space:nowrap;min-width:0;gap:2px;pointer-events:none;box-shadow:none;position:static!important;top:auto!important;right:auto!important;bottom:auto!important;left:auto!important;transform:none!important;flex-shrink:0;float:none!important;}',
+      '.csfx-chip-cluster{position:absolute;right:6px;bottom:3px;transform:none;display:flex;align-items:center;gap:2px;pointer-events:none;padding:1px 3px;border-radius:10px;background:rgba(248,250,252,.93);border:1px solid rgba(148,163,184,.16);box-shadow:0 2px 6px rgba(15,23,42,.08);flex-wrap:nowrap;backdrop-filter:blur(1px);min-width:0;}',
+      '.csfx-chip-cluster.vip{box-shadow:0 4px 10px rgba(15,118,110,.16);}',
+      '.csfx-chip-cluster .csfx-chip{background:rgba(255,255,255,.9);border-radius:8px;margin:0;}',
+      '.csfx-usd-chip{color:#0f5132;background:rgba(25,135,84,.12);border:1px solid rgba(25,135,84,.2);}',
+      '.csfx-bs-chip{color:#1d2951;background:rgba(59,130,246,.07);border:1px solid rgba(37,99,235,.12);}',
+      '.csfx-usd-disc{color:#1f2a44;background:rgba(6,95,212,.09);border:1px solid rgba(6,95,212,.12);}',
+      '.mat-autocomplete-panel .mat-option .mat-option-text{position:relative;overflow:visible;padding-right:10rem;display:flex;flex-direction:column;gap:3px;align-items:flex-start;}',
+      '.mat-autocomplete-panel .mat-option .suggest-product-sku{font-size:11px;color:rgba(15,23,42,.72);opacity:.78;display:block;margin-top:2px;letter-spacing:.01em;line-height:1.1;order:2;white-space:nowrap;position:relative!important;top:auto!important;left:auto!important;right:auto!important;bottom:auto!important;}',
+      '.mat-autocomplete-panel .mat-option{padding:6px 0!important;min-height:60px;line-height:1.3;display:block;}',
+      '@media (max-width: 1280px) and (orientation: landscape){.mat-autocomplete-panel .mat-option .mat-option-text{padding-right:8rem;gap:2px;}.csfx-chip-cluster{right:4px;bottom:4px;padding:1px 2px;gap:1.5px;border-radius:9px;}.csfx-chip-cluster .csfx-chip{border-radius:7px;padding:1px 3px!important;font-size:9.5px!important;}.csfx-chip.csfx-chip--search{font-size:9.5px;padding:1px 3px;gap:2px;}.mat-autocomplete-panel .mat-option{min-height:56px;}}',
       '.mat-dialog-container .mat-radio-button .mat-radio-label-content, .mat-dialog-container .mat-checkbox .mat-checkbox-label{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}',
       '.mat-dialog-container .csfx-addon-stack{display:flex;flex-direction:column;align-items:flex-end;gap:2px}',
-      /* Chip USD con descuento (se inserta dentro del chip Bs en buscador) */
-      '.csfx-usd-disc-inside{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:12px;font-weight:700;font-size:12px;line-height:1.4;background:#e9ecf5;color:#1e2a44;white-space:nowrap;vertical-align:middle;}'
+      '.csfx-usd-disc{display:inline-flex;align-items:center;}'
 
     ].join('');
     var el = document.createElement('style');
@@ -2528,7 +2534,51 @@ var csfxLastLoggedSupervisorMessage = '';
 
   function decorateSearch() {
     if (!FX.rate) {
-      document.querySelectorAll('[data-csfx="bs-search"], .csfx-search-bs').forEach(function(n){ n.remove(); });
+      document.querySelectorAll('[data-csfx="search-cluster"]').forEach(function (cluster) {
+        var parent = cluster.parentNode;
+        if (!parent) return;
+        Array.prototype.slice.call(cluster.children).forEach(function (child) {
+          if (!(child && child.nodeType === 1)) return;
+          var role = child.dataset ? child.dataset.csfx : '';
+          if (role === 'bs-search' || role === 'usd-disc') {
+            child.remove();
+            return;
+          }
+          child.classList.remove('csfx-chip', 'csfx-chip--search', 'csfx-usd-chip', 'csfx-usd-disc');
+          if (child.dataset) {
+            delete child.dataset.csfx;
+            delete child.dataset.csfxUsdRole;
+          }
+          child.style.fontFamily = '';
+          child.style.fontSize = '';
+          child.style.fontWeight = '';
+          child.style.letterSpacing = '';
+          child.style.fontFeatureSettings = '';
+          child.style.fontVariantNumeric = '';
+          child.style.lineHeight = '';
+          child.style.borderRadius = '';
+          child.style.display = '';
+          child.style.alignItems = '';
+          child.style.justifyContent = '';
+          child.style.margin = '';
+          child.style.padding = '';
+          child.style.boxShadow = '';
+          child.style.background = '';
+          child.style.color = '';
+          child.style.borderColor = '';
+          child.style.position = '';
+          child.style.top = '';
+          child.style.right = '';
+          child.style.bottom = '';
+          child.style.left = '';
+          child.style.transform = '';
+          parent.insertBefore(child, cluster);
+        });
+        cluster.remove();
+      });
+      document.querySelectorAll('[data-csfx="bs-search"], [data-csfx="usd-disc"], .csfx-search-bs').forEach(function (n) {
+        if (n.parentNode) n.remove();
+      });
       return;
     }
     if (!FX.searchBs || updateApplied) return;    updateApplied = true;
@@ -2545,61 +2595,193 @@ var csfxLastLoggedSupervisorMessage = '';
       }
       var priceEl = textRoot.querySelector('.product-price, .variation-price, [class*="price"]');
       if (!priceEl) priceEl = findPriceElement(textRoot);
-    if (!priceEl) return; // sin USD confiable, no insertes Bs
-      if (!priceEl.classList.contains('csfx-usd-chip')) {
-   priceEl.classList.add('csfx-chip', 'csfx-usd-chip');
-      }
+      if (!priceEl) return; // sin USD confiable, no insertes Bs
       var usdVal = parsePrice(priceEl.textContent);
       if (isNaN(usdVal) || usdVal <= 0) return;
 
-     const anchor = priceEl.closest('.mat-option-text') || priceEl.parentNode;
+      const anchor = priceEl.closest('.mat-option-text') || priceEl.parentNode;
       if (!anchor) return;
-    
+      Array.prototype.slice.call(anchor.querySelectorAll('.csfx-usd-disc-inside')).forEach(function (n) { n.remove(); });
 
-      let chip = anchor.querySelector('[data-csfx="bs-search"]');
-      if (!chip) {
-        chip = document.createElement('span');
- 
-        chip.dataset.csfx = 'bs-search';
-        anchor.appendChild(chip);
+      function looksLikeUsdChip(node) {
+        if (!node || node.nodeType !== 1) return false;
+        if (node.dataset && node.dataset.csfx) return false;
+        var tx = (node.textContent || '').trim();
+        if (!tx) return false;
+        if (!/\$/.test(tx)) return false;
+        if (/(Bs|VES|VEF)/i.test(tx)) return false;
+        if (!/\d/.test(tx)) return false;
+        return true;
       }
-         chip.className = 'csfx-chip csfx-bs-chip' + (FX.style && FX.style.vipSearch ? ' vip' : '');
+
+      var cluster = anchor.querySelector('[data-csfx="search-cluster"]');
+      if (!cluster) {
+        cluster = document.createElement('span');
+        cluster.dataset.csfx = 'search-cluster';
+        anchor.appendChild(cluster);
+      }
+      var compactMode = false;
+      try {
+        compactMode = window.matchMedia && window.matchMedia('(max-width: 1280px) and (orientation: landscape)').matches;
+      } catch (_errMatchMedia) {}
+      cluster.className = 'csfx-chip-cluster' + (FX.style && FX.style.vipSearch ? ' vip' : '');
       if (FX.style && FX.style.vipSearch) {
-        chip.style.background = FX.style.vipSearchBg || '';
-        chip.style.borderColor = FX.style.vipSearchBorder || '';
-        chip.style.color = FX.style.vipSearchText || '';
-        chip.style.boxShadow = FX.style.vipSearchShadow || '';
+        cluster.style.background = FX.style.vipSearchBg || '';
+        cluster.style.borderColor = FX.style.vipSearchBorder || '';
+        cluster.style.boxShadow = FX.style.vipSearchShadow || '';
+        cluster.style.color = FX.style.vipSearchText || '';
+      } else {
+        cluster.style.background = '';
+        cluster.style.borderColor = '';
+        cluster.style.boxShadow = '';
+        cluster.style.color = '';
       }
-      
-      // Calcular monto en Bs y armar contenido del chip. Si existe un
-      // descuento activo, se muestra el valor en USD con descuento al lado
-      // dentro del mismo chip para no alterar el layout del buscador.
-      var bsText = fmtBs(usd2bs(usdVal));
-      // Reiniciar contenido del chip
-      chip.innerHTML = '';
-      chip.appendChild(document.createTextNode(bsText));
+      cluster.style.top = '';
+      cluster.style.bottom = '';
+      cluster.style.right = '';
+      cluster.style.left = '';
+      cluster.style.transform = '';
+      cluster.style.padding = compactMode ? '1px 2px' : '1px 3px';
+      cluster.style.gap = compactMode ? '1.5px' : '2px';
+
+      if (!cluster.contains(priceEl)) {
+        cluster.insertBefore(priceEl, cluster.firstChild);
+      }
+
+      var usdNodes = [];
+      function pushUsdNode(node) {
+        if (!node) return;
+        if (usdNodes.indexOf(node) !== -1) return;
+        usdNodes.push(node);
+      }
+
+      pushUsdNode(priceEl);
+
+      Array.prototype.slice.call(anchor.querySelectorAll(':scope > *')).forEach(function (node) {
+        if (node === cluster) return;
+        if (cluster.contains(node)) return;
+        if (!looksLikeUsdChip(node)) return;
+        cluster.appendChild(node);
+        pushUsdNode(node);
+      });
+
+      var fxDiscChip = cluster.querySelector('[data-csfx="usd-disc"]');
       if (FX.disc && FX.disc.active && FX.disc.percent > 0) {
         var usdDisc = usdVal * (1 - FX.disc.percent / 100);
-        var discSpan = document.createElement('span');
-        discSpan.className = 'csfx-usd-disc-inside';
-        discSpan.title = 'USD con descuento (' + FX.disc.percent + '%)';
-        discSpan.textContent = (new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(usdDisc)) + '$';
-        chip.appendChild(discSpan);
+        if (!fxDiscChip) {
+          fxDiscChip = document.createElement('span');
+          fxDiscChip.dataset.csfx = 'usd-disc';
+          cluster.appendChild(fxDiscChip);
+        }
+        fxDiscChip.textContent = (new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(usdDisc)) + '$';
+        fxDiscChip.title = 'USD con descuento (' + FX.disc.percent + '%)';
+        pushUsdNode(fxDiscChip);
+      } else if (fxDiscChip) {
+        fxDiscChip.remove();
+        fxDiscChip = null;
       }
 
-      // tipografía simétrica (copiar del USD, sin tocar USD)
-      const cs = getComputedStyle(priceEl);
-      chip.style.fontFamily = cs.fontFamily || 'inherit';
-      chip.style.fontSize = cs.fontSize;
-      chip.style.fontWeight = cs.fontWeight;
-      chip.style.letterSpacing = cs.letterSpacing;
-      chip.style.fontFeatureSettings = cs.fontFeatureSettings || 'normal';
-      chip.style.fontVariantNumeric = 'tabular-nums lining-nums';
+      var usdMeta = usdNodes.map(function (node) {
+        return {
+          node: node,
+          value: parsePrice(node.textContent || '')
+        };
+      }).filter(function (meta) {
+        return isFinite(meta.value) && meta.value > 0;
+      });
 
-      let lh = cs.lineHeight;
-      if (!lh || lh === 'normal') lh = `${Math.round(parseFloat(cs.fontSize) || 12)}px`;
-      chip.style.lineHeight = lh;
-      chip.style.borderRadius = cs.borderRadius || '12px';
+      if (!usdMeta.length) return;
+
+      usdMeta.sort(function (a, b) {
+        return b.value - a.value;
+      });
+
+      var primaryUsd = usdMeta[0].node;
+      var discountUsdNodes = usdMeta.slice(1).map(function (meta) { return meta.node; });
+
+      function prepareUsdNode(node, isPrimary) {
+        node.classList.add('csfx-chip', 'csfx-chip--search');
+        node.classList.remove('csfx-usd-disc', 'csfx-usd-chip');
+        if (isPrimary) {
+          node.classList.add('csfx-usd-chip');
+          node.dataset.csfxUsdRole = 'primary';
+        } else {
+          node.classList.add('csfx-usd-disc');
+          node.dataset.csfxUsdRole = 'discount';
+        }
+        if (node.style && node.style.setProperty) {
+          node.style.setProperty('position', 'static', 'important');
+          node.style.setProperty('top', 'auto', 'important');
+          node.style.setProperty('right', 'auto', 'important');
+          node.style.setProperty('bottom', 'auto', 'important');
+          node.style.setProperty('left', 'auto', 'important');
+          node.style.setProperty('transform', 'none', 'important');
+          node.style.setProperty('box-shadow', 'none', 'important');
+        } else if (node.style) {
+          node.style.position = 'static';
+          node.style.top = 'auto';
+          node.style.right = 'auto';
+          node.style.bottom = 'auto';
+          node.style.left = 'auto';
+          node.style.transform = 'none';
+          node.style.boxShadow = 'none';
+        }
+      }
+
+      prepareUsdNode(primaryUsd, true);
+      discountUsdNodes.forEach(function (node) {
+        prepareUsdNode(node, false);
+      });
+
+      var bsChip = cluster.querySelector('[data-csfx="bs-search"]');
+      if (!bsChip) {
+        bsChip = document.createElement('span');
+        bsChip.dataset.csfx = 'bs-search';
+        cluster.appendChild(bsChip);
+      }
+      bsChip.className = 'csfx-chip csfx-chip--search csfx-bs-chip';
+      var bsText = fmtBs(usd2bs(usdVal));
+      bsChip.textContent = bsText;
+      if (FX.style && FX.style.vipSearch) {
+        bsChip.style.background = FX.style.vipSearchBg || '';
+        bsChip.style.borderColor = FX.style.vipSearchBorder || '';
+        bsChip.style.color = FX.style.vipSearchText || '';
+        bsChip.style.boxShadow = FX.style.vipSearchShadow || '';
+      } else {
+        bsChip.style.background = '';
+        bsChip.style.borderColor = '';
+        bsChip.style.color = '';
+        bsChip.style.boxShadow = '';
+      }
+
+      cluster.insertBefore(primaryUsd, cluster.firstChild);
+      cluster.insertBefore(bsChip, primaryUsd.nextSibling);
+      discountUsdNodes.forEach(function (node) {
+        cluster.appendChild(node);
+      });
+
+      var syncChips = [primaryUsd, bsChip].concat(discountUsdNodes);
+      const cs = getComputedStyle(primaryUsd);
+      var baseFamily = cs.fontFamily || 'inherit';
+      var baseLetterSpacing = cs.letterSpacing;
+      var baseFeatures = cs.fontFeatureSettings || 'normal';
+      var chipFontSize = compactMode ? '9.5px' : '10.5px';
+      var chipPadding = compactMode ? '1px 3px' : '1px 4px';
+      syncChips.forEach(function (node) {
+        node.style.fontFamily = baseFamily;
+        node.style.fontSize = chipFontSize;
+        node.style.fontWeight = '600';
+        node.style.letterSpacing = baseLetterSpacing;
+        node.style.fontFeatureSettings = baseFeatures;
+        node.style.fontVariantNumeric = 'tabular-nums lining-nums';
+        node.style.lineHeight = '1';
+        node.style.borderRadius = '999px';
+        node.style.display = 'inline-flex';
+        node.style.alignItems = 'center';
+        node.style.justifyContent = 'center';
+        node.style.margin = '0';
+        node.style.padding = chipPadding;
+      });
 
 
     });
