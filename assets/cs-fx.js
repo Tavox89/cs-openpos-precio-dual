@@ -2265,7 +2265,7 @@ var csfxLastLoggedSupervisorMessage = '';
       '.csfx-dual-heading-icon{display:inline-flex;width:30px;height:30px;border-radius:10px;background:#0c4a94;color:#fff;align-items:center;justify-content:center;font-size:18px;box-shadow:0 4px 10px rgba(12,74,148,.3);}',
       '.csfx-dual-grid{display:grid;grid-template-columns:auto auto;column-gap:12px;row-gap:6px;font-size:14px;color:#0f172a;font-weight:600;}',
       '.csfx-dual-grid strong{color:#0b1f3a;font-size:16px;font-weight:700;}',
-      '.csfx-dual-input{margin-top:12px;display:flex;flex-direction:column;gap:6px;font-size:13px;}',
+      '.csfx-dual-input{margin-top:12px;display:flex;flex-direction:column;gap:6px;font-size:13px;width:100%;}',
       '.csfx-dual-input span{font-weight:700;color:#072c59;font-size:14px;}',
       '.csfx-dual-input input{padding:7px 10px;border:1px solid rgba(0,87,183,.26);border-radius:10px;font-size:15px;font-weight:600;color:#0f172a;background:#fff;transition:box-shadow .2s ease,border-color .2s ease;}',
       '.csfx-dual-input input:focus{outline:none;border-color:#0057b7;box-shadow:0 0 0 2px rgba(0,87,183,.18);}',
@@ -2275,24 +2275,19 @@ var csfxLastLoggedSupervisorMessage = '';
       '.csfx-dual-tab:focus{outline:none;box-shadow:0 0 0 2px rgba(12,74,148,.25);}',
       '.csfx-dual-modes{position:relative;}',
       '.csfx-dual-mode{margin-top:12px;}',
-      '.csfx-dual-mode[data-active="false"],.csfx-dual-mode[hidden]{display:none;}',
+      '.csfx-dual-mode[data-csfx-mode-form="bs"]{display:flex;flex-direction:column;gap:10px;}',
+      '.csfx-dual-mode[data-csfx-mode-form="bs"]>.csfx-dual-input,.csfx-dual-mode[data-csfx-mode-form="bs"]>.csfx-dual-bs-field{margin-top:0;min-width:0;width:100%;}',
+      '.csfx-dual-mode[data-active="false"],.csfx-dual-mode[hidden]{display:none!important;}',
       '.csfx-dual-inline-hint{font-size:12px;color:#0b5394;background:rgba(13,76,140,.08);border-radius:8px;padding:4px 8px;font-weight:500;}',
-      '.csfx-dual-bs-tools{margin-top:8px;display:flex;justify-content:flex-end;}',
-      '.csfx-dual-bs-toggle{font-size:12px;font-weight:600;color:#0c4a94;background:rgba(12,74,148,.12);border:1px solid rgba(12,74,148,.25);border-radius:8px;padding:4px 10px;cursor:pointer;transition:all .18s ease;}',
-      '.csfx-dual-bs-toggle.is-active{background:#0c4a94;color:#fff;box-shadow:0 4px 12px rgba(12,74,148,.3);}',
-      '.csfx-dual-bs-field{margin-top:8px;display:grid;grid-template-columns:1fr;gap:6px;padding:10px;border:1px dashed rgba(12,74,148,.3);border-radius:10px;background:rgba(12,74,148,.06);}',
-      '.csfx-dual-adjust{margin-top:6px;font-size:12px;color:#92400e;display:none;flex-direction:column;align-items:flex-start;gap:4px;}',
+      '.csfx-dual-bs-field{display:flex;flex-direction:column;gap:6px;padding:0;border:none;border-radius:10px;background:transparent;}',
+      '.csfx-dual-adjust{margin-top:6px;font-size:12px;color:#92400e;display:none;flex-direction:column;align-items:stretch;gap:6px;}',
       '.csfx-dual-adjust[data-open="true"]{display:flex;}',
-      '.csfx-dual-adjust button{background:rgba(12,74,148,.12);border:1px solid rgba(12,74,148,.25);color:#0c4a94;border-radius:8px;padding:2px 10px;font-size:11px;font-weight:600;cursor:pointer;transition:all .18s ease;}',
+      '.csfx-dual-adjust button{background:rgba(12,74,148,.12);border:1px solid rgba(12,74,148,.25);color:#0c4a94;border-radius:8px;padding:4px 12px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .18s ease;width:100%;text-align:center;white-space:normal;line-height:1.25;}',
       '.csfx-dual-adjust button:hover{background:rgba(12,74,148,.2);}',
       '.csfx-dual-adjust button.is-selected{background:#0c4a94;color:#fff;box-shadow:0 4px 12px rgba(12,74,148,.35);}',
-      '.csfx-dual-adjust-text{display:block;line-height:1.35;margin-bottom:2px;}',
-      '.csfx-dual-adjust-text{display:block;line-height:1.35;margin-bottom:2px;}',
+      '.csfx-dual-adjust-text{display:block;line-height:1.35;margin-bottom:2px;font-weight:600;color:#92400e;}',
       '.csfx-dual-metrics{margin-top:12px;border-radius:10px;background:#f8fbff;border:1px solid rgba(7,44,89,.07);overflow:hidden;box-shadow:0 4px 12px rgba(7,44,89,.06);}',
       '.csfx-dual-metrics-row{display:grid;grid-template-columns:1fr auto;padding:9px 12px;font-size:13px;font-weight:600;color:#0f172a;align-items:center;gap:10px;}',
-      '.csfx-dual-copy{margin-top:10px;display:flex;justify-content:flex-end;}',
-      '.csfx-dual-copy .csfx-btn{padding:6px 12px;font-size:12px;font-weight:600;}',
-      '.csfx-dual-copy .csfx-btn:disabled{opacity:.45;cursor:not-allowed;}',
       '.csfx-alert-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.48);backdrop-filter:blur(4px);z-index:10005;padding:20px;}',
       '.csfx-alert-modal{background:#ffffff;border-radius:18px;max-width:360px;width:min(360px,calc(100vw - 48px));box-shadow:0 20px 48px rgba(15,23,42,.35);padding:22px;display:flex;flex-direction:column;gap:14px;font-family:inherit;}',
       '.csfx-alert-title{margin:0;font-size:18px;font-weight:700;color:#0f172a;}',
@@ -2316,7 +2311,10 @@ var csfxLastLoggedSupervisorMessage = '';
       '.csfx-dual-helper-icon:hover::after,.csfx-dual-helper-icon:focus::after{opacity:1;transition-delay:.25s;}',
       '.csfx-dual-helper-icon:hover::before,.csfx-dual-helper-icon:focus::before{opacity:1;transition-delay:.25s;}',
       '.csfx-dual-helper-label{font-size:12px;font-weight:600;color:#0f172a;}',
-      '.csfx-dual-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px;}',
+      '.csfx-dual-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:12px;}',
+      '.csfx-dual-actions .csfx-btn{width:100%;min-width:0;text-align:center;line-height:1.2;display:flex;flex-direction:column;justify-content:center;white-space:normal;}',
+      '.csfx-dual-extra{margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;}',
+      '.csfx-dual-extra .csfx-btn{width:100%;min-width:0;text-align:center;line-height:1.2;display:flex;flex-direction:column;justify-content:center;white-space:normal;}',
       '.csfx-btn{appearance:none;border:0;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:transform .2s ease,box-shadow .2s ease,background .2s ease,color .2s ease;font-family:inherit;min-width:0;}',
       '.csfx-btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none;transform:none;}',
       '.csfx-btn--primary{background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;box-shadow:0 4px 12px rgba(37,99,235,.38);min-width:132px;}',
@@ -2360,17 +2358,17 @@ var csfxLastLoggedSupervisorMessage = '';
       '.csfx-badge-label{font-size:13px;font-weight:600;}',
       '.csfx-badge-content{background:#ffffff;color:#0f172a;padding:12px 14px;border-radius:0 0 12px 12px;display:none;font-size:13px;white-space:nowrap;box-shadow:0 16px 32px rgba(15,23,42,.25);border:1px solid rgba(15,23,42,.06);min-width:260px;}',
        '.csfx-badge.open .csfx-badge-content{display:block;}',
-      '.csfx-modal-backdrop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(15,23,42,.45);backdrop-filter:blur(3px);padding:16px;z-index:10001;}',
+      '.csfx-modal-backdrop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(15,23,42,.45);backdrop-filter:blur(3px);padding:20px;z-index:10001;}',
       '.csfx-modal-backdrop[data-open="true"]{display:flex;}',
       '.csfx-modal-backdrop--custom{z-index:10002;background:rgba(15,23,42,.55);backdrop-filter:blur(5px);}',
-      '.csfx-modal-backdrop--custom .csfx-modal{pointer-events:auto;max-width:360px;width:min(360px,calc(100vw - 48px));box-shadow:0 26px 58px rgba(15,23,42,.32);}',
-      '.csfx-modal{background:#ffffff;border-radius:20px;width:min(360px,calc(100vw - 48px));box-shadow:0 18px 48px rgba(15,23,42,.35);overflow:hidden;font-family:inherit;}',
+      '.csfx-modal-backdrop--custom .csfx-modal{pointer-events:auto;max-width:420px;width:clamp(320px,90vw,420px);box-shadow:0 26px 58px rgba(15,23,42,.32);}',
+      '.csfx-modal{background:#ffffff;border-radius:20px;width:clamp(320px,90vw,420px);max-height:calc(100vh - 40px);box-shadow:0 18px 48px rgba(15,23,42,.35);overflow:hidden;font-family:inherit;display:flex;flex-direction:column;}',
       '.csfx-modal-header{background:linear-gradient(135deg,#0057b7,#0b6ad4);color:#fff;padding:18px 22px;display:flex;align-items:center;justify-content:space-between;gap:16px;cursor:pointer;}',
       '.csfx-modal-header-title{display:flex;align-items:center;gap:12px;font-size:17px;font-weight:700;}',
       '.csfx-modal-header-icon{display:inline-flex;width:32px;height:32px;border-radius:10px;background:rgba(255,255,255,.22);align-items:center;justify-content:center;font-size:18px;box-shadow:0 4px 12px rgba(0,0,0,.18);}',
       '.csfx-modal-header-ref{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:rgba(15,23,42,.18);padding:4px 10px;border-radius:999px;white-space:nowrap;}',
       '.csfx-modal-header-ref[data-empty="true"]{opacity:.75;background:rgba(255,255,255,.12);}',
-      '.csfx-modal-body{padding:22px 24px 24px;display:flex;flex-direction:column;gap:18px;}',
+      '.csfx-modal-body{padding:22px 24px 24px;display:flex;flex-direction:column;gap:18px;overflow-y:auto;flex:1 1 auto;}',
       '.csfx-auth-card{border:1px solid rgba(15,23,42,.08);background:linear-gradient(135deg,rgba(0,87,183,.08),#fff);border-radius:16px;padding:16px 18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 14px 32px rgba(15,23,42,.12);}',
       '.csfx-auth-title{font-size:14px;font-weight:700;color:#0f172a;}',
       '.csfx-auth-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center;}',
@@ -2402,7 +2400,14 @@ var csfxLastLoggedSupervisorMessage = '';
       '.csfx-explain-subtitle{font-weight:700;color:#0b1f3a;margin-top:6px;}',
       '.csfx-explain-steps--secondary{margin-top:4px;font-size:12px;color:#0f172a;}',
       '.csfx-explain-steps--secondary li strong{color:#0b1f3a;}',
-      '.csfx-modal-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:4px;}',
+      '.csfx-modal-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:auto;padding:0 24px 24px;}',
+      '.csfx-modal-body::-webkit-scrollbar{width:6px;}',
+      '.csfx-modal-body::-webkit-scrollbar-thumb{background:rgba(148,163,184,.45);border-radius:999px;}',
+      '@media (min-width: 720px){.csfx-modal [data-csfx=\"dual-panel\"] .csfx-dual-mode[data-csfx-mode-form=\"bs\"],.csfx-badge-content [data-csfx=\"dual-panel\"] .csfx-dual-mode[data-csfx-mode-form=\"bs\"]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:flex-start;}.csfx-modal [data-csfx=\"dual-panel\"] .csfx-dual-mode[data-csfx-mode-form=\"bs\"]>.csfx-dual-input,.csfx-badge-content [data-csfx=\"dual-panel\"] .csfx-dual-mode[data-csfx-mode-form=\"bs\"]>.csfx-dual-input{margin:0;}.csfx-modal [data-csfx=\"dual-panel\"] .csfx-dual-mode[data-csfx-mode-form=\"bs\"]>.csfx-dual-bs-field,.csfx-badge-content [data-csfx=\"dual-panel\"] .csfx-dual-mode[data-csfx-mode-form=\"bs\"]>.csfx-dual-bs-field{margin:0;}.csfx-modal [data-csfx=\"dual-panel\"] .csfx-dual-mode[data-csfx-mode-form=\"bs\"]>.csfx-dual-adjust,.csfx-badge-content [data-csfx=\"dual-panel\"] .csfx-dual-mode[data-csfx-mode-form=\"bs\"]>.csfx-dual-adjust{grid-column:1/-1;}.csfx-modal [data-csfx=\"dual-panel\"] .csfx-dual-adjust[data-open=\"true\"],.csfx-badge-content [data-csfx=\"dual-panel\"] .csfx-dual-adjust[data-open=\"true\"]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px;align-items:stretch;}.csfx-modal [data-csfx=\"dual-panel\"] .csfx-dual-adjust-text,.csfx-badge-content [data-csfx=\"dual-panel\"] .csfx-dual-adjust-text{grid-column:1/-1;margin-bottom:0;}.csfx-modal [data-csfx=\"dual-panel\"] .csfx-dual-adjust button,.csfx-badge-content [data-csfx=\"dual-panel\"] .csfx-dual-adjust button{width:100%;}.csfx-modal [data-csfx=\"dual-panel\"] .csfx-dual-actions,.csfx-badge-content [data-csfx=\"dual-panel\"] .csfx-dual-actions{grid-template-columns:repeat(2,minmax(0,1fr));}.csfx-modal [data-csfx=\"dual-panel\"] .csfx-dual-extra,.csfx-badge-content [data-csfx=\"dual-panel\"] .csfx-dual-extra{width:100%;margin-top:12px;grid-template-columns:repeat(2,minmax(0,1fr));}}',
+'@media (max-width: 1024px) and (max-height: 650px){.csfx-modal{width:clamp(540px,96vw,620px);border-radius:16px;font-size:90%;}.csfx-modal-header{padding:10px 14px;gap:8px;}.csfx-modal-header-title{font-size:14px;gap:6px;}.csfx-modal-header-icon{width:26px;height:26px;font-size:16px;border-radius:8px;}.csfx-modal-body{padding:10px 14px 14px;gap:10px;}.csfx-modal-body::-webkit-scrollbar{width:5px;}.csfx-dual-box{padding:10px 12px;border-radius:14px;display:grid;grid-template-columns:minmax(0,0.6fr) minmax(0,0.4fr);grid-template-areas:\"title title\" \"grid grid\" \"tabs tabs\" \"modes modes\" \"btns btns\" \"extra helper\" \"metrics metrics\" \"status status\";grid-column-gap:12px;grid-row-gap:8px;align-items:start;}.csfx-dual-box>*{margin:0;min-width:0;} .csfx-dual-box h4{grid-area:title;font-size:14px;gap:6px;}.csfx-dual-box>.csfx-dual-grid{grid-area:grid;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;font-size:12px;}.csfx-dual-box>.csfx-dual-grid strong{font-size:13px;}.csfx-dual-box>.csfx-dual-tabs{grid-area:tabs;display:flex;gap:5px;flex-wrap:wrap;}.csfx-dual-box>.csfx-dual-tabs .csfx-dual-tab{flex:1 1 120px;padding:6px 8px;font-size:10.5px;white-space:normal;}.csfx-dual-box>.csfx-dual-modes{grid-area:modes;display:flex;flex-direction:column;gap:6px;}.csfx-dual-box>.csfx-dual-modes .csfx-dual-mode{margin-top:0;padding:7px 9px;border-radius:9px;background:rgba(12,74,148,.05);border:1px solid rgba(12,74,148,.16);}.csfx-dual-box>.csfx-dual-modes .csfx-dual-input{gap:4px;}.csfx-dual-box>.csfx-dual-modes .csfx-dual-input span{font-size:11.5px;white-space:normal;}.csfx-dual-box>.csfx-dual-modes .csfx-dual-input input{padding:6px 8px;font-size:12.5px;border-radius:8px;width:100%;box-sizing:border-box;}.csfx-dual-box>.csfx-dual-modes .csfx-dual-inline-hint{font-size:10px;padding:4px 6px;white-space:normal;}.csfx-dual-box>.csfx-dual-modes .csfx-dual-adjust{display:flex;flex-wrap:wrap;gap:5px;}.csfx-dual-box>.csfx-dual-modes .csfx-dual-adjust button{flex:1 1 110px;font-size:10px;padding:6px 7px;white-space:normal;}.csfx-dual-box>.csfx-dual-metrics{grid-area:metrics;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;align-content:start;}.csfx-dual-box>.csfx-dual-metrics .csfx-dual-metrics-row{display:flex;justify-content:space-between;align-items:center;padding:6px 9px;border-radius:8px;font-size:11.5px;gap:6px;white-space:normal;}.csfx-dual-box>.csfx-dual-metrics .csfx-dual-metrics-value{font-size:12.5px;}.csfx-dual-box>.csfx-dual-actions{grid-area:btns;}.csfx-dual-box>.csfx-dual-actions .csfx-btn{padding:7px 9px;font-size:11px;white-space:normal;line-height:1.2;min-width:0;}.csfx-dual-box>.csfx-dual-extra{grid-area:extra;}.csfx-dual-box>.csfx-dual-extra .csfx-btn{flex:1 1 150px;padding:7px 9px;font-size:11px;min-width:0;}.csfx-dual-box>.csfx-dual-helper{grid-area:helper;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;border-radius:9px;background:rgba(12,74,148,.08);font-size:10.5px;}.csfx-dual-box>.csfx-dual-helper .csfx-dual-helper-icon{flex-shrink:0;font-size:11px;width:17px;height:17px;}.csfx-dual-box>.csfx-dual-helper .csfx-dual-helper-label{font-size:10.5px;white-space:normal;}.csfx-dual-box>.csfx-dual-status{grid-area:status;font-size:10px;text-align:right;margin-top:2px;}.csfx-modal-footer{display:none;}}',
+      '@media (max-width: 900px){.csfx-modal-backdrop{padding:16px;}.csfx-modal{border-radius:16px;width:clamp(300px,96vw,380px);}.csfx-modal-body{padding:18px 20px;}.csfx-modal-footer{padding:0 20px 20px;}}',
+      '@media (max-width: 600px){.csfx-modal{width:96vw;border-radius:14px;}.csfx-modal-header{padding:16px 18px;}.csfx-modal-body{padding:16px 18px 18px;gap:14px;}.csfx-modal-footer{padding:0 18px 18px;}}',
+      '@media (max-height: 720px){.csfx-modal{max-height:calc(100vh - 16px);}.csfx-modal-body{padding-bottom:18px;}}',
       '.csfx-btn--wide{padding:11px 20px;font-size:13px;font-weight:700;min-width:148px;}',
       '.csfx-btn--link{background:rgba(37,99,235,.08);color:#0b6ad4;border:1px dashed rgba(37,99,235,.35);}',
       '.csfx-btn--link:hover:not(:disabled){background:rgba(37,99,235,.14);}',
@@ -3984,19 +3989,8 @@ var csfxLastLoggedSupervisorMessage = '';
     if (targetMode === 'usd') {
       clearInput(inputs.bsUsd);
       clearInput(inputs.bsRaw);
-      if (state) state.bsConverterOpen = false;
-      if (state && state.ui) {
-        if (state.ui.bsConverterWrap) {
-          state.ui.bsConverterWrap.setAttribute('hidden', 'hidden');
-        }
-        if (state.ui.bsConverterButton) {
-          state.ui.bsConverterButton.classList.remove('is-active');
-          state.ui.bsConverterButton.textContent = 'Convertir desde Bs';
-        }
-      }
     } else if (targetMode === 'bs') {
       clearInput(inputs.usd);
-      if (state && typeof state.bsConverterOpen === 'undefined') state.bsConverterOpen = false;
     }
     if (panel.dataset) {
       var resetKeys = [
@@ -4020,6 +4014,7 @@ var csfxLastLoggedSupervisorMessage = '';
         if (panel.dataset[key] !== undefined) delete panel.dataset[key];
       });
       if (panel.dataset.csfxDirty !== undefined) delete panel.dataset.csfxDirty;
+      if (panel.dataset.csfxBsManualMode !== undefined) delete panel.dataset.csfxBsManualMode;
     }
   }
 
@@ -5329,10 +5324,6 @@ var csfxLastLoggedSupervisorMessage = '';
     container.appendChild(panel);
 
     var state = csfxDualState(panel);
-    if (typeof state.bsConverterOpen === 'undefined') {
-      state.bsConverterOpen = false;
-    }
-
     var title = document.createElement('h4');
     var titleIcon = document.createElement('span');
     titleIcon.className = 'csfx-dual-heading-icon';
@@ -5429,7 +5420,7 @@ var csfxLastLoggedSupervisorMessage = '';
     var bsInputWrap = document.createElement('div');
     bsInputWrap.className = 'csfx-dual-input';
     var bsLabel = document.createElement('span');
-    bsLabel.textContent = 'Monto en USD (se cobrará en Bs)';
+    bsLabel.textContent = 'Monto en USD';
     var bsInput = document.createElement('input');
     bsInput.type = 'text';
     bsInput.placeholder = '0.00';
@@ -5443,18 +5434,8 @@ var csfxLastLoggedSupervisorMessage = '';
     bsInputWrap.appendChild(bsHint);
     bsMode.appendChild(bsInputWrap);
 
-    var bsTools = document.createElement('div');
-    bsTools.className = 'csfx-dual-bs-tools';
-    var bsToggle = document.createElement('button');
-    bsToggle.type = 'button';
-    bsToggle.className = 'csfx-dual-bs-toggle';
-    bsToggle.textContent = 'Convertir desde Bs';
-    bsTools.appendChild(bsToggle);
-    bsMode.appendChild(bsTools);
-
     var bsAltWrap = document.createElement('div');
     bsAltWrap.className = 'csfx-dual-bs-field csfx-dual-input';
-    bsAltWrap.setAttribute('hidden', 'hidden');
     var bsAltLabel = document.createElement('span');
     bsAltLabel.textContent = 'Monto en Bs';
     var bsAltInput = document.createElement('input');
@@ -5474,34 +5455,25 @@ var csfxLastLoggedSupervisorMessage = '';
     setupInput(bsInput, function () {
       if (bsInput && bsInput.dataset) delete bsInput.dataset.csfxManualBs;
     });
+    if (bsInput) {
+      ['focus','input'].forEach(function(evt){
+        bsInput.addEventListener(evt, function(){
+          if (panel && panel.dataset) panel.dataset.csfxBsManualMode = 'usd';
+        });
+      });
+    }
     setupInput(bsAltInput, function () {
       if (!bsAltInput.value && bsInput && bsInput.dataset) {
         delete bsInput.dataset.csfxManualBs;
       }
     });
-
-    bsToggle.addEventListener('click', function (ev) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      var opened = bsAltWrap.hasAttribute('hidden');
-      if (opened) {
-        bsAltWrap.removeAttribute('hidden');
-        bsToggle.classList.add('is-active');
-        bsToggle.textContent = 'Ocultar conversor Bs';
-        state.bsConverterOpen = true;
-        setTimeout(function () {
-          try { bsAltInput.focus(); } catch (_errFocusBs) {}
-        }, 40);
-      } else {
-        bsAltWrap.setAttribute('hidden', 'hidden');
-        bsToggle.classList.remove('is-active');
-        bsToggle.textContent = 'Convertir desde Bs';
-        state.bsConverterOpen = false;
-        bsAltInput.value = '';
-        if (bsInput && bsInput.dataset) delete bsInput.dataset.csfxManualBs;
-        csfxUpdateDualPanel(panel);
-      }
-    });
+    if (bsAltInput) {
+      ['focus','input'].forEach(function(evt){
+        bsAltInput.addEventListener(evt, function(){
+          if (panel && panel.dataset) panel.dataset.csfxBsManualMode = 'raw';
+        });
+      });
+    }
 
     var metrics = document.createElement('div');
     metrics.className = 'csfx-dual-metrics';
@@ -5559,43 +5531,43 @@ var csfxLastLoggedSupervisorMessage = '';
     });
     panel.appendChild(helper);
 
-    var copyRow = document.createElement('div');
-    copyRow.className = 'csfx-dual-copy';
-    var copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.className = 'csfx-btn csfx-btn--ghost';
-    copyBtn.dataset.csfx = 'copy-summary';
-    copyBtn.textContent = 'Copiar resumen';
-    copyBtn.disabled = true;
-    copyRow.appendChild(copyBtn);
-    panel.appendChild(copyRow);
-    copyBtn.addEventListener('click', function (ev) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      csfxCopyDualSummary(panel);
-    });
-
     var actions = document.createElement('div');
     actions.className = 'csfx-dual-actions';
     var fullBtn = document.createElement('button');
     fullBtn.type = 'button';
     fullBtn.className = 'csfx-btn csfx-btn--primary csfx-btn--wide';
     fullBtn.dataset.csfx = 'full-discount';
-    fullBtn.textContent = 'Aplicar descuento total';
+    fullBtn.innerHTML = 'Aplicar<br>descuento total';
     actions.appendChild(fullBtn);
     var confirm = document.createElement('button');
     confirm.type = 'button';
     confirm.className = 'csfx-btn csfx-btn--secondary csfx-btn--wide';
     confirm.dataset.csfx = 'confirm';
-    confirm.textContent = 'Aplicar descuento dual';
+    confirm.innerHTML = 'Aplicar<br>descuento dual';
     actions.appendChild(confirm);
+    panel.appendChild(actions);
+
     var customBtn = document.createElement('button');
     customBtn.type = 'button';
     customBtn.className = 'csfx-btn csfx-btn--ghost csfx-btn--wide';
     customBtn.dataset.csfx = 'custom-discount';
-    customBtn.textContent = 'Descuento personalizado';
-    actions.appendChild(customBtn);
-    panel.appendChild(actions);
+    customBtn.innerHTML = 'Descuento<br>personalizado';
+    var copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'csfx-btn csfx-btn--ghost csfx-btn--wide';
+    copyBtn.dataset.csfx = 'copy-summary';
+    copyBtn.innerHTML = 'Copiar<br>resumen';
+    copyBtn.disabled = true;
+    var extraRow = document.createElement('div');
+    extraRow.className = 'csfx-dual-extra';
+    extraRow.appendChild(customBtn);
+    extraRow.appendChild(copyBtn);
+    panel.appendChild(extraRow);
+    copyBtn.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      csfxCopyDualSummary(panel);
+    });
 
     var status = document.createElement('div');
     status.className = 'csfx-dual-status';
@@ -5607,8 +5579,6 @@ var csfxLastLoggedSupervisorMessage = '';
     state.inputs.bsRaw = bsAltInput;
     state.ui.bsEquivalent = bsHint;
     state.ui.bsAdjust = bsAdjust;
-    state.ui.bsConverterWrap = bsAltWrap;
-    state.ui.bsConverterButton = bsToggle;
     state.ui.copyBtn = copyBtn;
 
     var applyFullDiscount = function () {
@@ -5700,11 +5670,6 @@ var csfxLastLoggedSupervisorMessage = '';
     customBtn.addEventListener('click', function () { csfxOpenCustomDiscountModal({ fromDualPanel: panel }); });
 
     csfxDualSetMode(panel, 'usd', { silent: true });
-    if (state.bsConverterOpen) {
-      bsAltWrap.removeAttribute('hidden');
-      bsToggle.classList.add('is-active');
-      bsToggle.textContent = 'Ocultar conversor Bs';
-    }
     csfxUpdateDualPanel(panel);
     return panel;
   }
@@ -5852,7 +5817,7 @@ var csfxLastLoggedSupervisorMessage = '';
     if (bsHint) {
       if (currentMode === 'bs') {
         if (entry.bsAmount > 0 && entry.rate > 0) {
-          bsHint.textContent = 'Se cobrará ' + fmtBs(entry.bsAmount) + ' (≈ ' + fmtUsd(entry.usdFromBs) + ')';
+          bsHint.textContent = 'Se cobrará ' + fmtBs(entry.bsAmount);
         } else {
           bsHint.textContent = 'Ingresa el monto USD para ver el equivalente en Bs.';
         }
@@ -6118,13 +6083,18 @@ var csfxLastLoggedSupervisorMessage = '';
             intro.className = 'csfx-dual-adjust-text';
             intro.textContent = 'Sugerencias en Bs:';
             bsAdjust.appendChild(intro);
+            var compactCurrency = function (text) {
+              if (!text) return '';
+              return text.replace(/^([^0-9+\-]+)\s+/, '$1').replace(/\s{2,}/g, ' ').trim();
+            };
             suggestionList.forEach(function (suggestion) {
               var btn = document.createElement('button');
               btn.type = 'button';
               btn.dataset.csfxAdjustNet = String(suggestion.net);
               btn.dataset.csfxAdjust = '1';
-              var label = '+' + fmtUsd(suggestion.net) + ' (≈ ' + fmtBs(suggestion.bs) + ') → ' + fmtUsd(suggestion.target);
+              var label = '+' + compactCurrency(fmtUsd(suggestion.net)) + ' · ' + compactCurrency(fmtBs(suggestion.bs)) + ' ⇒ ' + compactCurrency(fmtUsd(suggestion.target));
               btn.textContent = label;
+              btn.setAttribute('title', '+' + fmtUsd(suggestion.net) + ' (≈ ' + fmtBs(suggestion.bs) + ') → ' + fmtUsd(suggestion.target));
               if (panel.dataset.csfxSelectedSuggest && Math.abs(Number(panel.dataset.csfxSelectedSuggest) - suggestion.net) < 1e-6) {
                 btn.classList.add('is-selected');
               }
@@ -6161,8 +6131,8 @@ var csfxLastLoggedSupervisorMessage = '';
     state.inputs.bsUsd = bsUsdInput;
     var bsRawInput = panel.querySelector('input[data-csfx=\"bs-manual\"]');
     if (bsRawInput) state.inputs.bsRaw = bsRawInput;
-    var wrap = state.ui && state.ui.bsConverterWrap ? state.ui.bsConverterWrap : (bsRawInput ? bsRawInput.closest('.csfx-dual-bs-field') : null);
-    var usingRaw = !!(wrap && !wrap.hasAttribute('hidden') && bsRawInput);
+    var manualMode = panel.dataset ? panel.dataset.csfxBsManualMode : '';
+    var usingRaw = !!(bsRawInput && (manualMode === 'raw' || document.activeElement === bsRawInput || csfxDualNormalizeValue(bsRawInput.value) > 0));
     var decimals = (FX && FX.decimals) || 2;
     var rate = Number(FX && FX.rate ? FX.rate : 0);
     if (!isFinite(rate)) rate = 0;
