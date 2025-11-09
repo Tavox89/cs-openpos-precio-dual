@@ -179,9 +179,18 @@ var CSFX_SUPERVISOR_META_KEYS = [
   'csfx_auth_supervisor_expires',
   'csfx_auth_session_id'
 ];
-var CSFX_SUPERVISOR_INFO_LABEL = 'Supervisor';
-var csfxSupervisorCache = null;
-var csfxLastLoggedSupervisorMessage = '';
+  var CSFX_SUPERVISOR_INFO_LABEL = 'Supervisor';
+  var csfxSupervisorCache = null;
+  var csfxLastLoggedSupervisorMessage = '';
+  var csfxQrScannerState = {
+    active: false,
+    detector: null,
+    panel: null,
+    video: null,
+    stream: null,
+    raf: 0,
+    ui: null
+  };
 
   function csfxReadSupervisorStorage() {
     try {
@@ -2377,6 +2386,11 @@ var csfxLastLoggedSupervisorMessage = '';
       '.csfx-auth-hint{font-size:12px;color:#334155;line-height:1.5;}',
       '.csfx-auth-ref-chip{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#0f172a;background:rgba(15,23,42,.06);padding:6px 12px;border-radius:999px;border:1px dashed rgba(15,23,42,.12);}',
       '.csfx-auth-ref-icon{font-size:15px;}',
+      '.csfx-qr-panel{margin-top:12px;padding:12px;border:1px dashed rgba(15,23,42,.2);border-radius:12px;background:rgba(15,23,42,.04);display:flex;flex-direction:column;gap:8px;}',
+      '.csfx-qr-panel video{width:100%;border-radius:10px;background:#000;max-height:220px;object-fit:cover;}',
+      '.csfx-qr-panel-note{font-size:12px;color:#0f172a;}',
+      '.csfx-qr-panel-actions{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;font-size:11px;color:#0f172a;}',
+      '.csfx-qr-panel-actions .csfx-btn{min-width:0;padding:4px 12px;font-size:11px;}',
       '.csfx-auth-status{font-size:12px;font-weight:600;color:#334155;}',
       '.csfx-auth-status--ok{color:#0f766e;}',
       '.csfx-auth-status--error{color:#b91c1c;}',
@@ -6815,6 +6829,8 @@ var csfxLastLoggedSupervisorMessage = '';
       modal: modal,
       header: header,
       headerRef: headerRef,
+      authCard: authCard,
+      qrPanel: null,
       pinInput: pinInput,
       validateBtn: validateBtn,
       scanBtn: scanBtn,
@@ -6846,24 +6862,8 @@ var csfxLastLoggedSupervisorMessage = '';
       }
     });
     scanBtn.addEventListener('click', function () {
-      var handled = false;
-      try {
-        var detail = {
-          respond: function (pin) {
-            handled = true;
-            if (typeof pin === 'string' && pin.trim()) {
-              csfxCustomModalUI.pinInput.value = pin.trim();
-              csfxAttemptCustomPinValidation(pin, csfxCustomModalUI);
-            }
-          }
-        };
-        document.dispatchEvent(new CustomEvent('csfx:request-custom-pin-scan', { detail: detail }));
-        if (!handled) {
-          csfxShowCustomFeedback(csfxCustomModalUI.authStatus, 'Conecta un escáner para recibir la contraseña.', null);
-        }
-      } catch (_errScan) {
-        csfxShowCustomFeedback(csfxCustomModalUI.authStatus, 'No se pudo iniciar el escaneo.', false);
-      }
+      if (csfxStartNativeQrScan(csfxCustomModalUI)) return;
+      csfxInvokeLegacyPinScan(csfxCustomModalUI);
     });
 
     csfxUpdateAuthorizationReferenceText();
@@ -6873,6 +6873,7 @@ var csfxLastLoggedSupervisorMessage = '';
   function csfxCloseCustomDiscountModal(options) {
     options = options || {};
     if (!csfxCustomModalUI || !csfxCustomModalUI.backdrop) return;
+    csfxStopNativeQrScan();
     if (!options.keepAuthorized) {
       var silent = typeof options.silent === 'boolean' ? options.silent : true;
       csfxDeactivateNativeDiscountControls({ ui: csfxCustomModalUI, silent: silent });
@@ -6891,6 +6892,7 @@ var csfxLastLoggedSupervisorMessage = '';
     }
     var ui = csfxEnsureCustomDiscountModal();
     csfxCustomModalState.open = true;
+    csfxStopNativeQrScan({ keepButtonDisabled: true });
     csfxDeactivateNativeDiscountControls({ ui: ui, silent: true });
     ui.pinInput.value = '';
     ui.pinInput.disabled = false;
@@ -6957,6 +6959,7 @@ var csfxLastLoggedSupervisorMessage = '';
 
   function csfxAttemptCustomPinValidation(pin, ui) {
     if (!ui) return;
+    csfxStopNativeQrScan({ keepButtonDisabled: true });
     var trimmed = String(pin || '').trim();
     csfxAccessDebugLog('csfxAttemptCustomPinValidation', { raw: pin, trimmed: trimmed });
     if (!trimmed) {
@@ -7006,6 +7009,173 @@ var csfxLastLoggedSupervisorMessage = '';
       } else if (ok === false) {
         node.classList.add('csfx-auth-status--error');
       }
+    }
+  }
+
+  function csfxSupportsNativeQrScan() {
+    return typeof window !== 'undefined'
+      && typeof navigator !== 'undefined'
+      && navigator.mediaDevices
+      && typeof navigator.mediaDevices.getUserMedia === 'function'
+      && typeof window.BarcodeDetector === 'function';
+  }
+
+  function csfxStopNativeQrScan(options) {
+    options = options || {};
+    if (csfxQrScannerState.raf) {
+      cancelAnimationFrame(csfxQrScannerState.raf);
+      csfxQrScannerState.raf = 0;
+    }
+    if (csfxQrScannerState.stream) {
+      try {
+        csfxQrScannerState.stream.getTracks().forEach(function (track) {
+          try { track.stop(); } catch (_errStopTrack) {}
+        });
+      } catch (_errStopStream) {}
+    }
+    if (csfxQrScannerState.panel && csfxQrScannerState.panel.parentNode) {
+      csfxQrScannerState.panel.parentNode.removeChild(csfxQrScannerState.panel);
+    }
+    if (csfxQrScannerState.ui && csfxQrScannerState.ui.qrPanel === csfxQrScannerState.panel) {
+      csfxQrScannerState.ui.qrPanel = null;
+    }
+    if (!options.keepButtonDisabled && csfxQrScannerState.ui && csfxQrScannerState.ui.scanBtn) {
+      csfxQrScannerState.ui.scanBtn.disabled = false;
+    }
+    csfxQrScannerState.active = false;
+    csfxQrScannerState.panel = null;
+    csfxQrScannerState.video = null;
+    csfxQrScannerState.stream = null;
+    csfxQrScannerState.ui = null;
+  }
+
+  function csfxStartNativeQrScan(ui) {
+    if (!csfxSupportsNativeQrScan() || !ui || !ui.authCard) {
+      return false;
+    }
+    if (csfxQrScannerState.active) {
+      return true;
+    }
+    csfxStopNativeQrScan({ keepButtonDisabled: true });
+    var panel = document.createElement('div');
+    panel.className = 'csfx-qr-panel';
+    var note = document.createElement('div');
+    note.className = 'csfx-qr-panel-note';
+    note.textContent = 'Alinea el código QR del supervisor dentro del recuadro.';
+    var video = document.createElement('video');
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = true;
+    video.setAttribute('playsinline', 'true');
+    var actions = document.createElement('div');
+    actions.className = 'csfx-qr-panel-actions';
+    var hint = document.createElement('span');
+    hint.textContent = 'La cámara se detendrá automáticamente al detectar el código.';
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'csfx-btn csfx-btn--ghost';
+    cancelBtn.textContent = 'Cancelar';
+    cancelBtn.addEventListener('click', function () {
+      csfxStopNativeQrScan();
+      if (ui.authStatus) {
+        csfxShowCustomFeedback(ui.authStatus, 'Escaneo cancelado.', null);
+      }
+    });
+    actions.appendChild(hint);
+    actions.appendChild(cancelBtn);
+    panel.appendChild(note);
+    panel.appendChild(video);
+    panel.appendChild(actions);
+    ui.authCard.appendChild(panel);
+    ui.qrPanel = panel;
+    ui.scanBtn.disabled = true;
+
+    csfxQrScannerState.active = true;
+    csfxQrScannerState.panel = panel;
+    csfxQrScannerState.video = video;
+    csfxQrScannerState.ui = ui;
+
+    if (!csfxQrScannerState.detector) {
+      try {
+        csfxQrScannerState.detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+      } catch (_errDetector) {
+        try {
+          csfxQrScannerState.detector = new window.BarcodeDetector();
+        } catch (_errDetector2) {
+          csfxQrScannerState.detector = null;
+        }
+      }
+    }
+    if (!csfxQrScannerState.detector) {
+      csfxStopNativeQrScan();
+      return false;
+    }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } }).then(function (stream) {
+      if (!csfxQrScannerState.active) {
+        try { stream.getTracks().forEach(function (track) { track.stop(); }); } catch (_errUnused) {}
+        return;
+      }
+      csfxQrScannerState.stream = stream;
+      video.srcObject = stream;
+      var startLoop = function () {
+        if (!csfxQrScannerState.active) return;
+        csfxQrScannerState.raf = requestAnimationFrame(scanLoop);
+        if (ui.authStatus) csfxShowCustomFeedback(ui.authStatus, 'Escaneando código QR…', null);
+      };
+      video.addEventListener('loadeddata', startLoop, { once: true });
+      video.play().catch(function () {
+        startLoop();
+      });
+    }).catch(function (err) {
+      csfxStopNativeQrScan();
+      csfxShowCustomFeedback(ui.authStatus, 'No se pudo acceder a la cámara: ' + (err && err.message ? err.message : 'permiso denegado'), false);
+    });
+
+    function scanLoop() {
+      if (!csfxQrScannerState.active) return;
+      csfxQrScannerState.detector.detect(video).then(function (codes) {
+        if (codes && codes.length) {
+          var value = '';
+          if (typeof codes[0].rawValue === 'string') {
+            value = codes[0].rawValue;
+          } else if (codes[0].value) {
+            value = codes[0].value;
+          }
+          if (typeof value === 'string' && value.trim()) {
+            csfxShowCustomFeedback(ui.authStatus, 'Código detectado, validando…', true);
+            var trimmed = value.trim();
+            csfxStopNativeQrScan({ keepButtonDisabled: true });
+            ui.pinInput.value = trimmed;
+            csfxAttemptCustomPinValidation(trimmed, ui);
+            return;
+          }
+        }
+        csfxQrScannerState.raf = requestAnimationFrame(scanLoop);
+      }).catch(function () {
+        csfxQrScannerState.raf = requestAnimationFrame(scanLoop);
+      });
+    }
+    return true;
+  }
+
+  function csfxInvokeLegacyPinScan(ui) {
+    var handled = false;
+    try {
+      var detail = {
+        respond: function (pin) {
+          handled = true;
+          if (typeof pin === 'string' && pin.trim()) {
+            ui.pinInput.value = pin.trim();
+            csfxAttemptCustomPinValidation(pin, ui);
+          }
+        }
+      };
+      document.dispatchEvent(new CustomEvent('csfx:request-custom-pin-scan', { detail: detail }));
+      if (!handled) {
+        csfxShowCustomFeedback(ui.authStatus, 'Conecta un escáner para recibir la contraseña.', null);
+      }
+    } catch (_errScan) {
+      csfxShowCustomFeedback(ui.authStatus, 'No se pudo iniciar el escaneo.', false);
     }
   }
 
