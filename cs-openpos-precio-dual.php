@@ -3,7 +3,7 @@
  * Plugin Name: CS – OpenPOS Precio Dual Dinámico (USD + Bs) via FOX API
  * Description: Muestra precios en USD y Bs en OpenPOS (buscador, addons, carrito y totales) usando FOX API (/currencies). Autodetecta origen local/remoto y mapea VES↔VEF. Incluye barra con tasa y hora.
  * Author: Tavox
- * Version: 1.4.0
+ * Version: 1.5.2
  */
 
 if ( ! defined('ABSPATH') ) exit;
@@ -12,7 +12,7 @@ if ( ! defined( 'CSFX_PLUGIN_FILE' ) ) {
   define( 'CSFX_PLUGIN_FILE', __FILE__ );
 }
 if ( ! defined( 'CSFX_PLUGIN_VERSION' ) ) {
-  define( 'CSFX_PLUGIN_VERSION', '1.4.0' );
+  define( 'CSFX_PLUGIN_VERSION', '1.5.2' );
 }
 
 /* ====== CONFIG ====== */
@@ -842,6 +842,7 @@ add_filter('op_get_login_cashdrawer_data', function($session){
         'payChips'   => (bool)CS_FX_PAY_CHIPS,
                'addonsBs'   => (bool)CS_FX_ADDONS_BS,
         'debug'      => (bool)CS_FX_DEBUG,
+        'disc'       => csfx_get_discount(),
         'divisaMethods' => csfx_get_divisa_methods(),
         'style'      => [
             'bsColor'       => '#0057b7',
@@ -903,6 +904,7 @@ add_filter('openpos_pos_footer_js', function($handles){
         'payChips'  => (bool)CS_FX_PAY_CHIPS,
              'addonsBs'  => (bool)CS_FX_ADDONS_BS,
         'debug'     => (bool)CS_FX_DEBUG,
+        'disc'      => csfx_get_discount(),
         'divisaMethods' => csfx_get_divisa_methods(),
         'style'     => [
             'bsColor'       => '#0057b7',
