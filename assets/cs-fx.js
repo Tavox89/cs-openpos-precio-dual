@@ -5752,32 +5752,27 @@ var CSFX_SUPERVISOR_META_KEYS = [
       }
     }
 
+    var applyLocked = false;
+    var discountWarning = '';
     if (hasGlobalDiscount) {
-      applyButtons.forEach(function (btn) { if (btn) btn.disabled = true; });
+      applyLocked = true;
       csfxUpdateFullButtonLock(false);
-      csfxResetDualChips(panel);
-      if (status) {
-        var currentDisc = snapshot.discountAmount;
-        if ((!currentDisc || currentDisc <= 0.0001) && window.__CSFX_LAST_DISCOUNT_USD) {
-          currentDisc = window.__CSFX_LAST_DISCOUNT_USD;
-        }
-        if (!isNaN(currentDisc) && currentDisc > 0.0001) {
-          status.textContent = 'Ya existe un descuento global (' + fmtUsd(currentDisc) + '). Elimina el actual para aplicar uno nuevo.';
-        } else {
-          status.textContent = 'Ya existe un descuento global. Elimina el actual para aplicar uno nuevo.';
-        }
-        status.className = 'csfx-dual-status csfx-dual-status--warn';
+      var currentDisc = snapshot.discountAmount;
+      if ((!currentDisc || currentDisc <= 0.0001) && window.__CSFX_LAST_DISCOUNT_USD) {
+        currentDisc = window.__CSFX_LAST_DISCOUNT_USD;
       }
-      if (usdInput) usdInput.value = '';
-      panel.dataset.csfxCalcNet = panel.dataset.csfxCalcDiscount = panel.dataset.csfxCalcGross = panel.dataset.csfxCalcRemainder = '';
-      panel.dataset.csfxEntryMode = panel.dataset.csfxEntryUsd = panel.dataset.csfxEntryUsdFromBs = panel.dataset.csfxEntryBs = panel.dataset.csfxEntryTotal = '';
-      panel.dataset.csfxEntryMissing = panel.dataset.csfxEntryChange = panel.dataset.csfxEntryRate = '';
-      panel.dataset.csfxEntryDiscountable = panel.dataset.csfxEntryNonDiscount = '';
-      return panel;
+      if (!isNaN(currentDisc) && currentDisc > 0.0001) {
+        discountWarning = 'Ya existe un descuento global (' + fmtUsd(currentDisc) + '). Puedes simular montos, pero elimina el actual para aplicar uno nuevo.';
+      } else {
+        discountWarning = 'Ya existe un descuento global. Puedes simular montos, pero elimina el actual para aplicar uno nuevo.';
+      }
     }
 
-    applyButtons.forEach(function (btn) { if (btn) btn.disabled = false; });
-    if (confirmBtn) confirmBtn.disabled = false;
+    applyButtons.forEach(function (btn) {
+      if (!btn) return;
+      btn.disabled = applyLocked;
+    });
+    if (!applyLocked && confirmBtn) confirmBtn.disabled = false;
 
     var effectiveBase = baseTotal;
     if ((!isFinite(effectiveBase) || effectiveBase <= 0) && snapshot.meta && snapshot.meta.csfx_base_total) {
@@ -6035,8 +6030,15 @@ var CSFX_SUPERVISOR_META_KEYS = [
       statusParts.push('Cambio ' + changeText);
     }
     if (status) {
+      var finalStatusClass = statusClass || 'csfx-dual-status';
       status.textContent = statusParts.join(' · ');
-      status.className = statusClass;
+      if (discountWarning) {
+        status.textContent += (status.textContent ? ' · ' : '') + discountWarning;
+        if (finalStatusClass.indexOf('csfx-dual-status--warn') === -1) {
+          finalStatusClass += ' csfx-dual-status--warn';
+        }
+      }
+      status.className = finalStatusClass.trim();
     }
 
     if (bsAdjust) {
