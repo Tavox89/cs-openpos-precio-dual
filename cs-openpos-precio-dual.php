@@ -478,6 +478,12 @@ function csfx_probe_api($url, $args = array(), $to = 'VES'){
   } elseif (is_numeric(trim($body))) {
     $rate = floatval(trim($body));
   }
+  if ($rate <= 0) {
+    $out['status'] = 'error';
+    $out['error']  = 'invalid_rate';
+    update_option('csfx_last_api_err', $out + array('when'=>$when), false);
+    return $out;
+  }
   $out['status'] = 'ok';
   $out['rate']   = $rate;
   update_option('csfx_last_api_ok', $out + array('when'=>$when), false);
@@ -493,7 +499,7 @@ function csfx_get_rate(){
   $fbfx = !! get_option('csfx_api_fallback_fox', 0);
   $ua   = 'CSFX/2.1 (+'.home_url('/').')';
   // POS-friendly: respuestas rápidas y sin múltiples redirecciones
-  $args = array('timeout'=>3, 'sslverify'=>$sslv, 'redirection'=>1, 'headers'=>array('Accept'=>'application/json', 'User-Agent'=>$ua), 'reject_unsafe_urls'=>true, 'decompress'=>true);
+  $args = array('timeout'=>8, 'sslverify'=>$sslv, 'redirection'=>1, 'headers'=>array('Accept'=>'application/json', 'User-Agent'=>$ua), 'reject_unsafe_urls'=>true, 'decompress'=>true);
 
   if ($mode === 'api') {
     $cache = get_transient('csfx_rate_cache');
@@ -502,18 +508,18 @@ function csfx_get_rate(){
     }
     $url   = trim(get_option('csfx_api_url', ''));
     $probe = csfx_probe_api($url, $args, $to);
-    if (($probe['status'] ?? '') === 'ok') {
+    if (($probe['status'] ?? '') === 'ok' && ($probe['rate'] ?? 0) > 0) {
       $rate    = (float)($probe['rate'] ?? 0);
       $updated = current_time('c');
       $data = array('mode'=>'api','rate'=>$rate,'from'=>$from,'to'=>$to,'ttl'=>$ttl,'updated'=>$updated,'source'=>'api','upstream_url'=>$url,'http_code'=>$probe['http_code'] ?? 200);
       if ($ttl>0) set_transient('csfx_rate_cache', $data, $ttl);
       // Persistimos el último valor válido para servirlo como stale si la API falla
-      update_option('csfx_last_good_rate', $data, false);
+      if ($rate > 0) update_option('csfx_last_good_rate', $data, false);
       return apply_filters('csfx_rate', $data);
     }
     // Falla la API: intentar servir último valor bueno si es reciente (<=24h)
     $stale = get_option('csfx_last_good_rate');
-    if (is_array($stale) && isset($stale['rate'])) {
+    if (is_array($stale) && isset($stale['rate']) && floatval($stale['rate']) > 0) {
       $updated_ts = null;
       if (isset($stale['updated'])) {
         if (is_numeric($stale['updated'])) {

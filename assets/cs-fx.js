@@ -2201,6 +2201,22 @@ var CSFX_SUPERVISOR_META_KEYS = [
 
     return lastValue;
   }
+  function parsePriceAllowBs(s) {
+    if (!s) return NaN;
+    var text = String(s).replace(/\s+/g, ' ').trim();
+    if (!/[0-9]/.test(text)) return NaN;
+    var lastValue = NaN;
+    var match;
+    var re = /(-?\d[\d.,]*)/g;
+    while ((match = re.exec(text))) {
+      var token = match[1];
+      var parsed = parsePriceToken(token);
+      if (!isNaN(parsed)) {
+        lastValue = parsed;
+      }
+    }
+    return lastValue;
+  }
 
   function parsePriceToken(token) {
     if (!token) return NaN;
@@ -2964,6 +2980,7 @@ var CSFX_SUPERVISOR_META_KEYS = [
     if (!FX.rate) {
       var c = findTotalsContainer();
       if (c) c.querySelectorAll('.csfx-total-row, .csfx-cart-row, [data-csfx]').forEach(function(n){ n.remove(); });
+      document.querySelectorAll('.mat-list-item > .csfx-cart-row[data-csfx="cart-bs"], app-cart .mat-list-item > .csfx-cart-row[data-csfx="cart-bs"]').forEach(function (n) { n.remove(); });
       return;
     }    var cartRows = document.querySelectorAll('app-cart .mat-list-item');
     var rows = cartRows.length ? cartRows : document.querySelectorAll('.mat-list-item');
@@ -3049,9 +3066,25 @@ var CSFX_SUPERVISOR_META_KEYS = [
       '.op-cart-footer .btn.btn-success, .op-cart-footer .op-button-checkout,' +
       ' .op-footer button.btn-success, .op-footer .op-checkout'
     );
-      if (!btn) return NaN;
-      return parsePrice(btn.textContent);
-    }
+    if (!btn) return NaN;
+    return parsePrice(btn.textContent);
+  }
+  function readVisibleSubtotalBs() {
+    var selectors = [
+      '.bottom-cart-total-container',
+      '.cart-subtotal',
+      '.op-cart-footer',
+      '.op-footer',
+      '.cart-totals',
+      '.op-cart-totals',
+      'footer[class*=\"cart\"]'
+    ];
+    var nodes = Array.prototype.slice.call(document.querySelectorAll(selectors.join(', ')));
+    var text = nodes.map(function (n) { return (n && n.innerText) || ''; }).filter(Boolean).join(' | ');
+    if (!/Bs|VES|VEF/i.test(text)) return NaN;
+    var val = parsePriceAllowBs(text);
+    return isFinite(val) ? val : NaN;
+  }
   // === Anclaje al checkout ===
   var ANCHOR_BTN_SELECTORS = [
     '.op-cart-footer .btn.btn-success',
@@ -3517,6 +3550,43 @@ var CSFX_SUPERVISOR_META_KEYS = [
     var debug = { tried: [] };
     var svc = csfxResolveCartServiceCompat(debug);
     var best = null;
+    function bruteForceWindowCart() {
+      if (typeof window === 'undefined') return null;
+      var keys = Object.keys(window).filter(function (k) {
+        return /(cart|op_cart|cartService|currentCart|posCart|op_cache_cart)/i.test(k);
+      });
+      function isItemsArray(arr) {
+        if (!Array.isArray(arr) || !arr.length) return false;
+        return arr.some(function (it) {
+          return it && typeof it === 'object' && (typeof it.price !== 'undefined' || typeof it.base_price !== 'undefined' || typeof it.price_incl_tax !== 'undefined' || typeof it.price_incl !== 'undefined') && (typeof it.qty !== 'undefined' || typeof it.quantity !== 'undefined');
+        });
+      }
+      function buildCandidate(items, sourceLabel) {
+        return {
+          cart: { items: items },
+          source: sourceLabel,
+          itemsCount: items.length
+        };
+      }
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var value = window[k];
+        if (!value) continue;
+        if (isItemsArray(value)) {
+          return buildCandidate(value, 'window.' + k);
+        }
+        if (value.cart) {
+          var cartVal = value.cart.items ? value.cart.items : value.cart;
+          if (isItemsArray(cartVal)) {
+            return buildCandidate(cartVal, 'window.' + k + '.cart');
+          }
+        }
+        if (value.items && isItemsArray(value.items)) {
+          return buildCandidate(value.items, 'window.' + k + '.items');
+        }
+      }
+      return null;
+    }
 
     function noteAsyncPromise(promise, sourceLabel) {
       if (!promise || typeof promise.then !== 'function') return;
@@ -3609,6 +3679,13 @@ var CSFX_SUPERVISOR_META_KEYS = [
     if (asyncCart) {
       var asyncCandidate = evaluate(asyncCart, 'cart.async-cache');
       if (asyncCandidate) return asyncCandidate;
+    }
+
+    var brute = bruteForceWindowCart();
+    if (brute) {
+      debug.tried.push({ source: brute.source || 'window.scan', hit: true, brute: true });
+      brute.debug = debug;
+      return brute;
     }
 
     var localCarts = csfxEnumerateStorageCarts(debug);
@@ -3820,20 +3897,33 @@ var CSFX_SUPERVISOR_META_KEYS = [
       discountAmount = round(Math.abs(discountValueMeta), FX.decimals);
     }
 
+    var liveTotal = typeof context.totalUSD !== 'undefined' ? context.totalUSD : null;
     var baseTotal = pickCandidate([
-      meta && meta.csfx_base_total,
-      cart && cart.csfx_base_total,
-      compatTotals && compatTotals.baseSubtotal,
-      compatTotals && compatTotals.subtotal,
+      liveTotal,
       cart && cart.base_subtotal,
       cart && cart.subtotal,
-      cart && cart.totals && cart.totals.base_subtotal
+      cart && cart.totals && cart.totals.base_subtotal,
+      compatTotals && compatTotals.baseSubtotal,
+      compatTotals && compatTotals.subtotal,
+      cart && cart.csfx_base_total,
+      meta && meta.csfx_base_total
     ], false);
 
     if (isNaN(baseTotal) || baseTotal <= 0) {
       var metaBase = csfxToNumber(meta.csfx_base_total);
       if (!isNaN(metaBase) && metaBase > 0) {
         baseTotal = metaBase;
+      }
+    }
+
+    var totalHint = !isNaN(total) ? total : csfxToNumber(liveTotal);
+    var totalTolerance = Math.max(0.01, Math.pow(10, -(((FX && FX.decimals) || 2))));
+    if (isFinite(totalHint) && totalHint > 0) {
+      var diffRatio = (!isFinite(baseTotal) || baseTotal <= 0)
+        ? Infinity
+        : Math.abs(baseTotal - totalHint) / Math.max(totalHint, 1);
+      if (diffRatio > 0.02 || !isFinite(baseTotal) || baseTotal <= 0) {
+        baseTotal = totalHint;
       }
     }
 
@@ -3849,6 +3939,42 @@ var CSFX_SUPERVISOR_META_KEYS = [
     }
     if ((isNaN(baseTotal) || baseTotal <= 0) && !isNaN(total)) {
       baseTotal = total;
+    }
+    if ((isNaN(baseTotal) || baseTotal <= 0) && FX && FX.rate) {
+      var bsSub = readVisibleSubtotalBs();
+      if (isFinite(bsSub) && bsSub > 0) {
+        baseTotal = bsSub / FX.rate;
+      }
+    }
+
+    // Recalcular base desde los ítems si detectamos que el snapshot trae un subtotal obsoleto
+    var itemsGross = 0;
+    if (cart && Array.isArray(cart.items)) {
+      cart.items.forEach(function (it) {
+        var qty = csfxToNumber(it.qty || it.quantity || 1);
+        if (!isFinite(qty) || qty <= 0) qty = 1;
+        var price = [
+          it.price_incl_tax,
+          it.price_incl,
+          it.base_price,
+          it.price,
+          it.base_price_incl_tax,
+          it.final_price
+        ].map(csfxToNumber).find(function (v) { return isFinite(v) && v > 0; });
+        if (!isFinite(price) || price <= 0) price = 0;
+        itemsGross += price * qty;
+      });
+    }
+    if (itemsGross > 0) {
+      var delta = Math.abs(itemsGross - baseTotal);
+      var drift = Math.max(1, itemsGross);
+      if (!isFinite(baseTotal) || baseTotal <= 0 || (delta / drift) > 0.02) {
+        baseTotal = itemsGross;
+        // Al detectar deriva (cambio de carrito), reiniciamos la caché previa.
+        window.__CSFX_LAST_BASE_USD = baseTotal;
+      }
+    } else if (itemsGross === 0 && (!cart || (cart.items || []).length === 0)) {
+      window.__CSFX_LAST_BASE_USD = 0;
     }
 
     var usdPaid = csfxToNumber(meta.csfx_usd_paid);
@@ -7569,7 +7695,10 @@ var CSFX_SUPERVISOR_META_KEYS = [
 
   // Kickstart
 
-  setInterval(function () { refreshRate(function () { schedule(runAll); }); }, (FX.ttl || 300) * 1000);
+  var ttlSeconds = Number(FX.ttl);
+  var baseInterval = (isFinite(ttlSeconds) && ttlSeconds > 0) ? ttlSeconds * 1000 : 60000;
+  var refreshInterval = Math.max(15000, baseInterval);
+  setInterval(function () { refreshRate(function () { schedule(runAll); }); }, refreshInterval);
 
   // Intervalo para refrescar el descuento periódicamente (p.ej. cada 60 segundos)
   setInterval(function(){
