@@ -118,9 +118,9 @@ function csfx_render_admin_page() {
     update_option('csfx_api_url', $api_url);
     $ttl_post = max(0, intval($_POST['csfx_rate_ttl'] ?? 300));
     update_option('csfx_rate_ttl', $ttl_post);
-    $from_post = sanitize_text_field($_POST['csfx_rate_from'] ?? 'USD');
+    $from_post = strtoupper(sanitize_text_field($_POST['csfx_rate_from'] ?? 'USD'));
     update_option('csfx_rate_from', $from_post);
-    $to_post   = sanitize_text_field($_POST['csfx_rate_to'] ?? 'VES');
+    $to_post   = strtoupper(sanitize_text_field($_POST['csfx_rate_to'] ?? 'VES'));
     update_option('csfx_rate_to', $to_post);
     update_option('csfx_discount_enabled', isset($_POST['csfx_discount_enabled']) ? 1 : 0);
     update_option('csfx_discount_percent', floatval(str_replace(',', '.', $_POST['csfx_discount_percent'] ?? '31')));
@@ -154,7 +154,7 @@ function csfx_render_admin_page() {
         'reject_unsafe_urls' => true,
         'decompress' => true,
       );
-      csfx_probe_api($api_url, $args, $to_post);
+      csfx_probe_api($api_url, $args, $to_post, $from_post);
     }
     echo '<div class="updated notice"><p>Configuración guardada.</p></div>';
   }
@@ -167,8 +167,8 @@ function csfx_render_admin_page() {
   }
   $api   = esc_attr(get_option('csfx_api_url', ''));
   $ttl   = intval(get_option('csfx_rate_ttl', 300));
-  $from  = esc_attr(get_option('csfx_rate_from', 'USD'));
-  $to    = esc_attr(get_option('csfx_rate_to', 'VES'));
+  $from  = esc_attr(strtoupper(get_option('csfx_rate_from', 'USD')));
+  $to    = esc_attr(strtoupper(get_option('csfx_rate_to', 'VES')));
   $d_on  = get_option('csfx_discount_enabled', 1);
   $d_pct = floatval(get_option('csfx_discount_percent', 31.0));
   $sslv  = get_option('csfx_api_sslverify', 1);
@@ -197,9 +197,25 @@ function csfx_render_admin_page() {
         </tr>
         <tr><th scope="row">Par de monedas</th>
           <td>
-            <input type="text" name="csfx_rate_from" value="<?php echo $from; ?>" size="6"> →
-            <input type="text" name="csfx_rate_to"   value="<?php echo $to;   ?>" size="6">
-            <p class="description">Por defecto USD→VES.</p>
+            <?php
+              $preset_currencies = array('USD','EUR','VES','VEF');
+              $from_extra = in_array($from, $preset_currencies, true) ? array() : array($from);
+              $to_extra   = in_array($to, $preset_currencies, true) ? array() : array($to);
+            ?>
+            <label for="csfx_rate_from" class="screen-reader-text">Moneda base</label>
+            <select id="csfx_rate_from" name="csfx_rate_from">
+              <?php foreach (array_merge($preset_currencies, $from_extra) as $opt) : ?>
+                <option value="<?php echo esc_attr($opt); ?>" <?php selected($from, $opt); ?>><?php echo esc_html($opt); ?></option>
+              <?php endforeach; ?>
+            </select>
+            →
+            <label for="csfx_rate_to" class="screen-reader-text">Moneda destino</label>
+            <select id="csfx_rate_to" name="csfx_rate_to">
+              <?php foreach (array_merge($preset_currencies, $to_extra) as $opt) : ?>
+                <option value="<?php echo esc_attr($opt); ?>" <?php selected($to, $opt); ?>><?php echo esc_html($opt); ?></option>
+              <?php endforeach; ?>
+            </select>
+            <p class="description">Selecciona el par (p. ej. USD→VES o EUR→VES). Los símbolos se ajustan según el par.</p>
           </td>
         </tr>
         <tr><th scope="row">TTL cache (seg)</th>
@@ -251,10 +267,18 @@ function csfx_render_admin_page() {
 GET <?php echo esc_url( home_url( '/wp-json/csfx/v1/discount' ) ); ?>
 # Respuesta: {"active":true,"percent":31.0,"updated":"2025-08-24T10:25:00-04:00"}
 
-# Tasa
+# Tasa (<?php echo esc_html($from); ?>→<?php echo esc_html($to); ?>)
 GET <?php echo esc_url( home_url( '/wp-json/csfx/v1/rate' ) ); ?>
 # Respuesta: {"mode":"<?php echo esc_html($mode); ?>","rate":141.88,"from":"<?php echo esc_html($from); ?>","to":"<?php echo esc_html($to); ?>","ttl":<?php echo $ttl; ?>,"updated":"..."}
 </code></pre>
+    <p>Modo nativo (FOX) útil si eliges “Nativo”: endpoints disponibles en este sitio (dependen de WOOCS activo):</p>
+    <ul>
+      <li><code><?php echo esc_html( home_url( '/wp-json/fox-rate/v1/currencies' ) ); ?></code> – Todas las monedas con sus tasas.</li>
+      <li><code><?php echo esc_html( home_url( '/wp-json/fox-rate/v1/convert?amount=100&from=USD&to=VES' ) ); ?></code> – Conversión puntual.</li>
+      <li><code><?php echo esc_html( home_url( '/wp-json/fox-rate/v1/rate?from=USD&to=VES' ) ); ?></code> – Tasa configurable (caché 5 min + fallback).</li>
+      <li><code><?php echo esc_html( home_url( '/wp-json/fox-rate/v1/rate/euro?to=VES' ) ); ?></code> – Tasa EUR hacia destino indicado.</li>
+      <li><code><?php echo esc_html( home_url( '/wp-json/fox-rate/v1/status' ) ); ?></code> – Verifica que WOOCS esté activo.</li>
+    </ul>
   </div>
   <style>.csfx-api-row{<?php echo $mode==='api' ? '' : 'display:none;'; ?>}</style>
     <script>
@@ -433,8 +457,8 @@ function csfx_is_self_url($url){
   return $host && $u && strtolower($host) === strtolower($u);
 }
 
-function csfx_probe_api($url, $args = array(), $to = 'VES'){
-  $out  = array('upstream_url'=>$url);
+function csfx_probe_api($url, $args = array(), $to = 'VES', $from = 'USD'){
+  $out  = array();
   $when = current_time('mysql');
   if (! $url) {
     $out['status'] = 'error';
@@ -442,6 +466,27 @@ function csfx_probe_api($url, $args = array(), $to = 'VES'){
     update_option('csfx_last_api_err', $out + array('when'=>$when), false);
     return $out;
   }
+  // Inyectar par si la URL no lo incluye. Si es el endpoint por defecto (clubsams /csfx/v1/rate) y la base es EUR,
+  // probamos la ruta de euro de FOX.
+  $parsed = wp_parse_url($url);
+  $has_from = strpos($url, 'from=') !== false;
+  $has_to   = strpos($url, 'to=') !== false;
+  $target_url = $url;
+  if ($parsed && !empty($parsed['path'])) {
+    $path = trim($parsed['path'], '/');
+    if ($from && strtoupper($from) === 'EUR' && preg_match('#/csfx/v1/rate$#', $parsed['path'])) {
+      // Usa endpoint euro de FOX del mismo origen
+      $target_url = rtrim(trailingslashit( (isset($parsed['scheme']) ? $parsed['scheme'] . '://' : '//') . ($parsed['host'] ?? '') . ($parsed['port'] ? ':' . $parsed['port'] : '')) , '/') . '/wp-json/fox-rate/v1/rate/euro';
+      $has_from = true; // euro endpoint ya fija base
+    }
+  }
+  if (! $has_from || ! $has_to) {
+    $target_url = add_query_arg(array(
+      'from' => $has_from ? null : $from,
+      'to'   => $has_to   ? null : $to,
+    ), $target_url);
+  }
+  $out['upstream_url'] = $target_url;
   if (csfx_is_self_url($url)) {
     $out['status'] = 'error';
     $out['error']  = 'self_url';
@@ -449,7 +494,7 @@ function csfx_probe_api($url, $args = array(), $to = 'VES'){
     return $out;
   }
   $args = wp_parse_args($args, array('reject_unsafe_urls'=>true, 'decompress'=>true));
-  $res = wp_remote_get($url, $args);
+  $res = wp_remote_get($target_url, $args);
   if (is_wp_error($res)) {
     $out['status']   = 'error';
     $out['error']    = 'wp_error';
@@ -469,10 +514,13 @@ function csfx_probe_api($url, $args = array(), $to = 'VES'){
   $json = json_decode($body, true);
   $rate = 0.0;
   if (is_array($json)) {
+    $pair_key = strtoupper($from . '_' . $to);
     if (isset($json['rate']))               $rate = floatval($json['rate']);
-    elseif (isset($json['USD_VES']))        $rate = floatval($json['USD_VES']);
+    elseif (isset($json[$pair_key]))        $rate = floatval($json[$pair_key]);
+    elseif (isset($json['USD_VES']))        $rate = floatval($json['USD_VES']); // legado
     elseif (isset($json['ves']))            $rate = floatval($json['ves']);
     elseif (isset($json['currencies'][$to]['rate'])) $rate = floatval($json['currencies'][$to]['rate']);
+    elseif (isset($json['currencies'][strtoupper($to)]['rate'])) $rate = floatval($json['currencies'][strtoupper($to)]['rate']);
   } elseif (is_numeric($json)) {
     $rate = floatval($json);
   } elseif (is_numeric(trim($body))) {
@@ -507,7 +555,7 @@ function csfx_get_rate(){
       return apply_filters('csfx_rate', $cache);
     }
     $url   = trim(get_option('csfx_api_url', ''));
-    $probe = csfx_probe_api($url, $args, $to);
+    $probe = csfx_probe_api($url, $args, $to, $from);
     if (($probe['status'] ?? '') === 'ok' && ($probe['rate'] ?? 0) > 0) {
       $rate    = (float)($probe['rate'] ?? 0);
       $updated = current_time('c');
@@ -706,6 +754,18 @@ function cs_fx_sanitize_origin($o){
     if (stripos($o, 'http') !== 0) $o = 'https://' . $o;
     return rtrim($o, '/');
 }
+function cs_fx_base_currency(){
+    $opt = strtoupper(trim((string) get_option('csfx_rate_from', '')));
+    if ($opt) return $opt;
+    if ( CS_FX_BASE ) return strtoupper(CS_FX_BASE);
+    $wc = get_option('woocommerce_currency');
+    return $wc ? strtoupper($wc) : 'USD';
+}
+function cs_fx_quote_currency(){
+    $opt = strtoupper(trim((string) get_option('csfx_rate_to', '')));
+    if ($opt) return $opt;
+    return strtoupper(CS_FX_QUOTE ?: 'VES');
+}
 function cs_fx_candidate_origins(){
     $candidates = [];
     $opt = get_option('cs_fx_origin', '');
@@ -752,12 +812,6 @@ function cs_fx_select_origin(){
 }
 
 /** Moneda base (WooCommerce por defecto) */
-function cs_fx_base_currency(){
-    if ( CS_FX_BASE ) return strtoupper(CS_FX_BASE);
-    $wc = get_option('woocommerce_currency');
-    return $wc ? strtoupper($wc) : 'USD';
-}
-
 /** Pide la tasa remota */
 function cs_fx_get_rate_remote(){
     $origin = cs_fx_select_origin();
@@ -775,9 +829,9 @@ function cs_fx_get_rate_remote(){
     }
 
     $baseKey  = cs_fx_pick_key($data, cs_fx_base_currency());
-    $quoteKey = cs_fx_pick_key($data, CS_FX_QUOTE);
+    $quoteKey = cs_fx_pick_key($data, cs_fx_quote_currency());
     if ( ! $baseKey || ! $quoteKey ){
-        if ( CS_FX_DEBUG ) error_log('[CS-FX] keys not found base='.cs_fx_base_currency().' quote='.CS_FX_QUOTE.' origin='.$origin);
+        if ( CS_FX_DEBUG ) error_log('[CS-FX] keys not found base='.cs_fx_base_currency().' quote='.cs_fx_quote_currency().' origin='.$origin);
         return ['rate'=>0.0, 'source'=>'fail', 'origin'=>$origin];
     }
 
@@ -791,34 +845,8 @@ function cs_fx_get_rate_remote(){
 }
 
 function cs_fx_get_rate(){
-    $cached = get_transient('cs_fx_rate');
-    if ( $cached && is_array($cached) && isset($cached['rate']) ) return $cached;
-
-    $remote = cs_fx_get_rate_remote();
-    $rate   = max(0.0, (float)$remote['rate']);
-       // normaliza orientación para asegurar USD→VES
-    $base  = cs_fx_base_currency();
-    $quote = strtoupper(CS_FX_QUOTE);
-    if ( $base === 'VES' && $quote === 'USD' && $rate > 0 ) {
-        $rate = 1 / $rate;
-    }
-    $out = [
-        'rate'    => $rate,
-        'updated' => time(),
-        'source'  => $remote['source'],
-        'origin'  => $remote['origin'],
-    ];
-
-    if ($rate > 0){
-        set_transient('cs_fx_rate', $out, CS_FX_TTL);
-        update_option('cs_fx_last', $out, false);
-    } else {
-        $last = get_option('cs_fx_last', []);
-        if ( isset($last['rate']) ){
-            $out = $last + ['source'=>'last'];
-        }
-    }
-    return $out;
+    // Compat: usa el flujo principal (API externa / FOX) que respeta el par configurado.
+    return csfx_get_rate();
 }
 
 /* ====== AJAX para refrescar ====== */
@@ -828,13 +856,16 @@ add_action('wp_ajax_nopriv_cs_fx_rate', function(){ wp_send_json( cs_fx_get_rate
 /* ====== Inyectar settings al POS (después de login) ====== */
 add_filter('op_get_login_cashdrawer_data', function($session){
     $fx = cs_fx_get_rate();
+    $base_currency = cs_fx_base_currency();
+    $quote_currency = cs_fx_quote_currency();
+    $quote_symbol = ($quote_currency === 'VES' || $quote_currency === 'VEF') ? CS_FX_SYMBOL : get_woocommerce_currency_symbol( $quote_currency );
     $session['setting']['cs_fx'] = [
         'enabled'    => true,
-        'base'       => cs_fx_base_currency(),
-        'quote'      => strtoupper(CS_FX_QUOTE),
-        'symbolUSD'  => get_woocommerce_currency_symbol( cs_fx_base_currency() ),
-        'symbolVES'  => CS_FX_SYMBOL,
-          'symbol'     => CS_FX_SYMBOL,
+        'base'       => $base_currency,
+        'quote'      => $quote_currency,
+        'symbolUSD'  => get_woocommerce_currency_symbol( $base_currency ),
+        'symbolVES'  => $quote_symbol,
+          'symbol'     => $quote_symbol,
         'rate'       => (float)$fx['rate'],
         'updated'    => (int)$fx['updated'],
         'decimals'   => (int)CS_FX_DECIMALS,
@@ -889,14 +920,17 @@ add_filter('openpos_pos_footer_js', function($handles){
     wp_script_add_data('cs-fx', 'defer', true);
     // Boot inline para tener rate incluso en pantalla de login
     $fx = cs_fx_get_rate();
+    $base_currency = cs_fx_base_currency();
+    $quote_currency = cs_fx_quote_currency();
+    $quote_symbol = ($quote_currency === 'VES' || $quote_currency === 'VEF') ? CS_FX_SYMBOL : get_woocommerce_currency_symbol( $quote_currency );
     $access_manager = CSFX_Access_Manager::instance();
     $boot = [
         'enabled'   => true,
-        'base'      => cs_fx_base_currency(),
-        'quote'     => strtoupper(CS_FX_QUOTE),
-        'symbolUSD' => get_woocommerce_currency_symbol( cs_fx_base_currency() ),
-        'symbolVES' => CS_FX_SYMBOL,
-           'symbol'    => CS_FX_SYMBOL,
+        'base'      => $base_currency,
+        'quote'     => $quote_currency,
+        'symbolUSD' => get_woocommerce_currency_symbol( $base_currency ),
+        'symbolVES' => $quote_symbol,
+           'symbol'    => $quote_symbol,
         'rate'      => (float)$fx['rate'],
         'updated'   => (int)$fx['updated'],
         'decimals'  => (int)CS_FX_DECIMALS,

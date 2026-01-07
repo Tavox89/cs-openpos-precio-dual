@@ -749,6 +749,9 @@ var CSFX_SUPERVISOR_META_KEYS = [
   FX.symbolUSD = decodeSymbol(FX.symbolUSD, '$');
   FX.symbol = decodeSymbol(FX.symbol, 'Bs.');
   FX.symbolVES = decodeSymbol(FX.symbolVES, 'Bs.');
+  var CSFX_BASE_CODE = (FX.base || 'USD').toUpperCase();
+  var CSFX_BASE_LABEL = CSFX_BASE_CODE;
+  var CSFX_BASE_SYMBOL = FX.symbolUSD || '$';
 
   var FX_STATE_STORAGE_KEY = 'csfx_state_v1';
   var fxOfflineState = (function(){
@@ -2720,7 +2723,7 @@ var CSFX_SUPERVISOR_META_KEYS = [
           cluster.appendChild(fxDiscChip);
         }
         fxDiscChip.textContent = (new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(usdDisc)) + '$';
-        fxDiscChip.title = 'USD con descuento (' + FX.disc.percent + '%)';
+        fxDiscChip.title = CSFX_BASE_CODE + ' con descuento (' + FX.disc.percent + '%)';
         pushUsdNode(fxDiscChip);
       } else if (fxDiscChip) {
         fxDiscChip.remove();
@@ -5157,9 +5160,9 @@ var CSFX_SUPERVISOR_META_KEYS = [
     var noteParts = [];
     noteParts.push('Descuento dual del ' + pctRounded.toFixed(2) + '% aplicado sobre ' + fmtUsd(calc.grossCovered) + '.');
     if (usdDirectRounded > 0 && bsAmountRounded > 0) {
-      noteParts.push('Cliente aportó ' + fmtUsd(usdDirectRounded) + ' en USD y ' + fmtBs(bsAmountRounded) + ' (≈ ' + fmtUsd(usdFromBsRounded) + ') en Bs.');
+      noteParts.push('Cliente aportó ' + fmtUsd(usdDirectRounded) + ' en ' + CSFX_BASE_CODE + ' y ' + fmtBs(bsAmountRounded) + ' (≈ ' + fmtUsd(usdFromBsRounded) + ') en Bs.');
     } else if (usdDirectRounded > 0) {
-      noteParts.push('Cliente pagó ' + fmtUsd(usdDirectRounded) + ' en USD.');
+      noteParts.push('Cliente pagó ' + fmtUsd(usdDirectRounded) + ' en ' + CSFX_BASE_CODE + '.');
     } else if (bsAmountRounded > 0) {
       noteParts.push('Cliente pagó ' + fmtBs(bsAmountRounded) + ' (≈ ' + fmtUsd(usdFromBsRounded) + ') en Bs.');
     } else {
@@ -5459,8 +5462,8 @@ var CSFX_SUPERVISOR_META_KEYS = [
     var tabs = document.createElement('div');
     tabs.className = 'csfx-dual-tabs';
     var modeDefs = [
-      { id: 'usd', label: 'USD directo', desc: 'El cliente paga en USD y el resto se cubre en Bs.' },
-      { id: 'bs', label: 'Bs', desc: 'Cobrar un monto USD pagado íntegramente en bolívares.' }
+      { id: 'usd', label: CSFX_BASE_CODE + ' directo', desc: 'El cliente paga en ' + CSFX_BASE_CODE + ' y el resto se cubre en Bs.' },
+      { id: 'bs', label: 'Bs', desc: 'Cobrar un monto ' + CSFX_BASE_CODE + ' pagado íntegramente en bolívares.' }
     ];
     modeDefs.forEach(function (def) {
       var btn = document.createElement('button');
@@ -5518,7 +5521,7 @@ var CSFX_SUPERVISOR_META_KEYS = [
     var usdInputWrap = document.createElement('div');
     usdInputWrap.className = 'csfx-dual-input';
     var usdLabel = document.createElement('span');
-    usdLabel.textContent = 'Pago en divisas (USD neto)';
+    usdLabel.textContent = 'Pago en divisas (' + CSFX_BASE_CODE + ' neto)';
     var usdInput = document.createElement('input');
     usdInput.type = 'text';
     usdInput.placeholder = '0.00';
@@ -5535,7 +5538,7 @@ var CSFX_SUPERVISOR_META_KEYS = [
     var bsInputWrap = document.createElement('div');
     bsInputWrap.className = 'csfx-dual-input';
     var bsLabel = document.createElement('span');
-    bsLabel.textContent = 'Monto en USD';
+    bsLabel.textContent = 'Monto en ' + CSFX_BASE_CODE;
     var bsInput = document.createElement('input');
     bsInput.type = 'text';
     bsInput.placeholder = '0.00';
@@ -5545,7 +5548,7 @@ var CSFX_SUPERVISOR_META_KEYS = [
     var bsHint = document.createElement('div');
     bsHint.className = 'csfx-dual-inline-hint';
     bsHint.dataset.csfx = 'bs-equivalent';
-    bsHint.textContent = 'Ingresa el monto USD para ver el equivalente a cobrar en Bs.';
+    bsHint.textContent = 'Ingresa el monto ' + CSFX_BASE_CODE + ' para ver el equivalente a cobrar en Bs.';
     bsInputWrap.appendChild(bsHint);
     bsMode.appendChild(bsInputWrap);
 
@@ -5595,7 +5598,7 @@ var CSFX_SUPERVISOR_META_KEYS = [
     var metricDefs = [
       { key: 'gross', label: 'Parte bruta', tip: 'Monto cubierto por el pago en divisas antes de descuentos.' },
       { key: 'discount', label: 'Descuento', tip: 'Descuento aplicado según la política de precio dual.' },
-      { key: 'remaining-usd', label: 'Resta USD', tip: 'Saldo que queda por pagar en divisas luego del descuento.' },
+      { key: 'remaining-usd', label: 'Resta ' + CSFX_BASE_CODE, tip: 'Saldo que queda por pagar en divisas (' + CSFX_BASE_CODE + ') luego del descuento.' },
       { key: 'remaining-bs', label: 'Resta Bs.', tip: 'Saldo restante en bolívares calculado con la tasa vigente.' }
     ];
     metricDefs.forEach(function (def) {
@@ -5929,7 +5932,7 @@ var CSFX_SUPERVISOR_META_KEYS = [
         if (entry.bsAmount > 0 && entry.rate > 0) {
           bsHint.textContent = 'Se cobrará ' + fmtBs(entry.bsAmount);
         } else {
-          bsHint.textContent = 'Ingresa el monto USD para ver el equivalente en Bs.';
+          bsHint.textContent = 'Ingresa el monto ' + CSFX_BASE_CODE + ' para ver el equivalente en Bs.';
         }
       } else {
         bsHint.textContent = '—';
@@ -6327,7 +6330,7 @@ var CSFX_SUPERVISOR_META_KEYS = [
     var finalBs = (rate > 0 && finalUsd > 0) ? fmtBs(round(finalUsd * rate, FX.decimals)) : '';
 
     var lines = [];
-    lines.push(mode === 'bs' ? '*Precio dual – Pago en Bs*' : '*Precio dual – USD directo*');
+    lines.push(mode === 'bs' ? '*Precio dual – Pago en Bs*' : '*Precio dual – ' + CSFX_BASE_CODE + ' directo*');
     if (rate > 0) lines.push('• *Tasa BCV:* ' + fmtBs(rate));
     if (baseUsd > epsilonUsd) lines.push('• *Base sin descuento:* ' + fmtUsd(baseUsd));
 
@@ -6340,28 +6343,28 @@ var CSFX_SUPERVISOR_META_KEYS = [
       lines.push(totalLine);
     }
 
-    if (mode === 'usd') {
-      if (usdDirect > epsilonUsd) lines.push('• *Debe entregar en USD:* ' + fmtUsd(usdDirect));
-      if (remainderBs > epsilonBs) {
-        var approxUsd = remainderUsd > epsilonUsd ? fmtUsd(remainderUsd) : null;
-        var bsLine = '• *Debe completar en Bs:* ' + fmtBs(remainderBs);
-        if (approxUsd) bsLine += ' (≈ ' + approxUsd + ')';
-        lines.push(bsLine);
-      }
-    } else {
-      if (bsAmount > epsilonBs) {
-        var approxUsd = usdFromBs > epsilonUsd ? fmtUsd(usdFromBs) : null;
-        var bsLine = '• *Debe entregar en Bs:* ' + fmtBs(bsAmount);
-        if (approxUsd) bsLine += ' (≈ ' + approxUsd + ')';
-        lines.push(bsLine);
-      }
-      if (remainderUsd > epsilonUsd) {
-        var approxBs = rate > 0 ? fmtBs(round(remainderUsd * rate, FX.decimals)) : null;
-        var remLine = '• *Saldo en USD:* ' + fmtUsd(remainderUsd);
-        if (approxBs) remLine += ' (≈ ' + approxBs + ')';
-        lines.push(remLine);
-      }
+  if (mode === 'usd') {
+    if (usdDirect > epsilonUsd) lines.push('• *Debe entregar en ' + CSFX_BASE_CODE + ':* ' + fmtUsd(usdDirect));
+    if (remainderBs > epsilonBs) {
+      var approxUsd = remainderUsd > epsilonUsd ? fmtUsd(remainderUsd) : null;
+      var bsLine = '• *Debe completar en Bs:* ' + fmtBs(remainderBs);
+      if (approxUsd) bsLine += ' (≈ ' + approxUsd + ')';
+      lines.push(bsLine);
     }
+  } else {
+    if (bsAmount > epsilonBs) {
+      var approxUsd = usdFromBs > epsilonUsd ? fmtUsd(usdFromBs) : null;
+      var bsLine = '• *Debe entregar en Bs:* ' + fmtBs(bsAmount);
+      if (approxUsd) bsLine += ' (≈ ' + approxUsd + ')';
+      lines.push(bsLine);
+    }
+    if (remainderUsd > epsilonUsd) {
+      var approxBs = rate > 0 ? fmtBs(round(remainderUsd * rate, FX.decimals)) : null;
+      var remLine = '• *Saldo en ' + CSFX_BASE_CODE + ':* ' + fmtUsd(remainderUsd);
+      if (approxBs) remLine += ' (≈ ' + approxBs + ')';
+      lines.push(remLine);
+    }
+  }
 
     lines.push('_Valores informativos antes de facturar._');
 
@@ -6650,8 +6653,8 @@ var CSFX_SUPERVISOR_META_KEYS = [
     var remainderUsd = payload ? Number(payload.remainderUsd || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxCalcRemainder : 0) || 0);
     var total = payload ? Number(payload.finalUsd || 0) : (base && discount ? base - discount : 0);
 
-    var mode = payload && payload.mode ? payload.mode : (panel && panel.dataset ? panel.dataset.csfxEntryMode : '');
-    var modeLabel = mode === 'bs' ? 'Bs' : (mode === 'usd' ? 'USD directo' : (mode || '—'));
+  var mode = payload && payload.mode ? payload.mode : (panel && panel.dataset ? panel.dataset.csfxEntryMode : '');
+  var modeLabel = mode === 'bs' ? 'Bs' : (mode === 'usd' ? (CSFX_BASE_CODE + ' directo') : (mode || '—'));
     var usdDirectEntry = payload ? Number(payload.usdDirect || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxEntryUsd : 0) || 0);
     var usdFromBsEntry = payload ? Number(payload.usdFromBs || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxEntryUsdFromBs : 0) || 0);
     var bsEntry = payload ? Number(payload.bsAmount || 0) : (Number(panel && panel.dataset ? panel.dataset.csfxEntryBs : 0) || 0);
@@ -6673,12 +6676,12 @@ var CSFX_SUPERVISOR_META_KEYS = [
       remainderBs = remainderUsd * rateEntry;
     }
     var paymentsItems = [];
-    paymentsItems.push('<li><strong>Debe entregar en USD:</strong> <span class="csfx-explain-inline">' + fmtUsd(usdDirectEntry) + '</span></li>');
-    paymentsItems.push('<li><strong>Debe entregar en Bs:</strong> <span class="csfx-explain-inline">' + fmtBs(bsEntry) + (bsEntry > 0 ? ' (≈ ' + fmtUsd(usdFromBsEntry) + ')' : '') + '</span></li>');
-    var totalEntregar = usdDirectEntry + usdFromBsEntry;
-    if (totalEntregar > 0.0001) {
-      paymentsItems.push('<li><strong>Total referencial (USD + Bs):</strong> <span class="csfx-explain-inline">' + fmtUsd(totalEntregar) + (bsEntry > 0 ? ' + ' + fmtBs(bsEntry) : '') + '</span></li>');
-    }
+  paymentsItems.push('<li><strong>Debe entregar en ' + CSFX_BASE_CODE + ':</strong> <span class="csfx-explain-inline">' + fmtUsd(usdDirectEntry) + '</span></li>');
+  paymentsItems.push('<li><strong>Debe entregar en Bs:</strong> <span class="csfx-explain-inline">' + fmtBs(bsEntry) + (bsEntry > 0 ? ' (≈ ' + fmtUsd(usdFromBsEntry) + ')' : '') + '</span></li>');
+  var totalEntregar = usdDirectEntry + usdFromBsEntry;
+  if (totalEntregar > 0.0001) {
+    paymentsItems.push('<li><strong>Total referencial (' + CSFX_BASE_CODE + ' + Bs):</strong> <span class="csfx-explain-inline">' + fmtUsd(totalEntregar) + (bsEntry > 0 ? ' + ' + fmtBs(bsEntry) : '') + '</span></li>');
+  }
     if (changeUsdEntry > 0.0001) {
       var changeLine = '<li><strong>Se estima cambio:</strong> <span class="csfx-explain-inline">' + fmtUsd(changeUsdEntry);
       if (rateEntry > 0 && changeBsEntry > 0.0001) changeLine += ' (≈ ' + fmtBs(changeBsEntry) + ')';
